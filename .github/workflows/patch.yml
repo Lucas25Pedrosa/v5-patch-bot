@@ -18,6 +18,11 @@ on:
         required: true
         type: string
 
+      telegram_progress_message_id:
+        description: "Telegram progress message ID"
+        required: true
+        type: string
+
       telegram_ipa_message_id:
         description: "Telegram IPA message ID"
         required: true
@@ -52,12 +57,24 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # =========================================================
+      # 1. SOLICITAÇÃO
+      # =========================================================
+
       - name: Confirmar solicitação
         run: |
-          echo "✅ Workflow disparado pelo Deno"
+          echo "✅ Solicitação recebida"
+          echo "Telegram User ID: ${{ inputs.telegram_user_id }}"
+          echo "Telegram Chat ID: ${{ inputs.telegram_chat_id }}"
+          echo "Comando Message ID: ${{ inputs.telegram_message_id }}"
+          echo "Progress Message ID: ${{ inputs.telegram_progress_message_id }}"
           echo "IPA Message ID: ${{ inputs.telegram_ipa_message_id }}"
           echo "Arquivo: ${{ inputs.ipa_filename }}"
           echo "Tamanho esperado: ${{ inputs.ipa_filesize }} bytes"
+
+      # =========================================================
+      # 2. CORE PRIVADO
+      # =========================================================
 
       - name: Baixar core privado
         uses: actions/checkout@v4
@@ -66,6 +83,19 @@ jobs:
           token: ${{ secrets.CORE_REPO_TOKEN }}
           path: v5-core
           persist-credentials: false
+
+      - name: Validar core privado
+        run: |
+          set -euo pipefail
+
+          test -f v5-core/core/telegram_download.py
+          test -f v5-core/core/v5_patch.py
+
+          echo "✅ Core privado carregado"
+
+      # =========================================================
+      # 3. PYTHON
+      # =========================================================
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -77,25 +107,44 @@ jobs:
           python -m pip install --upgrade pip
           pip install telethon
 
+      # =========================================================
+      # 4. TELEGRAM -> INPUT.IPA
+      # =========================================================
+
       - name: Baixar IPA do Telegram
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
           TELEGRAM_IPA_MESSAGE_ID: ${{ inputs.telegram_ipa_message_id }}
+
+          TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
+
+          IPA_FILENAME: ${{ inputs.ipa_filename }}
+          IPA_FILESIZE: ${{ inputs.ipa_filesize }}
+
         run: |
           python v5-core/core/telegram_download.py
+
+      # =========================================================
+      # 5. VALIDAR DOWNLOAD
+      # =========================================================
 
       - name: Validar IPA baixado
         env:
           EXPECTED_SIZE: ${{ inputs.ipa_filesize }}
+
         run: |
           set -euo pipefail
 
-          test -f work/input.ipa
+          if [ ! -f "work/input.ipa" ]; then
+            echo "❌ work/input.ipa não encontrado"
+            exit 1
+          fi
 
-          ACTUAL_SIZE=$(stat -c%s work/input.ipa)
+          ACTUAL_SIZE=$(stat -c%s "work/input.ipa")
 
           echo "Esperado: $EXPECTED_SIZE bytes"
           echo "Baixado:  $ACTUAL_SIZE bytes"
@@ -111,10 +160,12 @@ jobs:
           path = "work/input.ipa"
 
           if not zipfile.is_zipfile(path):
-              raise SystemExit("❌ IPA não é ZIP válido")
+              raise SystemExit(
+                  "❌ IPA não é um ZIP válido"
+              )
 
-          with zipfile.ZipFile(path) as z:
-              bad = z.testzip()
+          with zipfile.ZipFile(path, "r") as archive:
+              bad = archive.testzip()
 
           if bad:
               raise SystemExit(
@@ -124,19 +175,47 @@ jobs:
           print("✅ IPA original válido")
           PY
 
+          echo
+          echo "SHA-256 original:"
+          sha256sum work/input.ipa
+
+      # =========================================================
+      # 6. APLICAR V5
+      # =========================================================
+
       - name: Aplicar V5 NoPopup
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
+
         run: |
           python v5-core/core/v5_patch.py \
             work/input.ipa \
             work/output.ipa \
             --status-file work/v5-status.json
 
+      # =========================================================
+      # 7. STATUS V5
+      # =========================================================
+
       - name: Mostrar resultado V5
         run: |
+          set -euo pipefail
+
+          if [ ! -f "work/v5-status.json" ]; then
+            echo "❌ v5-status.json não encontrado"
+            exit 1
+          fi
+
           echo "========== V5 STATUS =========="
           cat work/v5-status.json
           echo
           echo "==============================="
+
+      # =========================================================
+      # 8. VALIDAR IPA FINAL
+      # =========================================================
 
       - name: Validar IPA final
         run: |
@@ -183,8 +262,8 @@ jobs:
                   "❌ IPA final não é ZIP válido"
               )
 
-          with zipfile.ZipFile(output) as z:
-              bad = z.testzip()
+          with zipfile.ZipFile(output, "r") as archive:
+              bad = archive.testzip()
 
           if bad:
               raise SystemExit(
@@ -194,17 +273,21 @@ jobs:
           print("✅ IPA final válido")
           print(
               "✅ V5:",
-              status.get("status")
+              status.get("status"),
           )
           print(
-              "🧩",
-              status.get("ipa_member")
+              "🧩 Patch:",
+              status.get("ipa_member"),
           )
           print(
               "🧬 Bytes alterados:",
-              status.get("changed_bytes")
+              status.get("changed_bytes"),
           )
           PY
+
+      # =========================================================
+      # 9. CONFIRMAR QUE SOMENTE A PATCH.DYLIB MUDOU
+      # =========================================================
 
       - name: Conferir alterações
         run: |
@@ -213,19 +296,21 @@ jobs:
           import json
           import zipfile
 
-          status = json.load(
-              open(
-                  "work/v5-status.json",
-                  encoding="utf-8",
-              )
-          )
+          with open(
+              "work/v5-status.json",
+              "r",
+              encoding="utf-8",
+          ) as handle:
+              status = json.load(handle)
 
           target = status["ipa_member"]
 
           with zipfile.ZipFile(
-              "work/input.ipa"
+              "work/input.ipa",
+              "r",
           ) as before, zipfile.ZipFile(
-              "work/output.ipa"
+              "work/output.ipa",
+              "r",
           ) as after:
 
               before_names = before.namelist()
@@ -239,15 +324,15 @@ jobs:
               changed = []
 
               for name in before_names:
-                  a = hashlib.sha256(
+                  before_hash = hashlib.sha256(
                       before.read(name)
                   ).digest()
 
-                  b = hashlib.sha256(
+                  after_hash = hashlib.sha256(
                       after.read(name)
                   ).digest()
 
-                  if a != b:
+                  if before_hash != after_hash:
                       changed.append(name)
 
               if status["status"] == "applied":
@@ -271,13 +356,22 @@ jobs:
 
               print(
                   "Arquivos diferentes:",
-                  changed or "nenhum"
+                  changed or "nenhum",
               )
           PY
 
+      # =========================================================
+      # 10. RESUMO
+      # =========================================================
+
       - name: Resumo
         run: |
-          echo "✅ Teste V5 concluído"
+          echo "✅ Processamento V5 concluído"
+          echo
           ls -lh work/input.ipa work/output.ipa
+          echo
+          echo "SHA-256 original:"
           sha256sum work/input.ipa
+          echo
+          echo "SHA-256 final:"
           sha256sum work/output.ipa
