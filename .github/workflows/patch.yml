@@ -47,16 +47,13 @@ permissions:
   contents: read
 
 jobs:
-  test-dispatch:
+  patch:
     runs-on: ubuntu-latest
 
     steps:
       - name: Confirmar disparo
         run: |
           echo "✅ Workflow disparado pelo Deno"
-          echo "Telegram User ID: ${{ inputs.telegram_user_id }}"
-          echo "Telegram Chat ID: ${{ inputs.telegram_chat_id }}"
-          echo "Comando Message ID: ${{ inputs.telegram_message_id }}"
           echo "IPA Message ID: ${{ inputs.telegram_ipa_message_id }}"
           echo "Arquivo: ${{ inputs.ipa_filename }}"
           echo "Tamanho: ${{ inputs.ipa_filesize }} bytes"
@@ -68,7 +65,22 @@ jobs:
           token: ${{ secrets.CORE_REPO_TOKEN }}
           path: v5-core
 
-      - name: Confirmar core
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar Telethon
         run: |
-          echo "✅ Core privado carregado"
-          find v5-core -maxdepth 2 -type f | sort
+          python -m pip install --upgrade pip
+          pip install telethon
+
+      - name: Testar acesso MTProto ao IPA
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_IPA_MESSAGE_ID: ${{ inputs.telegram_ipa_message_id }}
+        run: |
+          python v5-core/core/telegram_probe.py
