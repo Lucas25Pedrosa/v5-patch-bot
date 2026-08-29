@@ -14,7 +14,32 @@ on:
         type: string
 
       telegram_message_id:
-        description: "Telegram command message ID"
+        description: "Telegram /patch message ID"
+        required: true
+        type: string
+
+      telegram_ipa_message_id:
+        description: "Telegram IPA message ID"
+        required: true
+        type: string
+
+      telegram_file_id:
+        description: "Telegram file ID"
+        required: true
+        type: string
+
+      telegram_file_unique_id:
+        description: "Telegram unique file ID"
+        required: true
+        type: string
+
+      ipa_filename:
+        description: "Original IPA filename"
+        required: true
+        type: string
+
+      ipa_filesize:
+        description: "IPA size in bytes"
         required: true
         type: string
 
@@ -31,7 +56,10 @@ jobs:
           echo "✅ Workflow disparado pelo Deno"
           echo "Telegram User ID: ${{ inputs.telegram_user_id }}"
           echo "Telegram Chat ID: ${{ inputs.telegram_chat_id }}"
-          echo "Telegram Message ID: ${{ inputs.telegram_message_id }}"
+          echo "Comando Message ID: ${{ inputs.telegram_message_id }}"
+          echo "IPA Message ID: ${{ inputs.telegram_ipa_message_id }}"
+          echo "Arquivo: ${{ inputs.ipa_filename }}"
+          echo "Tamanho: ${{ inputs.ipa_filesize }} bytes"
 
       - name: Baixar core privado
         uses: actions/checkout@v4
