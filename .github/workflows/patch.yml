@@ -65,6 +65,7 @@ jobs:
           repository: Lucas25Pedrosa/v5-patch-core
           token: ${{ secrets.CORE_REPO_TOKEN }}
           path: v5-core
+          persist-credentials: false
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -92,27 +93,191 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f "work/input.ipa" ]; then
-            echo "❌ work/input.ipa não encontrado"
-            exit 1
-          fi
+          test -f work/input.ipa
 
-          ACTUAL_SIZE=$(stat -c%s "work/input.ipa")
+          ACTUAL_SIZE=$(stat -c%s work/input.ipa)
 
-          echo "Tamanho esperado: $EXPECTED_SIZE bytes"
-          echo "Tamanho baixado: $ACTUAL_SIZE bytes"
+          echo "Esperado: $EXPECTED_SIZE bytes"
+          echo "Baixado:  $ACTUAL_SIZE bytes"
 
           if [ "$ACTUAL_SIZE" != "$EXPECTED_SIZE" ]; then
-            echo "❌ O tamanho do IPA não corresponde."
+            echo "❌ Tamanho incorreto"
             exit 1
           fi
 
-          echo "✅ Tamanho confirmado"
+          python - <<'PY'
+          import zipfile
 
-          echo
-          echo "SHA-256:"
-          sha256sum "work/input.ipa"
+          path = "work/input.ipa"
 
+          if not zipfile.is_zipfile(path):
+              raise SystemExit("❌ IPA não é ZIP válido")
+
+          with zipfile.ZipFile(path) as z:
+              bad = z.testzip()
+
+          if bad:
+              raise SystemExit(
+                  f"❌ Arquivo corrompido dentro do IPA: {bad}"
+              )
+
+          print("✅ IPA original válido")
+          PY
+
+      - name: Aplicar V5 NoPopup
+        run: |
+          python v5-core/core/v5_patch.py \
+            work/input.ipa \
+            work/output.ipa \
+            --status-file work/v5-status.json
+
+      - name: Mostrar resultado V5
+        run: |
+          echo "========== V5 STATUS =========="
+          cat work/v5-status.json
           echo
-          echo "Espaço ocupado:"
-          du -h "work/input.ipa"
+          echo "==============================="
+
+      - name: Validar IPA final
+        run: |
+          python - <<'PY'
+          import json
+          import zipfile
+          from pathlib import Path
+
+          output = Path("work/output.ipa")
+          status_file = Path("work/v5-status.json")
+
+          if not output.is_file():
+              raise SystemExit(
+                  "❌ work/output.ipa não foi criado"
+              )
+
+          if not status_file.is_file():
+              raise SystemExit(
+                  "❌ Status V5 não foi criado"
+              )
+
+          status = json.loads(
+              status_file.read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          if not status.get("ok"):
+              raise SystemExit(
+                  "❌ V5 não foi aplicado com sucesso"
+              )
+
+          if status.get("status") not in {
+              "applied",
+              "already_applied",
+          }:
+              raise SystemExit(
+                  "❌ Status V5 inesperado: "
+                  + str(status.get("status"))
+              )
+
+          if not zipfile.is_zipfile(output):
+              raise SystemExit(
+                  "❌ IPA final não é ZIP válido"
+              )
+
+          with zipfile.ZipFile(output) as z:
+              bad = z.testzip()
+
+          if bad:
+              raise SystemExit(
+                  f"❌ IPA final corrompido: {bad}"
+              )
+
+          print("✅ IPA final válido")
+          print(
+              "✅ V5:",
+              status.get("status")
+          )
+          print(
+              "🧩",
+              status.get("ipa_member")
+          )
+          print(
+              "🧬 Bytes alterados:",
+              status.get("changed_bytes")
+          )
+          PY
+
+      - name: Conferir alterações
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import zipfile
+
+          status = json.load(
+              open(
+                  "work/v5-status.json",
+                  encoding="utf-8",
+              )
+          )
+
+          target = status["ipa_member"]
+
+          with zipfile.ZipFile(
+              "work/input.ipa"
+          ) as before, zipfile.ZipFile(
+              "work/output.ipa"
+          ) as after:
+
+              before_names = before.namelist()
+              after_names = after.namelist()
+
+              if before_names != after_names:
+                  raise SystemExit(
+                      "❌ Estrutura do IPA mudou"
+                  )
+
+              changed = []
+
+              for name in before_names:
+                  a = hashlib.sha256(
+                      before.read(name)
+                  ).digest()
+
+                  b = hashlib.sha256(
+                      after.read(name)
+                  ).digest()
+
+                  if a != b:
+                      changed.append(name)
+
+              if status["status"] == "applied":
+                  if changed != [target]:
+                      raise SystemExit(
+                          "❌ Arquivos inesperados alterados: "
+                          + repr(changed)
+                      )
+
+              elif status["status"] == "already_applied":
+                  if changed:
+                      raise SystemExit(
+                          "❌ IPA já aplicado deveria "
+                          "permanecer idêntico"
+                      )
+
+              print(
+                  "✅ Somente a Patch.dylib "
+                  "compatível foi modificada"
+              )
+
+              print(
+                  "Arquivos diferentes:",
+                  changed or "nenhum"
+              )
+          PY
+
+      - name: Resumo
+        run: |
+          echo "✅ Teste V5 concluído"
+          ls -lh work/input.ipa work/output.ipa
+          sha256sum work/input.ipa
+          sha256sum work/output.ipa
