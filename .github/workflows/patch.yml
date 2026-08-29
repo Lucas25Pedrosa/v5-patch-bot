@@ -7,42 +7,34 @@ on:
         description: "Telegram user ID"
         required: true
         type: string
-
       telegram_chat_id:
         description: "Telegram chat ID"
         required: true
         type: string
-
       telegram_message_id:
         description: "Telegram /patch message ID"
         required: true
         type: string
-
       telegram_progress_message_id:
         description: "Telegram progress message ID"
         required: true
         type: string
-
       telegram_ipa_message_id:
         description: "Telegram IPA message ID"
         required: true
         type: string
-
       telegram_file_id:
         description: "Telegram file ID"
         required: true
         type: string
-
       telegram_file_unique_id:
         description: "Telegram unique file ID"
         required: true
         type: string
-
       ipa_filename:
         description: "Original IPA filename"
         required: true
         type: string
-
       ipa_filesize:
         description: "IPA size in bytes"
         required: true
@@ -57,26 +49,16 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      # =========================================================
-      # 1. SOLICITAÇÃO
-      # =========================================================
-
-      - name: Confirmar solicitação
+      - name: Confirm request
         run: |
-          echo "✅ Solicitação recebida"
-          echo "Telegram User ID: ${{ inputs.telegram_user_id }}"
-          echo "Telegram Chat ID: ${{ inputs.telegram_chat_id }}"
-          echo "Comando Message ID: ${{ inputs.telegram_message_id }}"
-          echo "Progress Message ID: ${{ inputs.telegram_progress_message_id }}"
-          echo "IPA Message ID: ${{ inputs.telegram_ipa_message_id }}"
-          echo "Arquivo: ${{ inputs.ipa_filename }}"
-          echo "Tamanho esperado: ${{ inputs.ipa_filesize }} bytes"
+          echo "Telegram user: ${{ inputs.telegram_user_id }}"
+          echo "Telegram chat: ${{ inputs.telegram_chat_id }}"
+          echo "Progress message: ${{ inputs.telegram_progress_message_id }}"
+          echo "IPA message: ${{ inputs.telegram_ipa_message_id }}"
+          echo "File: ${{ inputs.ipa_filename }}"
+          echo "Expected size: ${{ inputs.ipa_filesize }} bytes"
 
-      # =========================================================
-      # 2. CORE PRIVADO
-      # =========================================================
-
-      - name: Baixar core privado
+      - name: Checkout private core
         uses: actions/checkout@v4
         with:
           repository: Lucas25Pedrosa/v5-patch-core
@@ -84,294 +66,161 @@ jobs:
           path: v5-core
           persist-credentials: false
 
-      - name: Validar core privado
+      - name: Validate private core
         run: |
           set -euo pipefail
-
+          test -f v5-core/core/telegram_progress.py
           test -f v5-core/core/telegram_download.py
           test -f v5-core/core/v5_patch.py
+          test -f v5-core/core/telegram_send.py
+          echo "Private core validated"
 
-          echo "✅ Core privado carregado"
-
-      # =========================================================
-      # 3. PYTHON
-      # =========================================================
-
-      - name: Configurar Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Instalar dependências
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install telethon
 
-      # =========================================================
-      # 4. TELEGRAM -> INPUT.IPA
-      # =========================================================
-
-      - name: Baixar IPA do Telegram
+      - name: Download IPA from Telegram
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
           TELEGRAM_IPA_MESSAGE_ID: ${{ inputs.telegram_ipa_message_id }}
-
           TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
-
           IPA_FILENAME: ${{ inputs.ipa_filename }}
-          IPA_FILESIZE: ${{ inputs.ipa_filesize }}
-
         run: |
           python v5-core/core/telegram_download.py
 
-      # =========================================================
-      # 5. VALIDAR DOWNLOAD
-      # =========================================================
-
-      - name: Validar IPA baixado
+      - name: Validate downloaded IPA
         env:
           EXPECTED_SIZE: ${{ inputs.ipa_filesize }}
-
         run: |
           set -euo pipefail
-
-          if [ ! -f "work/input.ipa" ]; then
-            echo "❌ work/input.ipa não encontrado"
-            exit 1
-          fi
-
-          ACTUAL_SIZE=$(stat -c%s "work/input.ipa")
-
-          echo "Esperado: $EXPECTED_SIZE bytes"
-          echo "Baixado:  $ACTUAL_SIZE bytes"
-
+          test -f work/input.ipa
+          ACTUAL_SIZE=$(stat -c%s work/input.ipa)
+          echo "Expected: $EXPECTED_SIZE bytes"
+          echo "Actual:   $ACTUAL_SIZE bytes"
           if [ "$ACTUAL_SIZE" != "$EXPECTED_SIZE" ]; then
-            echo "❌ Tamanho incorreto"
+            echo "Downloaded size mismatch"
             exit 1
           fi
-
           python - <<'PY'
           import zipfile
-
           path = "work/input.ipa"
-
           if not zipfile.is_zipfile(path):
-              raise SystemExit(
-                  "❌ IPA não é um ZIP válido"
-              )
-
-          with zipfile.ZipFile(path, "r") as archive:
+              raise SystemExit("Input is not a valid ZIP/IPA")
+          with zipfile.ZipFile(path) as archive:
               bad = archive.testzip()
-
           if bad:
-              raise SystemExit(
-                  f"❌ Arquivo corrompido dentro do IPA: {bad}"
-              )
-
-          print("✅ IPA original válido")
+              raise SystemExit(f"Corrupted member: {bad}")
+          print("Input IPA validated")
           PY
 
-          echo
-          echo "SHA-256 original:"
-          sha256sum work/input.ipa
-
-      # =========================================================
-      # 6. APLICAR V5
-      # =========================================================
-
-      - name: Aplicar V5 NoPopup
+      - name: Show applying patch
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
           TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
+          IPA_FILENAME: ${{ inputs.ipa_filename }}
+        run: |
+          python v5-core/core/telegram_progress.py \
+            --stage patch \
+            --metadata work/metadata.json
 
+      - name: Apply V5 NoPopup
         run: |
           python v5-core/core/v5_patch.py \
             work/input.ipa \
             work/output.ipa \
             --status-file work/v5-status.json
 
-      # =========================================================
-      # 7. STATUS V5
-      # =========================================================
-
-      - name: Mostrar resultado V5
+      - name: Show validating IPA
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
+          IPA_FILENAME: ${{ inputs.ipa_filename }}
         run: |
-          set -euo pipefail
+          python v5-core/core/telegram_progress.py \
+            --stage validate \
+            --metadata work/metadata.json
 
-          if [ ! -f "work/v5-status.json" ]; then
-            echo "❌ v5-status.json não encontrado"
-            exit 1
-          fi
-
-          echo "========== V5 STATUS =========="
-          cat work/v5-status.json
-          echo
-          echo "==============================="
-
-      # =========================================================
-      # 8. VALIDAR IPA FINAL
-      # =========================================================
-
-      - name: Validar IPA final
-        run: |
-          python - <<'PY'
-          import json
-          import zipfile
-          from pathlib import Path
-
-          output = Path("work/output.ipa")
-          status_file = Path("work/v5-status.json")
-
-          if not output.is_file():
-              raise SystemExit(
-                  "❌ work/output.ipa não foi criado"
-              )
-
-          if not status_file.is_file():
-              raise SystemExit(
-                  "❌ Status V5 não foi criado"
-              )
-
-          status = json.loads(
-              status_file.read_text(
-                  encoding="utf-8"
-              )
-          )
-
-          if not status.get("ok"):
-              raise SystemExit(
-                  "❌ V5 não foi aplicado com sucesso"
-              )
-
-          if status.get("status") not in {
-              "applied",
-              "already_applied",
-          }:
-              raise SystemExit(
-                  "❌ Status V5 inesperado: "
-                  + str(status.get("status"))
-              )
-
-          if not zipfile.is_zipfile(output):
-              raise SystemExit(
-                  "❌ IPA final não é ZIP válido"
-              )
-
-          with zipfile.ZipFile(output, "r") as archive:
-              bad = archive.testzip()
-
-          if bad:
-              raise SystemExit(
-                  f"❌ IPA final corrompido: {bad}"
-              )
-
-          print("✅ IPA final válido")
-          print(
-              "✅ V5:",
-              status.get("status"),
-          )
-          print(
-              "🧩 Patch:",
-              status.get("ipa_member"),
-          )
-          print(
-              "🧬 Bytes alterados:",
-              status.get("changed_bytes"),
-          )
-          PY
-
-      # =========================================================
-      # 9. CONFIRMAR QUE SOMENTE A PATCH.DYLIB MUDOU
-      # =========================================================
-
-      - name: Conferir alterações
+      - name: Validate V5 result
         run: |
           python - <<'PY'
           import hashlib
           import json
           import zipfile
+          from pathlib import Path
 
-          with open(
-              "work/v5-status.json",
-              "r",
-              encoding="utf-8",
-          ) as handle:
-              status = json.load(handle)
+          input_path = Path("work/input.ipa")
+          output_path = Path("work/output.ipa")
+          status_path = Path("work/v5-status.json")
 
-          target = status["ipa_member"]
+          if not output_path.is_file():
+              raise SystemExit("work/output.ipa was not created")
+          if not status_path.is_file():
+              raise SystemExit("work/v5-status.json was not created")
 
-          with zipfile.ZipFile(
-              "work/input.ipa",
-              "r",
-          ) as before, zipfile.ZipFile(
-              "work/output.ipa",
-              "r",
-          ) as after:
+          status = json.loads(status_path.read_text(encoding="utf-8"))
+          if not status.get("ok"):
+              raise SystemExit(f"V5 failed: {status}")
+          if status.get("status") not in {"applied", "already_applied"}:
+              raise SystemExit(f"Unexpected V5 status: {status.get('status')}")
 
-              before_names = before.namelist()
-              after_names = after.namelist()
+          if not zipfile.is_zipfile(output_path):
+              raise SystemExit("Output is not a valid ZIP/IPA")
 
-              if before_names != after_names:
-                  raise SystemExit(
-                      "❌ Estrutura do IPA mudou"
-                  )
+          with zipfile.ZipFile(input_path) as before, zipfile.ZipFile(output_path) as after:
+              if before.namelist() != after.namelist():
+                  raise SystemExit("IPA member structure changed")
 
               changed = []
-
-              for name in before_names:
-                  before_hash = hashlib.sha256(
-                      before.read(name)
-                  ).digest()
-
-                  after_hash = hashlib.sha256(
-                      after.read(name)
-                  ).digest()
-
-                  if before_hash != after_hash:
+              for name in before.namelist():
+                  old_hash = hashlib.sha256(before.read(name)).digest()
+                  new_hash = hashlib.sha256(after.read(name)).digest()
+                  if old_hash != new_hash:
                       changed.append(name)
 
-              if status["status"] == "applied":
-                  if changed != [target]:
-                      raise SystemExit(
-                          "❌ Arquivos inesperados alterados: "
-                          + repr(changed)
-                      )
+              target = status["ipa_member"]
+              if status["status"] == "applied" and changed != [target]:
+                  raise SystemExit(f"Unexpected changed members: {changed}")
+              if status["status"] == "already_applied" and changed:
+                  raise SystemExit(f"Already-applied IPA changed unexpectedly: {changed}")
 
-              elif status["status"] == "already_applied":
-                  if changed:
-                      raise SystemExit(
-                          "❌ IPA já aplicado deveria "
-                          "permanecer idêntico"
-                      )
+              bad = after.testzip()
+              if bad:
+                  raise SystemExit(f"Corrupted output member: {bad}")
 
-              print(
-                  "✅ Somente a Patch.dylib "
-                  "compatível foi modificada"
-              )
-
-              print(
-                  "Arquivos diferentes:",
-                  changed or "nenhum",
-              )
+          print("V5 output validated")
+          print(json.dumps(status, ensure_ascii=False, indent=2))
           PY
 
-      # =========================================================
-      # 10. RESUMO
-      # =========================================================
-
-      - name: Resumo
+      - name: Upload patched IPA to Telegram
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
         run: |
-          echo "✅ Processamento V5 concluído"
-          echo
-          ls -lh work/input.ipa work/output.ipa
-          echo
-          echo "SHA-256 original:"
-          sha256sum work/input.ipa
-          echo
-          echo "SHA-256 final:"
-          sha256sum work/output.ipa
+          python v5-core/core/telegram_send.py
+
+      - name: Show failure in Telegram
+        if: ${{ failure() }}
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.telegram_chat_id }}
+          TELEGRAM_PROGRESS_MESSAGE_ID: ${{ inputs.telegram_progress_message_id }}
+          IPA_FILENAME: ${{ inputs.ipa_filename }}
+        run: |
+          python v5-core/core/telegram_progress.py \
+            --stage failed \
+            --metadata work/metadata.json
