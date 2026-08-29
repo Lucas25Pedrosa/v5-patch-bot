@@ -1,18 +1,37 @@
-name: Test Core Access
+name: V5 Patch
 
 on:
   workflow_dispatch:
+    inputs:
+      telegram_user_id:
+        description: "Telegram user ID"
+        required: true
+        type: string
+
+      telegram_chat_id:
+        description: "Telegram chat ID"
+        required: true
+        type: string
+
+      telegram_message_id:
+        description: "Telegram command message ID"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  test-core:
+  test-dispatch:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout workflow público
-        uses: actions/checkout@v4
+      - name: Confirmar disparo
+        run: |
+          echo "✅ Workflow disparado pelo Deno"
+          echo "Telegram User ID: ${{ inputs.telegram_user_id }}"
+          echo "Telegram Chat ID: ${{ inputs.telegram_chat_id }}"
+          echo "Telegram Message ID: ${{ inputs.telegram_message_id }}"
 
       - name: Baixar core privado
         uses: actions/checkout@v4
@@ -21,8 +40,7 @@ jobs:
           token: ${{ secrets.CORE_REPO_TOKEN }}
           path: v5-core
 
-      - name: Confirmar acesso ao core
+      - name: Confirmar core
         run: |
-          echo "✅ Core privado acessado com sucesso."
-          echo "Arquivos encontrados:"
+          echo "✅ Core privado carregado"
           find v5-core -maxdepth 2 -type f | sort
