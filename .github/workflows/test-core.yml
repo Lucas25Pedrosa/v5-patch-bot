@@ -1,0 +1,28 @@
+name: Test Core Access
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-core:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout workflow público
+        uses: actions/checkout@v4
+
+      - name: Baixar core privado
+        uses: actions/checkout@v4
+        with:
+          repository: Lucas25Pedrosa/v5-patch-core
+          token: ${{ secrets.CORE_REPO_TOKEN }}
+          path: v5-core
+
+      - name: Confirmar acesso ao core
+        run: |
+          echo "✅ Core privado acessado com sucesso."
+          echo "Arquivos encontrados:"
+          find v5-core -maxdepth 2 -type f | sort
