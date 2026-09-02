@@ -1,0 +1,45 @@
+name: Build iQFace Enhancer
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-enhancer/**"
+      - ".github/workflows/iqface-enhancer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-enhancer
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer-arm64
+          path: iqface-enhancer/artifacts/
+          if-no-files-found: error
