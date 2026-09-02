@@ -1,0 +1,48 @@
+name: Build FBOLED
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "fboled/**"
+      - ".github/workflows/fboled.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: fboled
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build FBOLED dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name FBOLED.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/FBOLED.dylib
+          file artifacts/FBOLED.dylib
+          shasum -a 256 artifacts/FBOLED.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload FBOLED dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBOLED-0.1.0-arm64
+          path: fboled/artifacts/
+          if-no-files-found: error
