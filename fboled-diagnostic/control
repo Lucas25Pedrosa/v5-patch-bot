@@ -1,8 +1,8 @@
-Package: com.fboled.safe-diagnostic
-Name: FBOLED Safe Diagnostic
-Version: 0.2.0
+Package: com.fboled.view-mapper
+Name: FBOLED View Mapper
+Version: 0.3.0
 Architecture: iphoneos-arm64
-Description: Crash-isolation mapper for Facebook FDS dark-mode colors. No visual modifications.
+Description: Non-hooking visible color mapper for Facebook. No visual modifications.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks

@@ -1,4 +1,4 @@
-name: Build FBOLED Safe Diagnostic
+name: Build FBOLED View Mapper
 
 "on":
   workflow_dispatch:
@@ -31,20 +31,20 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Build safe diagnostic dylib
+      - name: Build view mapper dylib
         run: |
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name FBOLEDSafeDiagnostic.dylib -print -quit)"
+          dylib_path="$(find .theos -type f -name FBOLEDViewMapper.dylib -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/FBOLEDSafeDiagnostic.dylib
-          file artifacts/FBOLEDSafeDiagnostic.dylib
-          shasum -a 256 artifacts/FBOLEDSafeDiagnostic.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/FBOLEDViewMapper.dylib
+          file artifacts/FBOLEDViewMapper.dylib
+          shasum -a 256 artifacts/FBOLEDViewMapper.dylib > artifacts/SHA256SUMS.txt
 
-      - name: Upload safe diagnostic dylib
+      - name: Upload view mapper dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBOLEDSafeDiagnostic-0.2.0-arm64
+          name: FBOLEDViewMapper-0.3.0-arm64
           path: fboled-diagnostic/artifacts/
           if-no-files-found: error

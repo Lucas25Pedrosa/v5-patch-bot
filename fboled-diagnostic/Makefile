@@ -4,10 +4,10 @@ INSTALL_TARGET_PROCESSES := Facebook
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME := FBOLEDSafeDiagnostic
-FBOLEDSafeDiagnostic_FILES := FBOLEDDiagnosticSafe.m
-FBOLEDSafeDiagnostic_FRAMEWORKS := Foundation UIKit
-FBOLEDSafeDiagnostic_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
-FBOLEDSafeDiagnostic_LDFLAGS := -Wl,-undefined,dynamic_lookup
+TWEAK_NAME := FBOLEDViewMapper
+FBOLEDViewMapper_FILES := FBOLEDViewMapper.m
+FBOLEDViewMapper_FRAMEWORKS := Foundation UIKit QuartzCore
+FBOLEDViewMapper_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
+FBOLEDViewMapper_LDFLAGS := -Wl,-undefined,dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk
