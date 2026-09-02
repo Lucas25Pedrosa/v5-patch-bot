@@ -121,7 +121,12 @@ static void Scan(void) {
     @autoreleasepool {
         gScanNumber++;
         NSUInteger count = 0;
-        NSArray<UIWindow *> *windows = UIApplication.sharedApplication.windows;
+        NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if ([scene isKindOfClass:UIWindowScene.class]) {
+                [windows addObjectsFromArray:((UIWindowScene *)scene).windows];
+            }
+        }
         for (UIWindow *window in windows) {
             Walk(window, 0, &count);
         }
