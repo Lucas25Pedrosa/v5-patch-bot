@@ -4,8 +4,8 @@
 #import <objc/runtime.h>
 #import <math.h>
 
-// FBOLED 0.1.0
-// Hook-free OLED pass for Facebook 577+.
+// FBOLED 0.2.0
+// OLED pass for Facebook 577+ using a safe Objective-C setter exchange.
 // The palette below was measured from FBOLED_ViewMap.csv on Facebook 577.0.0.
 
 static const void *kFBOLEDOriginalViewColorKey = &kFBOLEDOriginalViewColorKey;
@@ -65,6 +65,45 @@ static BOOL FBOLEDIsLightAnchor(uint32_t rgba) {
 
 static BOOL FBOLEDIsBlack(uint32_t rgba) {
     return rgba == 0x000000FF;
+}
+
+@interface UIView (FBOLEDInstant)
+- (void)fboled_setBackgroundColor:(UIColor *)color;
+@end
+
+@implementation UIView (FBOLEDInstant)
+
+- (void)fboled_setBackgroundColor:(UIColor *)color {
+    UIColor *original = objc_getAssociatedObject(self, kFBOLEDOriginalViewColorKey);
+    uint32_t rgba = FBOLEDRGBA(color, self.traitCollection);
+
+    if (FBOLEDIsMappedDark(rgba)) {
+        objc_setAssociatedObject(self, kFBOLEDOriginalViewColorKey, color,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [self fboled_setBackgroundColor:UIColor.blackColor];
+        return;
+    }
+
+    // Preserve our original color while the scanner reinforces an already-black view.
+    // Any other assignment came from Facebook and invalidates the saved value.
+    if (!(original && FBOLEDIsBlack(rgba))) {
+        objc_setAssociatedObject(self, kFBOLEDOriginalViewColorKey, nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [self fboled_setBackgroundColor:color];
+}
+
+@end
+
+
+static void FBOLEDInstallInstantSetter(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Method original = class_getInstanceMethod(UIView.class, @selector(setBackgroundColor:));
+        Method replacement = class_getInstanceMethod(UIView.class,
+                                                       @selector(fboled_setBackgroundColor:));
+        if (original && replacement) method_exchangeImplementations(original, replacement);
+    });
 }
 
 static BOOL FBOLEDIsThemeAnchor(UIView *view) {
@@ -238,6 +277,7 @@ __attribute__((constructor)) static void FBOLEDInit(void) {
         if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.facebook.Facebook"]) {
             return;
         }
+        FBOLEDInstallInstantSetter();
         dispatch_async(dispatch_get_main_queue(), ^{
             FBOLEDStart();
         });
