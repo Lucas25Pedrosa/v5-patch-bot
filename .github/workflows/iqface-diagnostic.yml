@@ -1,0 +1,49 @@
+name: Build iQFace Diagnostic
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-diagnostic/**"
+      - ".github/workflows/iqface-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-diagnostic
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build diagnostic dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceDiagnostic.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceDiagnostic.dylib
+          shasum -a 256 artifacts/iQFaceDiagnostic.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload diagnostic dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceDiagnostic-arm64
+          path: iqface-diagnostic/artifacts/
+          if-no-files-found: error

@@ -1,0 +1,9 @@
+Package: com.lucas.iqfacediagnostic
+Name: iQFace Diagnostic
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: Diagnóstico de carregamento do iQFace no Facebook.
+Maintainer: Lucas
+Author: Lucas
+Section: Tweaks
+Depends: firmware (>= 14.0)
