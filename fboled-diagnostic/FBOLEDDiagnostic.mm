@@ -225,7 +225,7 @@ __attribute__((constructor)) static void FBOLEDInit(void) {
                          FBOLEDTimestamp(), kFBOLEDVersion,
                          NSBundle.mainBundle.bundleIdentifier ?: @"?",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?",
-                         [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"?"]]);
+                         [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"?"]);
 
         FBOLEDInstallHooks();
     }
