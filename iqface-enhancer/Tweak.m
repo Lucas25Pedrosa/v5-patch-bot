@@ -532,13 +532,15 @@ static void IQFSafeScanView(UIView *view) {
         return;
     }
 
-    if (IQFIsSafeTabBarView(view)) {
+    if (!IQFSafeModeEnabled() && IQFIsSafeTabBarView(view)) {
         IQFAttachLongPress(view);
     }
 
     for (UIView *subview in view.subviews.copy) {
         if (IQFIsTopSettingsButton(subview)) {
-            [subview removeFromSuperview];
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+            subview.userInteractionEnabled = NO;
             continue;
         }
         IQFSafeScanView(subview);
@@ -550,6 +552,7 @@ static void IQFSafeScanWindows(void) {
         return;
     }
     for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        IQFAttachLongPress(window);
         IQFSafeScanView(window);
     }
 }
@@ -573,9 +576,9 @@ static void IQFStartSafeScanner(void) {
 
 static void IQFApplicationDidBecomeActive(NSNotification *notification) {
     (void)notification;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        IQFSafeScanWindows();
+        IQFStartSafeScanner();
     });
 }
 
@@ -613,7 +616,6 @@ static void IQFEnhancerInitialize(void) {
                 IQFTryInstallIQFaceHooks();
                 IQFCleanVisibleSettingsItems();
             }
-            IQFStartSafeScanner();
         });
     }
 }

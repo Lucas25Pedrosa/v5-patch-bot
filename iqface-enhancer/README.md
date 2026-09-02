@@ -1,11 +1,13 @@
 # iQFace Enhancer
 
-Complemento independente para o iQFace no Facebook. A versão segura 0.2.0 oferece:
+Complemento independente para o iQFace no Facebook. A versão segura 0.2.1 oferece:
 
 - ocultação seletiva do botão superior criado pelo iQFace, identificado simultaneamente pelo rótulo `iQFace` e pela ação `iqf_tapped`;
 - abertura do painel nativo do iQFace mantendo pressionado o ícone **Início**, no canto inferior esquerdo, por 0,65 segundo;
 - preservação do comportamento normal do toque na tab bar;
-- varredura segura da interface, sem hook global em `UIView` ou `UINavigationItem`.
+- varredura segura da interface, sem hook global em `UIView` ou `UINavigationItem`;
+- ocultação sem remover o botão da hierarquia;
+- gesto instalado somente na janela do aplicativo, sem modificar views internas da tab bar.
 
 A tradução está temporariamente desabilitada nesta build de isolamento. Ela será reativada por um mecanismo seguro depois da validação do ícone e do gesto.
 
@@ -33,7 +35,7 @@ make clean all FINALPACKAGE=1
 find .theos -name iQFaceEnhancer.dylib -print
 ```
 
-O projeto usa somente frameworks públicos do iOS. A build 0.2.0 não chama `MSHookFunction` e não instala swizzling de métodos.
+O projeto usa somente frameworks públicos do iOS. A build 0.2.1 não chama `MSHookFunction` e não instala swizzling de métodos.
 
 ## Ordem no Injector
 
