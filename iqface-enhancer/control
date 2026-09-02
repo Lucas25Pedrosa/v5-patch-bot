@@ -1,8 +1,8 @@
 Package: com.lucas.iqfaceenhancer
 Name: iQFace Enhancer
-Version: 0.1.0
+Version: 0.2.0
 Architecture: iphoneos-arm
-Description: Tradução pt-BR e acesso aos ajustes do iQFace pela tab bar do Facebook.
+Description: Build segura para ocultar o botão do iQFace e abrir os ajustes pela tab bar.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks

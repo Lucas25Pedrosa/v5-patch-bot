@@ -15,10 +15,15 @@ static IQFLocFunction IQFOriginalLoc = NULL;
 static BOOL IQFLocalizationInstalled = NO;
 static NSInteger IQFInstallAttempt = 0;
 static NSTimeInterval IQFLastPresentationTime = 0;
+static BOOL IQFSafeScannerStarted = NO;
 
 static const NSTimeInterval IQFLongPressDuration = 0.65;
 static const CGFloat IQFHomeZoneWidthFraction = 0.26;
 static const CGFloat IQFBottomZoneStartFraction = 0.68;
+
+static BOOL IQFSafeModeEnabled(void) {
+    return YES;
+}
 
 static void *IQFFindSymbol(const char *name) {
     void *symbol = dlsym(RTLD_DEFAULT, name);
@@ -326,7 +331,10 @@ static BOOL IQFSettingsAreVisible(void) {
 
 static void IQFOpenSettings(void) {
     NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
-    if (now - IQFLastPresentationTime < 0.9 || IQFSettingsAreVisible()) {
+    if (now - IQFLastPresentationTime < 0.9) {
+        return;
+    }
+    if (!IQFSafeModeEnabled() && IQFSettingsAreVisible()) {
         return;
     }
 
@@ -501,11 +509,73 @@ static void IQFInstallTabBarHooks(void) {
     }
 }
 
+static BOOL IQFIsSafeTabBarView(UIView *view) {
+    if ([view isKindOfClass:UITabBar.class]) {
+        return YES;
+    }
+
+    static NSSet<NSString *> *classNames;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        classNames = [NSSet setWithArray:@[
+            @"FBTabBarItemDefaultView",
+            @"FBTabBar",
+            @"FBNativeTabBar",
+            @"FBFloatingTabBar"
+        ]];
+    });
+    return [classNames containsObject:NSStringFromClass(view.class)];
+}
+
+static void IQFSafeScanView(UIView *view) {
+    if (view == nil) {
+        return;
+    }
+
+    if (IQFIsSafeTabBarView(view)) {
+        IQFAttachLongPress(view);
+    }
+
+    for (UIView *subview in view.subviews.copy) {
+        if (IQFIsTopSettingsButton(subview)) {
+            [subview removeFromSuperview];
+            continue;
+        }
+        IQFSafeScanView(subview);
+    }
+}
+
+static void IQFSafeScanWindows(void) {
+    if (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) {
+        return;
+    }
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        IQFSafeScanView(window);
+    }
+}
+
+static void IQFScheduleSafeScan(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQFSafeScanWindows();
+        IQFScheduleSafeScan();
+    });
+}
+
+static void IQFStartSafeScanner(void) {
+    if (IQFSafeScannerStarted) {
+        return;
+    }
+    IQFSafeScannerStarted = YES;
+    IQFSafeScanWindows();
+    IQFScheduleSafeScan();
+}
+
 static void IQFApplicationDidBecomeActive(NSNotification *notification) {
     (void)notification;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        IQFCleanVisibleSettingsItems();
+        IQFSafeScanWindows();
     });
 }
 
@@ -528,8 +598,10 @@ static void IQFEnhancerInitialize(void) {
             return;
         }
 
-        IQFInstallNavigationItemHooks();
-        IQFInstallTabBarHooks();
+        if (!IQFSafeModeEnabled()) {
+            IQFInstallNavigationItemHooks();
+            IQFInstallTabBarHooks();
+        }
         [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
                                                         object:nil
                                                          queue:NSOperationQueue.mainQueue
@@ -537,8 +609,11 @@ static void IQFEnhancerInitialize(void) {
             IQFApplicationDidBecomeActive(notification);
         }];
         dispatch_async(dispatch_get_main_queue(), ^{
-            IQFTryInstallIQFaceHooks();
-            IQFCleanVisibleSettingsItems();
+            if (!IQFSafeModeEnabled()) {
+                IQFTryInstallIQFaceHooks();
+                IQFCleanVisibleSettingsItems();
+            }
+            IQFStartSafeScanner();
         });
     }
 }

@@ -1,12 +1,13 @@
 # iQFace Enhancer
 
-Complemento independente para o iQFace no Facebook. A versão 0.1.0 oferece:
+Complemento independente para o iQFace no Facebook. A versão segura 0.2.0 oferece:
 
-- tradução automática para português brasileiro quando o idioma principal do iOS começa com `pt`;
 - ocultação seletiva do botão superior criado pelo iQFace, identificado simultaneamente pelo rótulo `iQFace` e pela ação `iqf_tapped`;
 - abertura do painel nativo do iQFace mantendo pressionado o ícone **Início**, no canto inferior esquerdo, por 0,65 segundo;
 - preservação do comportamento normal do toque na tab bar;
-- fallback para os textos originais quando uma chave nova ainda não tiver tradução.
+- varredura segura da interface, sem hook global em `UIView` ou `UINavigationItem`.
+
+A tradução está temporariamente desabilitada nesta build de isolamento. Ela será reativada por um mecanismo seguro depois da validação do ícone e do gesto.
 
 ## Compatibilidade inicial
 
@@ -15,11 +16,7 @@ Complemento independente para o iQFace no Facebook. A versão 0.1.0 oferece:
 - iOS 14 ou posterior;
 - arquitetura arm64.
 
-O projeto não modifica `iQFace.dylib`. Ele chama os símbolos públicos encontrados no binário:
-
-- `IQFLoc`;
-- `IQFPresentSettings`;
-- `IQFSettingsVisible`.
+O projeto não modifica `iQFace.dylib`. Nesta build segura, ele chama apenas o símbolo `IQFPresentSettings` quando o gesto longo é reconhecido.
 
 Para localizar a tab bar, a versão inicial reconhece estas classes do Facebook 577:
 
@@ -36,7 +33,7 @@ make clean all FINALPACKAGE=1
 find .theos -name iQFaceEnhancer.dylib -print
 ```
 
-O projeto usa somente frameworks públicos do iOS. A ligação com `MSHookFunction` é resolvida dinamicamente em tempo de execução pela implementação de Substrate/ElleKit já carregada pelo iQFace.
+O projeto usa somente frameworks públicos do iOS. A build 0.2.0 não chama `MSHookFunction` e não instala swizzling de métodos.
 
 ## Ordem no Injector
 
@@ -48,13 +45,9 @@ O executável principal do Facebook deve receber as dylibs nesta ordem:
 
 `iQFaceEnhancer.dylib` não deve ser injetada nas extensões. Apenas o `zxPluginsInject.dylib` modificado deve ser aplicado ao main e às extensões.
 
-## Forçar ou desativar a tradução
-
-Por padrão, o complemento segue o idioma do iOS. Para testes, a preferência booleana `IQFEnhancerForcePortuguese` pode forçar (`true`) ou desativar (`false`) a tradução.
-
 ## Observações de segurança
 
 - A remoção exige simultaneamente um `UIButton`, o rótulo de acessibilidade `iQFace` e a ação `iqf_tapped`; os controles originais do Facebook não são removidos.
 - O gesto não cancela o toque normal da tab bar e aceita reconhecimento simultâneo.
-- `IQFSettingsVisible` impede que o painel seja apresentado duas vezes.
-- O complemento retorna os textos originais do iQFace para chaves desconhecidas.
+- A apresentação possui bloqueio temporal para evitar duas chamadas consecutivas.
+- A tradução permanece desativada nesta etapa de diagnóstico.
