@@ -1,4 +1,4 @@
-name: Build FBOLED Diagnostic
+name: Build FBOLED Safe Diagnostic
 
 "on":
   workflow_dispatch:
@@ -31,20 +31,20 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Build FBOLED diagnostic dylib
+      - name: Build safe diagnostic dylib
         run: |
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name FBOLEDDiagnostic.dylib -print -quit)"
+          dylib_path="$(find .theos -type f -name FBOLEDSafeDiagnostic.dylib -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/FBOLEDDiagnostic.dylib
-          file artifacts/FBOLEDDiagnostic.dylib
-          shasum -a 256 artifacts/FBOLEDDiagnostic.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/FBOLEDSafeDiagnostic.dylib
+          file artifacts/FBOLEDSafeDiagnostic.dylib
+          shasum -a 256 artifacts/FBOLEDSafeDiagnostic.dylib > artifacts/SHA256SUMS.txt
 
-      - name: Upload FBOLED dylib
+      - name: Upload safe diagnostic dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBOLEDDiagnostic-arm64
+          name: FBOLEDSafeDiagnostic-0.2.0-arm64
           path: fboled-diagnostic/artifacts/
           if-no-files-found: error
