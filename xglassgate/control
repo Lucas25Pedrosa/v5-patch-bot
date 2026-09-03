@@ -1,8 +1,8 @@
 Package: com.lucas.xglassgate
 Name: XGlassGate
-Version: 0.2.0
+Version: 0.3.0
 Architecture: iphoneos-arm
-Description: Forces the X 12.23 Liquid Glass embedded feature switch and native redesign gate.
+Description: Forces X 12.23 Liquid Glass feature switch, redesign features, and native gate.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
