@@ -1,83 +1,89 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <dispatch/dispatch.h>
+#import <dlfcn.h>
+#import <string.h>
 
-static IMP gOriginalFeaturesInit = NULL;
+typedef void (*MSHookMemoryType)(void *target, const void *data, size_t size);
+
 static IMP gOriginalInstallGate = NULL;
-
-static BOOL gFeaturesHookInstalled = NO;
+static BOOL gGetterPatched = NO;
 static BOOL gGateHookInstalled = NO;
 
-#pragma mark - LiquidGlassRedesignFeatures second factor
+#pragma mark - Symbol lookup
 
-static id XGGFeaturesInitReplacement(id self,
-                                     SEL _cmd,
-                                     id featureSwitches,
-                                     BOOL secondFactorSatisfied) {
-    NSLog(@"[XGlassGate] %@ secondFactor=%@ -> forced YES",
-          NSStringFromSelector(_cmd),
-          secondFactorSatisfied ? @"YES" : @"NO");
+static void *XGGFindSymbol(const char *name) {
+    if (!name) return NULL;
 
-    if (!gOriginalFeaturesInit) {
-        return self;
+    void *symbol = dlsym(RTLD_DEFAULT, name);
+    if (symbol) return symbol;
+
+    char underscored[256] = {0};
+    size_t length = strlen(name);
+    if (length + 2 < sizeof(underscored)) {
+        underscored[0] = '_';
+        strlcpy(underscored + 1, name, sizeof(underscored) - 1);
+        symbol = dlsym(RTLD_DEFAULT, underscored);
     }
 
-    return ((id (*)(id, SEL, id, BOOL))gOriginalFeaturesInit)(
-        self,
-        _cmd,
-        featureSwitches,
-        YES
-    );
+    return symbol;
 }
 
-static BOOL XGGTryInstallFeaturesHook(void) {
-    if (gFeaturesHookInstalled) {
+#pragma mark - XAppearance getter patch
+
+static BOOL XGGTryPatchAppearanceGetter(void) {
+    if (gGetterPatched) return YES;
+
+    MSHookMemoryType hookMemory = (MSHookMemoryType)XGGFindSymbol("MSHookMemory");
+    if (!hookMemory) {
+        return NO;
+    }
+
+    void *getter = XGGFindSymbol("$s11XAppearance10AppearanceC20isLiquidGlassEnabledSbvgZ");
+    if (!getter) {
+        return NO;
+    }
+
+    // X 12.23 / TwitterSPMMigration.framework / offset 0x245F48.
+    // Original function prologue:
+    //   stp x29, x30, [sp, #-0x10]!
+    //   mov x29, sp
+    // Replacement:
+    //   mov w0, #1
+    //   ret
+    static const unsigned char expected[8] = {
+        0xFD, 0x7B, 0xBF, 0xA9,
+        0xFD, 0x03, 0x00, 0x91
+    };
+
+    static const unsigned char replacement[8] = {
+        0x20, 0x00, 0x80, 0x52,
+        0xC0, 0x03, 0x5F, 0xD6
+    };
+
+    if (memcmp(getter, replacement, sizeof(replacement)) == 0) {
+        gGetterPatched = YES;
         return YES;
     }
 
-    Class cls = objc_getClass("_TtC14T1TwitterSwift27LiquidGlassRedesignFeatures");
-    if (!cls) {
+    if (memcmp(getter, expected, sizeof(expected)) != 0) {
+        const unsigned char *bytes = (const unsigned char *)getter;
+        NSLog(@"[XGlassGate] getter bytes mismatch: %02x %02x %02x %02x %02x %02x %02x %02x",
+              bytes[0], bytes[1], bytes[2], bytes[3],
+              bytes[4], bytes[5], bytes[6], bytes[7]);
         return NO;
     }
 
-    SEL selector = NSSelectorFromString(@"initWithFeatureSwitches:isSecondFactorSatisfied:");
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!method) {
-        NSLog(@"[XGlassGate] %@ not found on %s",
-              NSStringFromSelector(selector),
-              class_getName(cls));
-        return NO;
-    }
+    hookMemory(getter, replacement, sizeof(replacement));
+    gGetterPatched = (memcmp(getter, replacement, sizeof(replacement)) == 0);
 
-    unsigned int arguments = method_getNumberOfArguments(method);
-    const char *types = method_getTypeEncoding(method);
+    NSLog(@"[XGlassGate] XAppearance.isLiquidGlassEnabled getter %@",
+          gGetterPatched ? @"patched TRUE" : @"patch FAILED");
 
-    // self + _cmd + featureSwitches + BOOL = 4 arguments.
-    if (arguments != 4) {
-        NSLog(@"[XGlassGate] refusing features hook: argc=%u types=%s",
-              arguments,
-              types ?: "?");
-        return NO;
-    }
-
-    IMP current = method_getImplementation(method);
-    if (current == (IMP)XGGFeaturesInitReplacement) {
-        gFeaturesHookInstalled = YES;
-        return YES;
-    }
-
-    gOriginalFeaturesInit = method_setImplementation(method,
-                                                      (IMP)XGGFeaturesInitReplacement);
-    gFeaturesHookInstalled = (gOriginalFeaturesInit != NULL);
-
-    NSLog(@"[XGlassGate] second-factor hook %@ (types=%s)",
-          gFeaturesHookInstalled ? @"installed" : @"FAILED",
-          types ?: "?");
-
-    return gFeaturesHookInstalled;
+    return gGetterPatched;
 }
 
-#pragma mark - Native redesign gate
+#pragma mark - Stable native gate from 0.1.0
 
 static void XGGInstallGateReplacement(id self, SEL _cmd, BOOL redesignEnabled) {
     NSLog(@"[XGlassGate] %@ requested=%@ -> forced YES",
@@ -90,23 +96,17 @@ static void XGGInstallGateReplacement(id self, SEL _cmd, BOOL redesignEnabled) {
 }
 
 static BOOL XGGTryInstallGateHook(void) {
-    if (gGateHookInstalled) {
-        return YES;
-    }
+    if (gGateHookInstalled) return YES;
 
     Class installerClass = objc_getClass("T1LiquidGlassGateInstaller");
-    if (!installerClass) {
-        return NO;
-    }
+    if (!installerClass) return NO;
 
     SEL selector = NSSelectorFromString(@"installGateWithRedesignEnabled:");
     Method method = class_getClassMethod(installerClass, selector);
     if (!method) {
         method = class_getInstanceMethod(installerClass, selector);
     }
-    if (!method) {
-        return NO;
-    }
+    if (!method) return NO;
 
     IMP current = method_getImplementation(method);
     if (current == (IMP)XGGInstallGateReplacement) {
@@ -124,10 +124,10 @@ static BOOL XGGTryInstallGateHook(void) {
     return gGateHookInstalled;
 }
 
-#pragma mark - Load-order retries
+#pragma mark - Load order
 
-static void XGGInstallRuntimeHooks(void) {
-    XGGTryInstallFeaturesHook();
+static void XGGInstall(void) {
+    XGGTryPatchAppearanceGetter();
     XGGTryInstallGateHook();
 }
 
@@ -135,23 +135,22 @@ static void XGGScheduleRetry(NSTimeInterval delay) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                  (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        XGGInstallRuntimeHooks();
+        XGGInstall();
     });
 }
 
 __attribute__((constructor))
 static void XGlassGateInit(void) {
     @autoreleasepool {
-        NSLog(@"[XGlassGate] 0.7.0 loaded");
+        NSLog(@"[XGlassGate] 0.8.0 loaded");
 
-        // Install immediately when T1Twitter is already registered, then retry
-        // briefly for framework load-order differences. No Swift function hooks
-        // and no executable-memory patches are used in this build.
-        XGGInstallRuntimeHooks();
-        XGGScheduleRetry(0.0);
+        // Equivalent to the physical TwitterSPMMigration patch, but performed
+        // in memory. No Swift function trampoline, no T1Twitter patch, no
+        // second-factor hook, and no navigation branch patch.
+        XGGInstall();
+        XGGScheduleRetry(0.00);
         XGGScheduleRetry(0.05);
         XGGScheduleRetry(0.20);
         XGGScheduleRetry(1.00);
-        XGGScheduleRetry(3.00);
     }
 }
