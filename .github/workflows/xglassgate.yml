@@ -43,6 +43,6 @@ jobs:
       - name: Upload XGlassGate dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XGlassGate-0.3.0-arm64
+          name: XGlassGate-0.4.0-arm64
           path: xglassgate/artifacts/
           if-no-files-found: error
