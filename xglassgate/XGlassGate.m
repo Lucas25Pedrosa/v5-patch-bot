@@ -2,21 +2,24 @@
 #import <objc/runtime.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
+#import <mach-o/dyld.h>
+#import <mach-o/loader.h>
+#import <stdint.h>
 #import <string.h>
 
 static NSString * const XGGFeatureKey = @"ios_liquid_glass_redesign_enabled";
-typedef void (*MSHookFunctionType)(void *symbol, void *replacement, void **original);
+
+typedef void (*MSHookMemoryType)(void *target, const void *data, size_t size);
 
 static IMP gOriginalInstallGate = NULL;
 static IMP gOriginalDataWithFile = NULL;
 static IMP gOriginalDataWithURL = NULL;
 static IMP gOriginalJSONObjectWithData = NULL;
-static void *gOriginalAppearanceGetter = NULL;
 
 static BOOL gGateHookInstalled = NO;
 static BOOL gDataHooksInstalled = NO;
 static BOOL gJSONHookInstalled = NO;
-static BOOL gAppearanceHookInstalled = NO;
+static BOOL gBranchPatchesInstalled = NO;
 
 static void *XGGFindSymbol(const char *name) {
     if (!name) return NULL;
@@ -111,31 +114,7 @@ static void XGGInstallFeatureHooks(void) {
     }
 }
 
-#pragma mark - XAppearance Swift getter only
-
-// ABI-minimal ARM64 replacement: Swift.Bool is returned in w0.
-__attribute__((naked))
-static void XGGSwiftReturnYES(void) {
-    __asm__("mov w0, #1\n"
-            "ret\n");
-}
-
-static BOOL XGGTryInstallAppearanceHook(void) {
-    if (gAppearanceHookInstalled) return YES;
-
-    MSHookFunctionType hookFunction = (MSHookFunctionType)XGGFindSymbol("MSHookFunction");
-    if (!hookFunction) return NO;
-
-    void *getter = XGGFindSymbol("$s11XAppearance10AppearanceC20isLiquidGlassEnabledSbvgZ");
-    if (!getter) return NO;
-
-    hookFunction(getter, (void *)&XGGSwiftReturnYES, &gOriginalAppearanceGetter);
-    gAppearanceHookInstalled = (gOriginalAppearanceGetter != NULL);
-    NSLog(@"[XGlassGate] XAppearance Swift hook %@", gAppearanceHookInstalled ? @"installed" : @"FAILED");
-    return gAppearanceHookInstalled;
-}
-
-#pragma mark - Existing native gate
+#pragma mark - Existing safe native gate
 
 static void XGGInstallGateReplacement(id self, SEL _cmd, BOOL redesignEnabled) {
     if (gOriginalInstallGate) {
@@ -159,25 +138,93 @@ static BOOL XGGTryInstallGateHook(void) {
     return gGateHookInstalled;
 }
 
-static void XGGRunRuntimeHooks(void) {
-    XGGTryInstallAppearanceHook();
+#pragma mark - Direct Legacy -> Glass branch patch (X 12.23 only)
+
+static const struct mach_header_64 *XGGFindT1TwitterHeader(void) {
+    uint32_t imageCount = _dyld_image_count();
+    for (uint32_t i = 0; i < imageCount; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name) continue;
+        if (strstr(name, "/T1Twitter.framework/T1Twitter") != NULL) {
+            return (const struct mach_header_64 *)_dyld_get_image_header(i);
+        }
+    }
+    return NULL;
+}
+
+static BOOL XGGPatchInstruction(MSHookMemoryType hookMemory,
+                                uintptr_t base,
+                                uintptr_t offset,
+                                const uint8_t expected[4]) {
+    uint8_t *target = (uint8_t *)(base + offset);
+    const uint8_t nop[4] = {0x1f, 0x20, 0x03, 0xd5};
+
+    if (memcmp(target, nop, sizeof(nop)) == 0) {
+        return YES;
+    }
+
+    if (memcmp(target, expected, 4) != 0) {
+        NSLog(@"[XGlassGate] skip 0x%llx: unexpected bytes %02x %02x %02x %02x",
+              (unsigned long long)offset,
+              target[0], target[1], target[2], target[3]);
+        return NO;
+    }
+
+    hookMemory(target, nop, sizeof(nop));
+    BOOL ok = (memcmp(target, nop, sizeof(nop)) == 0);
+    NSLog(@"[XGlassGate] branch 0x%llx %@",
+          (unsigned long long)offset,
+          ok ? @"patched -> WithGlass" : @"FAILED");
+    return ok;
+}
+
+static BOOL XGGTryInstallBranchPatches(void) {
+    if (gBranchPatchesInstalled) return YES;
+
+    MSHookMemoryType hookMemory = (MSHookMemoryType)XGGFindSymbol("MSHookMemory");
+    if (!hookMemory) {
+        NSLog(@"[XGlassGate] MSHookMemory unavailable");
+        return NO;
+    }
+
+    const struct mach_header_64 *header = XGGFindT1TwitterHeader();
+    if (!header) return NO;
+
+    // T1Twitter 12.23 __TEXT vmaddr is 0, so image header + unslid VM offset.
+    uintptr_t base = (uintptr_t)header;
+
+    const uint8_t expectedA[4] = {0x60, 0x00, 0x00, 0x36}; // tbz w0,#0 -> Legacy
+    const uint8_t expectedB[4] = {0x80, 0x02, 0x00, 0x36}; // tbz w0,#0 -> Legacy
+
+    BOOL a = XGGPatchInstruction(hookMemory, base, 0x00DA1F84, expectedA);
+    BOOL b = XGGPatchInstruction(hookMemory, base, 0x00DB2C38, expectedA);
+    BOOL c = XGGPatchInstruction(hookMemory, base, 0x00DB8BF4, expectedB);
+
+    gBranchPatchesInstalled = (a && b && c);
+    return gBranchPatchesInstalled;
+}
+
+static void XGGRunSafePatches(void) {
     XGGTryInstallGateHook();
+    XGGTryInstallBranchPatches();
 }
 
 static void XGGScheduleRetry(NSTimeInterval delay) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        XGGRunRuntimeHooks();
+        XGGRunSafePatches();
     });
 }
 
 __attribute__((constructor))
 static void XGlassGateInit(void) {
     @autoreleasepool {
-        NSLog(@"[XGlassGate] 0.5.1 loaded");
+        NSLog(@"[XGlassGate] 0.6.0 loaded");
+
+        // Keep only the non-crashing feature/gate layers from earlier builds.
         XGGInstallFeatureHooks();
 
-        // Delay the direct Swift hook slightly so the framework and hook engine
-        // finish loading before we patch the function body.
+        // No direct Swift function hook in 0.6.0. Patch only the verified
+        // Legacy/Glass branch instructions after T1Twitter has loaded.
         XGGScheduleRetry(0.20);
         XGGScheduleRetry(1.00);
         XGGScheduleRetry(3.00);
