@@ -34,7 +34,7 @@ jobs:
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name XGlassGate.dylib -print -quit)"
+          dylib_path="$(find .theos -type f -name XGlassGate.dylib ! -path '*/XGlassGate.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/XGlassGate.dylib
           file artifacts/XGlassGate.dylib
