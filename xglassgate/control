@@ -1,8 +1,8 @@
 Package: com.lucas.xglassgate
 Name: XGlassGate
-Version: 0.5.0
+Version: 0.5.1
 Architecture: iphoneos-arm
-Description: Forces X 12.23 Liquid Glass using direct native Swift symbol hooks plus the feature switch and gate installer.
+Description: Isolates the X 12.23 XAppearance Swift getter hook with a minimal ARM64 replacement.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
