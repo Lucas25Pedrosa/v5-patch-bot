@@ -12,17 +12,17 @@ static IMP gOriginalDataWithFile = NULL;
 static IMP gOriginalDataWithURL = NULL;
 static IMP gOriginalJSONObjectWithData = NULL;
 static void *gOriginalAppearanceGetter = NULL;
-static void *gOriginalRedesignGetter = NULL;
 
 static BOOL gGateHookInstalled = NO;
 static BOOL gDataHooksInstalled = NO;
 static BOOL gJSONHookInstalled = NO;
-static BOOL gSwiftHooksInstalled = NO;
+static BOOL gAppearanceHookInstalled = NO;
 
 static void *XGGFindSymbol(const char *name) {
     if (!name) return NULL;
     void *symbol = dlsym(RTLD_DEFAULT, name);
     if (symbol) return symbol;
+
     char underscored[256] = {0};
     size_t length = strlen(name);
     if (length + 2 < sizeof(underscored)) {
@@ -33,20 +33,28 @@ static void *XGGFindSymbol(const char *name) {
     return symbol;
 }
 
+#pragma mark - Embedded feature flag
+
 static NSData *XGGPatchDefaultsData(NSData *data, NSString *source) {
     if (!data || data.length == 0) return data;
+
     NSData *keyData = [XGGFeatureKey dataUsingEncoding:NSUTF8StringEncoding];
     NSData *falseData = [@"false" dataUsingEncoding:NSUTF8StringEncoding];
     const unsigned char truePadded[5] = {'t','r','u','e',' '};
-    if ([data rangeOfData:keyData options:0 range:NSMakeRange(0, data.length)].location == NSNotFound) return data;
+
+    if ([data rangeOfData:keyData options:0 range:NSMakeRange(0, data.length)].location == NSNotFound) {
+        return data;
+    }
 
     NSMutableData *patched = [data mutableCopy];
-    BOOL changed = NO;
     NSUInteger cursor = 0;
+    BOOL changed = NO;
+
     while (cursor < patched.length) {
-        NSRange currentKey = [patched rangeOfData:keyData options:0 range:NSMakeRange(cursor, patched.length - cursor)];
-        if (currentKey.location == NSNotFound) break;
-        NSUInteger start = NSMaxRange(currentKey);
+        NSRange keyRange = [patched rangeOfData:keyData options:0 range:NSMakeRange(cursor, patched.length - cursor)];
+        if (keyRange.location == NSNotFound) break;
+
+        NSUInteger start = NSMaxRange(keyRange);
         NSUInteger length = MIN((NSUInteger)256, patched.length - start);
         if (length >= falseData.length) {
             NSRange falseRange = [patched rangeOfData:falseData options:0 range:NSMakeRange(start, length)];
@@ -56,43 +64,10 @@ static NSData *XGGPatchDefaultsData(NSData *data, NSString *source) {
                 NSLog(@"[XGlassGate] %@ forced TRUE in %@", XGGFeatureKey, source ?: @"data");
             }
         }
-        cursor = NSMaxRange(currentKey);
+        cursor = NSMaxRange(keyRange);
     }
+
     return changed ? patched : data;
-}
-
-static id XGGDeepMutableCopy(id object) {
-    if ([object isKindOfClass:[NSDictionary class]]) {
-        NSMutableDictionary *result = [NSMutableDictionary dictionaryWithCapacity:[(NSDictionary *)object count]];
-        [(NSDictionary *)object enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
-            result[key] = XGGDeepMutableCopy(value) ?: [NSNull null];
-        }];
-        return result;
-    }
-    if ([object isKindOfClass:[NSArray class]]) {
-        NSMutableArray *result = [NSMutableArray arrayWithCapacity:[(NSArray *)object count]];
-        for (id value in (NSArray *)object) [result addObject:XGGDeepMutableCopy(value) ?: [NSNull null]];
-        return result;
-    }
-    return object;
-}
-
-static NSUInteger XGGForceFeatureInObject(id object) {
-    NSUInteger changes = 0;
-    if ([object isKindOfClass:[NSMutableDictionary class]]) {
-        NSMutableDictionary *dictionary = (NSMutableDictionary *)object;
-        id feature = dictionary[XGGFeatureKey];
-        if ([feature isKindOfClass:[NSDictionary class]]) {
-            NSMutableDictionary *featureDictionary = [feature mutableCopy];
-            featureDictionary[@"value"] = @YES;
-            dictionary[XGGFeatureKey] = featureDictionary;
-            changes++;
-        }
-        for (id value in [dictionary allValues]) changes += XGGForceFeatureInObject(value);
-    } else if ([object isKindOfClass:[NSMutableArray class]]) {
-        for (id value in (NSMutableArray *)object) changes += XGGForceFeatureInObject(value);
-    }
-    return changes;
 }
 
 static NSData *XGGDataWithContentsOfFileReplacement(id self, SEL _cmd, NSString *path) {
@@ -113,15 +88,9 @@ static NSData *XGGDataWithContentsOfURLReplacement(id self, SEL _cmd, NSURL *url
 }
 
 static id XGGJSONObjectWithDataReplacement(id self, SEL _cmd, NSData *data, NSJSONReadingOptions options, NSError **error) {
-    NSData *patchedData = XGGPatchDefaultsData(data, @"NSJSONSerialization");
-    id object = gOriginalJSONObjectWithData ? ((id (*)(id,SEL,NSData *,NSJSONReadingOptions,NSError **))gOriginalJSONObjectWithData)(self,_cmd,patchedData,options,error) : nil;
-    if (!object) return object;
-    NSData *keyData = [XGGFeatureKey dataUsingEncoding:NSUTF8StringEncoding];
-    if ([patchedData rangeOfData:keyData options:0 range:NSMakeRange(0, patchedData.length)].location == NSNotFound) return object;
-    id mutableObject = XGGDeepMutableCopy(object);
-    NSUInteger changes = XGGForceFeatureInObject(mutableObject);
-    if (changes > 0) return mutableObject;
-    return object;
+    NSData *patched = XGGPatchDefaultsData(data, @"NSJSONSerialization");
+    return gOriginalJSONObjectWithData ?
+        ((id (*)(id,SEL,NSData *,NSJSONReadingOptions,NSError **))gOriginalJSONObjectWithData)(self,_cmd,patched,options,error) : nil;
 }
 
 static void XGGInstallFeatureHooks(void) {
@@ -132,6 +101,7 @@ static void XGGInstallFeatureHooks(void) {
         if (urlMethod) gOriginalDataWithURL = method_setImplementation(urlMethod, (IMP)XGGDataWithContentsOfURLReplacement);
         gDataHooksInstalled = (gOriginalDataWithFile != NULL || gOriginalDataWithURL != NULL);
     }
+
     if (!gJSONHookInstalled) {
         Method jsonMethod = class_getClassMethod([NSJSONSerialization class], @selector(JSONObjectWithData:options:error:));
         if (jsonMethod) {
@@ -141,49 +111,56 @@ static void XGGInstallFeatureHooks(void) {
     }
 }
 
-static BOOL XGGSwiftReturnYES(void) { return YES; }
+#pragma mark - XAppearance Swift getter only
 
-static BOOL XGGTryInstallSwiftHooks(void) {
-    if (gSwiftHooksInstalled) return YES;
+// ABI-minimal ARM64 replacement: Swift.Bool is returned in w0.
+__attribute__((naked))
+static void XGGSwiftReturnYES(void) {
+    __asm__("mov w0, #1\n"
+            "ret\n");
+}
+
+static BOOL XGGTryInstallAppearanceHook(void) {
+    if (gAppearanceHookInstalled) return YES;
+
     MSHookFunctionType hookFunction = (MSHookFunctionType)XGGFindSymbol("MSHookFunction");
     if (!hookFunction) return NO;
 
-    void *appearanceGetter = XGGFindSymbol("$s11XAppearance10AppearanceC20isLiquidGlassEnabledSbvgZ");
-    void *redesignGetter = XGGFindSymbol("$s14T1TwitterSwift27LiquidGlassRedesignFeaturesC02isF7EnabledSbvg");
-    BOOL hookedAny = NO;
+    void *getter = XGGFindSymbol("$s11XAppearance10AppearanceC20isLiquidGlassEnabledSbvgZ");
+    if (!getter) return NO;
 
-    if (appearanceGetter && !gOriginalAppearanceGetter) {
-        hookFunction(appearanceGetter, (void *)&XGGSwiftReturnYES, &gOriginalAppearanceGetter);
-        if (gOriginalAppearanceGetter) hookedAny = YES;
-    }
-    if (redesignGetter && !gOriginalRedesignGetter) {
-        hookFunction(redesignGetter, (void *)&XGGSwiftReturnYES, &gOriginalRedesignGetter);
-        if (gOriginalRedesignGetter) hookedAny = YES;
-    }
-
-    gSwiftHooksInstalled = (gOriginalAppearanceGetter != NULL && gOriginalRedesignGetter != NULL);
-    return gSwiftHooksInstalled || hookedAny;
+    hookFunction(getter, (void *)&XGGSwiftReturnYES, &gOriginalAppearanceGetter);
+    gAppearanceHookInstalled = (gOriginalAppearanceGetter != NULL);
+    NSLog(@"[XGlassGate] XAppearance Swift hook %@", gAppearanceHookInstalled ? @"installed" : @"FAILED");
+    return gAppearanceHookInstalled;
 }
 
+#pragma mark - Existing native gate
+
 static void XGGInstallGateReplacement(id self, SEL _cmd, BOOL redesignEnabled) {
-    if (gOriginalInstallGate) ((void (*)(id,SEL,BOOL))gOriginalInstallGate)(self,_cmd,YES);
+    if (gOriginalInstallGate) {
+        ((void (*)(id,SEL,BOOL))gOriginalInstallGate)(self,_cmd,YES);
+    }
 }
 
 static BOOL XGGTryInstallGateHook(void) {
     if (gGateHookInstalled) return YES;
+
     Class installerClass = objc_getClass("T1LiquidGlassGateInstaller");
     if (!installerClass) return NO;
+
     SEL selector = NSSelectorFromString(@"installGateWithRedesignEnabled:");
     Method method = class_getClassMethod(installerClass, selector);
     if (!method) method = class_getInstanceMethod(installerClass, selector);
     if (!method) return NO;
+
     gOriginalInstallGate = method_setImplementation(method, (IMP)XGGInstallGateReplacement);
     gGateHookInstalled = (gOriginalInstallGate != NULL);
     return gGateHookInstalled;
 }
 
 static void XGGRunRuntimeHooks(void) {
-    XGGTryInstallSwiftHooks();
+    XGGTryInstallAppearanceHook();
     XGGTryInstallGateHook();
 }
 
@@ -196,14 +173,13 @@ static void XGGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XGlassGateInit(void) {
     @autoreleasepool {
-        NSLog(@"[XGlassGate] 0.5.0 loaded");
+        NSLog(@"[XGlassGate] 0.5.1 loaded");
         XGGInstallFeatureHooks();
-        XGGRunRuntimeHooks();
-        XGGScheduleRetry(0.0);
-        XGGScheduleRetry(0.05);
+
+        // Delay the direct Swift hook slightly so the framework and hook engine
+        // finish loading before we patch the function body.
         XGGScheduleRetry(0.20);
         XGGScheduleRetry(1.00);
         XGGScheduleRetry(3.00);
-        XGGScheduleRetry(8.00);
     }
 }
