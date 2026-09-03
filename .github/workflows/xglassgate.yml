@@ -1,0 +1,48 @@
+name: Build XGlassGate
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "xglassgate/**"
+      - ".github/workflows/xglassgate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: xglassgate
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XGlassGate dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XGlassGate.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XGlassGate.dylib
+          file artifacts/XGlassGate.dylib
+          shasum -a 256 artifacts/XGlassGate.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload XGlassGate dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XGlassGate-0.1.0-arm64
+          path: xglassgate/artifacts/
+          if-no-files-found: error
