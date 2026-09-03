@@ -11,6 +11,7 @@ static IMP gOriginalJSONObjectWithData = NULL;
 static BOOL gGateHookInstalled = NO;
 static BOOL gDataHooksInstalled = NO;
 static BOOL gJSONHookInstalled = NO;
+static BOOL gRedesignFeaturesHookInstalled = NO;
 
 #pragma mark - Embedded feature-switch patch
 
@@ -209,6 +210,136 @@ static void XGGInstallFeatureHooks(void) {
     }
 }
 
+#pragma mark - LiquidGlassRedesignFeatures second factor
+
+static BOOL XGGReturnYES0(id self, SEL _cmd) {
+    NSLog(@"[XGlassGate] %@ -> forced YES", NSStringFromSelector(_cmd));
+    return YES;
+}
+
+static BOOL XGGReturnYES1(id self, SEL _cmd, id a1) {
+    NSLog(@"[XGlassGate] %@ -> forced YES", NSStringFromSelector(_cmd));
+    return YES;
+}
+
+static BOOL XGGReturnYES2(id self, SEL _cmd, id a1, id a2) {
+    NSLog(@"[XGlassGate] %@ -> forced YES", NSStringFromSelector(_cmd));
+    return YES;
+}
+
+static BOOL XGGReturnYES3(id self, SEL _cmd, id a1, id a2, id a3) {
+    NSLog(@"[XGlassGate] %@ -> forced YES", NSStringFromSelector(_cmd));
+    return YES;
+}
+
+static NSUInteger XGGColonCount(NSString *selectorName) {
+    NSUInteger count = 0;
+    for (NSUInteger i = 0; i < selectorName.length; i++) {
+        if ([selectorName characterAtIndex:i] == ':') {
+            count++;
+        }
+    }
+    return count;
+}
+
+static BOOL XGGHookFeatureMethodsOnClass(Class cls) {
+    if (!cls) {
+        return NO;
+    }
+
+    NSUInteger hooked = 0;
+    Class targets[2] = { cls, object_getClass(cls) };
+
+    for (NSUInteger targetIndex = 0; targetIndex < 2; targetIndex++) {
+        Class target = targets[targetIndex];
+        if (!target) {
+            continue;
+        }
+
+        unsigned int methodCount = 0;
+        Method *methods = class_copyMethodList(target, &methodCount);
+
+        for (unsigned int i = 0; i < methodCount; i++) {
+            Method method = methods[i];
+            SEL selector = method_getName(method);
+            NSString *name = NSStringFromSelector(selector);
+            const char *types = method_getTypeEncoding(method);
+
+            BOOL interesting = ([name rangeOfString:@"isFeatureEnabled" options:NSCaseInsensitiveSearch].location != NSNotFound) ||
+                               ([name rangeOfString:@"featureEnabled" options:NSCaseInsensitiveSearch].location != NSNotFound) ||
+                               ([name rangeOfString:@"isEnabled" options:NSCaseInsensitiveSearch].location != NSNotFound);
+
+            if (!interesting) {
+                continue;
+            }
+
+            // Only replace methods that return Objective-C BOOL (B or legacy c).
+            if (!types || (types[0] != 'B' && types[0] != 'c')) {
+                NSLog(@"[XGlassGate] candidate %@ ignored (types=%s)", name, types ?: "?");
+                continue;
+            }
+
+            NSUInteger colons = XGGColonCount(name);
+            IMP replacement = NULL;
+            switch (colons) {
+                case 0: replacement = (IMP)XGGReturnYES0; break;
+                case 1: replacement = (IMP)XGGReturnYES1; break;
+                case 2: replacement = (IMP)XGGReturnYES2; break;
+                case 3: replacement = (IMP)XGGReturnYES3; break;
+                default: break;
+            }
+
+            if (!replacement) {
+                NSLog(@"[XGlassGate] candidate %@ ignored (%lu args)",
+                      name,
+                      (unsigned long)colons);
+                continue;
+            }
+
+            if (method_getImplementation(method) != replacement) {
+                method_setImplementation(method, replacement);
+            }
+
+            hooked++;
+            NSLog(@"[XGlassGate] LiquidGlassRedesignFeatures hooked %@ (%s)",
+                  name,
+                  targetIndex == 0 ? "instance" : "class");
+        }
+
+        free(methods);
+    }
+
+    return hooked > 0;
+}
+
+static BOOL XGGTryInstallRedesignFeaturesHook(void) {
+    if (gRedesignFeaturesHookInstalled) {
+        return YES;
+    }
+
+    const char *classNames[] = {
+        "_TtC14T1TwitterSwift27LiquidGlassRedesignFeatures",
+        "T1TwitterSwift.LiquidGlassRedesignFeatures"
+    };
+
+    for (NSUInteger i = 0; i < sizeof(classNames) / sizeof(classNames[0]); i++) {
+        Class cls = objc_getClass(classNames[i]);
+        if (!cls) {
+            continue;
+        }
+
+        NSLog(@"[XGlassGate] found LiquidGlassRedesignFeatures runtime class: %s",
+              class_getName(cls));
+
+        gRedesignFeaturesHookInstalled = XGGHookFeatureMethodsOnClass(cls);
+        if (gRedesignFeaturesHookInstalled) {
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
 #pragma mark - Native Liquid Glass gate
 
 static void XGGInstallGateReplacement(id self, SEL _cmd, BOOL redesignEnabled) {
@@ -228,7 +359,6 @@ static BOOL XGGTryInstallGateHook(void) {
 
     Class installerClass = objc_getClass("T1LiquidGlassGateInstaller");
     if (!installerClass) {
-        NSLog(@"[XGlassGate] T1LiquidGlassGateInstaller not available yet");
         return NO;
     }
 
@@ -260,29 +390,32 @@ static BOOL XGGTryInstallGateHook(void) {
     return gGateHookInstalled;
 }
 
+static void XGGRunRuntimeHooks(void) {
+    XGGTryInstallRedesignFeaturesHook();
+    XGGTryInstallGateHook();
+}
+
 static void XGGScheduleRetry(NSTimeInterval delay) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        XGGTryInstallGateHook();
+        XGGRunRuntimeHooks();
     });
 }
 
 __attribute__((constructor))
 static void XGlassGateInit(void) {
     @autoreleasepool {
-        NSLog(@"[XGlassGate] 0.2.0 loaded");
+        NSLog(@"[XGlassGate] 0.3.0 loaded");
 
-        // Install the feature-switch interception immediately, before X reads
-        // its embedded defaults. Only the exact Liquid Glass key is changed.
         XGGInstallFeatureHooks();
+        XGGRunRuntimeHooks();
 
-        // Then force the native X 12.23 Liquid Glass gate when its installer
-        // becomes available. Retry briefly for framework load-order safety.
-        if (!XGGTryInstallGateHook()) {
-            XGGScheduleRetry(0.0);
-            XGGScheduleRetry(0.05);
-            XGGScheduleRetry(0.20);
-            XGGScheduleRetry(1.00);
-        }
+        // Retry because T1Twitter.framework may register the Swift runtime class
+        // after injected tweak constructors have already begun executing.
+        XGGScheduleRetry(0.0);
+        XGGScheduleRetry(0.05);
+        XGGScheduleRetry(0.20);
+        XGGScheduleRetry(1.00);
+        XGGScheduleRetry(3.00);
     }
 }
