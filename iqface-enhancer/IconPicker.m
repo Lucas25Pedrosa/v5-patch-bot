@@ -1,9 +1,17 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
+#import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
 
-#pragma mark - Shared helpers
+typedef void (*IQFPresentSettingsFunction)(void);
+typedef void (*MSHookFunctionType)(void *symbol, void *replacement, void **original);
+
+static IQFPresentSettingsFunction IQFOriginalPresentSettings = NULL;
+static BOOL IQFPresentHookInstalled = NO;
+static NSInteger IQFPresentHookAttempt = 0;
+static BOOL IQFLauncherMenuVisible = NO;
+
+#pragma mark - Helpers
 
 static BOOL IQFIconPickerUsesPortuguese(void) {
     NSString *language = NSLocale.preferredLanguages.firstObject.lowercaseString;
@@ -32,29 +40,19 @@ static UIViewController *IQFIconPickerTopViewController(void) {
     }
 
     UIViewController *controller = window.rootViewController;
-    BOOL keepWalking = YES;
-    while (controller != nil && keepWalking) {
-        keepWalking = NO;
+    while (controller != nil) {
+        UIViewController *next = nil;
         if (controller.presentedViewController != nil && !controller.presentedViewController.isBeingDismissed) {
-            controller = controller.presentedViewController;
-            keepWalking = YES;
-            continue;
+            next = controller.presentedViewController;
+        } else if ([controller isKindOfClass:UINavigationController.class]) {
+            next = ((UINavigationController *)controller).visibleViewController;
+        } else if ([controller isKindOfClass:UITabBarController.class]) {
+            next = ((UITabBarController *)controller).selectedViewController;
         }
-        if ([controller isKindOfClass:UINavigationController.class]) {
-            UIViewController *visible = ((UINavigationController *)controller).visibleViewController;
-            if (visible != nil && visible != controller) {
-                controller = visible;
-                keepWalking = YES;
-                continue;
-            }
+        if (next == nil || next == controller) {
+            break;
         }
-        if ([controller isKindOfClass:UITabBarController.class]) {
-            UIViewController *selected = ((UITabBarController *)controller).selectedViewController;
-            if (selected != nil && selected != controller) {
-                controller = selected;
-                keepWalking = YES;
-            }
-        }
+        controller = next;
     }
     return controller;
 }
@@ -114,14 +112,12 @@ static NSString *IQFDisplayNameForIcon(NSString *logicalName) {
     }
 
     NSString *name = logicalName;
-    NSArray<NSString *> *prefixes = @[@"AlternateAppIcon", @"AltAppIcon"];
-    for (NSString *prefix in prefixes) {
+    for (NSString *prefix in @[@"AltAppIcon", @"AlternateAppIcon"]) {
         if ([name hasPrefix:prefix]) {
             name = [name substringFromIndex:prefix.length];
             break;
         }
     }
-
     if ([name isEqualToString:@"WorldCup"]) {
         return @"World Cup";
     }
@@ -149,8 +145,8 @@ static NSInteger IQFIconSortRank(NSString *logicalName) {
 }
 
 static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
-    NSDictionary *bundleInfo = NSBundle.mainBundle.infoDictionary;
-    NSDictionary *icons = bundleInfo[@"CFBundleIcons"];
+    NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+    NSDictionary *icons = info[@"CFBundleIcons"];
     if (![icons isKindOfClass:NSDictionary.class]) {
         icons = @{};
     }
@@ -172,7 +168,7 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
         alternates = @{};
     }
 
-    NSArray<NSString *> *keys = [alternates.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *left, NSString *right) {
+    NSArray<NSString *> *names = [alternates.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *left, NSString *right) {
         NSInteger leftRank = IQFIconSortRank(left);
         NSInteger rightRank = IQFIconSortRank(right);
         if (leftRank != rightRank) {
@@ -181,22 +177,22 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
         return [IQFDisplayNameForIcon(left) localizedCaseInsensitiveCompare:IQFDisplayNameForIcon(right)];
     }];
 
-    for (NSString *logicalName in keys) {
-        NSDictionary *icon = alternates[logicalName];
+    for (NSString *name in names) {
+        NSDictionary *icon = alternates[name];
         if (![icon isKindOfClass:NSDictionary.class]) {
             continue;
         }
         UIImage *image = IQFLoadImageFromIconDictionary(icon);
         [entries addObject:@{
-            @"name": logicalName,
-            @"title": IQFDisplayNameForIcon(logicalName),
+            @"name": name,
+            @"title": IQFDisplayNameForIcon(name),
             @"image": image ?: NSNull.null
         }];
     }
     return entries;
 }
 
-#pragma mark - Icon cell
+#pragma mark - Icon picker UI
 
 @interface IQFIconPickerCell : UICollectionViewCell
 @property(nonatomic, strong) UIImageView *iconView;
@@ -229,7 +225,6 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
         _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
         _titleLabel.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightMedium];
         _titleLabel.textAlignment = NSTextAlignmentCenter;
-        _titleLabel.numberOfLines = 1;
         _titleLabel.adjustsFontSizeToFitWidth = YES;
         _titleLabel.minimumScaleFactor = 0.72;
         [self.contentView addSubview:_titleLabel];
@@ -247,11 +242,9 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
             [_iconView.centerXAnchor constraintEqualToAnchor:self.contentView.centerXAnchor],
             [_iconView.widthAnchor constraintEqualToConstant:64.0],
             [_iconView.heightAnchor constraintEqualToConstant:64.0],
-
             [_titleLabel.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:6.0],
             [_titleLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-6.0],
             [_titleLabel.topAnchor constraintEqualToAnchor:_iconView.bottomAnchor constant:8.0],
-
             [_checkView.widthAnchor constraintEqualToConstant:22.0],
             [_checkView.heightAnchor constraintEqualToConstant:22.0],
             [_checkView.trailingAnchor constraintEqualToAnchor:_iconView.trailingAnchor constant:5.0],
@@ -281,8 +274,6 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
 
 @end
 
-#pragma mark - Icon picker controller
-
 @interface IQFIconPickerController : UIViewController <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
 @property(nonatomic, strong) UICollectionView *collectionView;
 @property(nonatomic, copy) NSArray<NSDictionary *> *entries;
@@ -293,13 +284,14 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = IQFIconPickerText(@"Alterar ícone", @"Change Icon");
+    self.entries = IQFAvailableIconEntries();
+
     if (@available(iOS 13.0, *)) {
         self.view.backgroundColor = UIColor.systemBackgroundColor;
     } else {
         self.view.backgroundColor = UIColor.whiteColor;
     }
 
-    self.entries = IQFAvailableIconEntries();
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithTitle:IQFIconPickerText(@"Fechar", @"Close")
                 style:UIBarButtonItemStyleDone
@@ -338,10 +330,8 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
     return (NSInteger)self.entries.count;
 }
 
-- (__kindof UICollectionViewCell *)collectionView:(UICollectionView *)collectionView
-                           cellForItemAtIndexPath:(NSIndexPath *)indexPath {
-    IQFIconPickerCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:@"IQFIconPickerCell"
-                                                                        forIndexPath:indexPath];
+- (__kindof UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
+    IQFIconPickerCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:@"IQFIconPickerCell" forIndexPath:indexPath];
     NSDictionary *entry = self.entries[(NSUInteger)indexPath.item];
     id value = entry[@"name"];
     NSString *logicalName = [value isKindOfClass:NSString.class] ? value : nil;
@@ -351,9 +341,7 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
     return cell;
 }
 
-- (CGSize)collectionView:(UICollectionView *)collectionView
-                  layout:(UICollectionViewLayout *)collectionViewLayout
-  sizeForItemAtIndexPath:(NSIndexPath *)indexPath {
+- (CGSize)collectionView:(UICollectionView *)collectionView layout:(UICollectionViewLayout *)collectionViewLayout sizeForItemAtIndexPath:(NSIndexPath *)indexPath {
     (void)collectionViewLayout;
     (void)indexPath;
     CGFloat available = CGRectGetWidth(collectionView.bounds) - 52.0;
@@ -367,8 +355,7 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
 
     UIApplication *application = UIApplication.sharedApplication;
     if (!application.supportsAlternateIcons) {
-        [self iqf_showError:IQFIconPickerText(@"Este iPhone não permite alterar o ícone deste aplicativo.",
-                                               @"This iPhone does not allow changing this app icon.")];
+        [self iqf_showError:IQFIconPickerText(@"Este iPhone não permite alterar o ícone deste aplicativo.", @"This iPhone does not allow changing this app icon.")];
         return;
     }
 
@@ -384,8 +371,7 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
                 return;
             }
             if (error != nil) {
-                [strongSelf iqf_showError:error.localizedDescription ?: IQFIconPickerText(@"Não foi possível alterar o ícone.",
-                                                                                           @"The icon could not be changed.")];
+                [strongSelf iqf_showError:error.localizedDescription ?: IQFIconPickerText(@"Não foi possível alterar o ícone.", @"The icon could not be changed.")];
                 return;
             }
             UISelectionFeedbackGenerator *feedback = [UISelectionFeedbackGenerator new];
@@ -406,19 +392,6 @@ static NSArray<NSDictionary *> *IQFAvailableIconEntries(void) {
 @end
 
 #pragma mark - Launcher menu
-
-static BOOL IQFLauncherMenuVisible = NO;
-
-static void IQFPresentOriginalSettings(void) {
-    typedef void (*IQFPresentSettingsFunction)(void);
-    IQFPresentSettingsFunction present = (IQFPresentSettingsFunction)dlsym(RTLD_DEFAULT, "IQFPresentSettings");
-    if (present == NULL) {
-        present = (IQFPresentSettingsFunction)dlsym(RTLD_DEFAULT, "_IQFPresentSettings");
-    }
-    if (present != NULL) {
-        present();
-    }
-}
 
 static void IQFPresentIconPicker(void) {
     UIViewController *presenter = IQFIconPickerTopViewController();
@@ -444,15 +417,17 @@ static void IQFPresentLauncherMenu(void) {
 
     IQFLauncherMenuVisible = YES;
     UIAlertController *menu = [UIAlertController alertControllerWithTitle:@"iQFace"
-                                                                   message:nil
-                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleAlert];
 
     [menu addAction:[UIAlertAction actionWithTitle:IQFIconPickerText(@"Ajustes do iQFace", @"iQFace Settings")
                                              style:UIAlertActionStyleDefault
                                            handler:^(__unused UIAlertAction *action) {
         IQFLauncherMenuVisible = NO;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            IQFPresentOriginalSettings();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (IQFOriginalPresentSettings != NULL) {
+                IQFOriginalPresentSettings();
+            }
         });
     }]];
 
@@ -460,87 +435,61 @@ static void IQFPresentLauncherMenu(void) {
                                              style:UIAlertActionStyleDefault
                                            handler:^(__unused UIAlertAction *action) {
         IQFLauncherMenuVisible = NO;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             IQFPresentIconPicker();
         });
     }]];
 
-    UIPopoverPresentationController *popover = menu.popoverPresentationController;
-    if (popover != nil) {
-        popover.sourceView = presenter.view;
-        popover.sourceRect = CGRectMake(CGRectGetMidX(presenter.view.bounds),
-                                        CGRectGetMaxY(presenter.view.bounds) - 24.0,
-                                        1.0,
-                                        1.0);
-        popover.permittedArrowDirections = 0;
-        popover.delegate = nil;
-    }
-
     [presenter presentViewController:menu animated:YES completion:nil];
 }
 
-#pragma mark - Replace enhancer long-press action
+#pragma mark - Intercept only the settings call
 
-static BOOL IQFIconPickerHookInstalled = NO;
-
-static void IQFIconPickerHandleLongPress(id self, SEL command, UILongPressGestureRecognizer *recognizer) {
-    (void)self;
-    (void)command;
-    if (recognizer.state != UIGestureRecognizerStateBegan) {
-        return;
-    }
-
-    UIView *view = recognizer.view;
-    UIWindow *window = view.window;
-    if (window == nil || CGRectGetWidth(window.bounds) <= 0.0 || CGRectGetHeight(window.bounds) <= 0.0) {
-        return;
-    }
-
-    CGPoint point = [recognizer locationInView:window];
-    BOOL isBottomZone = point.y >= CGRectGetHeight(window.bounds) * 0.68;
-    UIUserInterfaceLayoutDirection direction = [UIView userInterfaceLayoutDirectionForSemanticContentAttribute:view.semanticContentAttribute];
-    BOOL isHomeZone = direction == UIUserInterfaceLayoutDirectionRightToLeft
-        ? point.x >= CGRectGetWidth(window.bounds) * (1.0 - 0.26)
-        : point.x <= CGRectGetWidth(window.bounds) * 0.26;
-
-    if (!isBottomZone || !isHomeZone) {
-        return;
-    }
-
-    UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [feedback prepare];
-    [feedback impactOccurred];
-    IQFPresentLauncherMenu();
+static void IQFPresentSettingsReplacement(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        IQFPresentLauncherMenu();
+    });
 }
 
-static void IQFTryInstallIconPickerHook(void) {
-    if (IQFIconPickerHookInstalled) {
+static void IQFTryInstallPresentSettingsHook(void) {
+    if (IQFPresentHookInstalled) {
         return;
     }
 
-    Class target = NSClassFromString(@"IQFEnhancerGestureTarget");
-    Method method = class_getInstanceMethod(target, @selector(handleLongPress:));
-    if (target == Nil || method == NULL) {
+    IQFPresentHookAttempt += 1;
+    void *presentSymbol = dlsym(RTLD_DEFAULT, "IQFPresentSettings");
+    if (presentSymbol == NULL) {
+        presentSymbol = dlsym(RTLD_DEFAULT, "_IQFPresentSettings");
+    }
+    MSHookFunctionType hookFunction = (MSHookFunctionType)dlsym(RTLD_DEFAULT, "MSHookFunction");
+    if (hookFunction == NULL) {
+        hookFunction = (MSHookFunctionType)dlsym(RTLD_DEFAULT, "_MSHookFunction");
+    }
+
+    if (presentSymbol != NULL && hookFunction != NULL) {
+        hookFunction(presentSymbol, (void *)&IQFPresentSettingsReplacement, (void **)&IQFOriginalPresentSettings);
+        IQFPresentHookInstalled = IQFOriginalPresentSettings != NULL;
+        if (IQFPresentHookInstalled) {
+            return;
+        }
+    }
+
+    if (IQFPresentHookAttempt < 80) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            IQFTryInstallIconPickerHook();
+            IQFTryInstallPresentSettingsHook();
         });
-        return;
     }
-
-    method_setImplementation(method, (IMP)&IQFIconPickerHandleLongPress);
-    IQFIconPickerHookInstalled = YES;
 }
 
 __attribute__((constructor))
 static void IQFIconPickerInitialize(void) {
     @autoreleasepool {
         NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
-        if (![bundleIdentifier isEqualToString:@"com.facebook.Facebook"] ||
-            [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) {
+        if (![bundleIdentifier isEqualToString:@"com.facebook.Facebook"] || [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) {
             return;
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            IQFTryInstallIconPickerHook();
+            IQFTryInstallPresentSettingsHook();
         });
     }
 }
