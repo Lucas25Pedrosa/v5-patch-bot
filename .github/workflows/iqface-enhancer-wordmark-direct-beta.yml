@@ -1,4 +1,4 @@
-name: Build iQFaceEnhancer Wordmark No Flash Beta
+name: Build iQFaceEnhancer PT-BR Golden Test
 
 on:
   workflow_dispatch:
@@ -26,48 +26,44 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Prepare stable enhancer with wordmark activation
+      - name: Prepare exact golden and PT-BR variant
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          WORK="$RUNNER_TEMP/iqface-wordmark-no-flash"
-          mkdir -p "$WORK"
+          BASE="$RUNNER_TEMP/iqface-golden-base"
+          WORK="$RUNNER_TEMP/iqface-golden-ptbr"
+          mkdir -p "$BASE" "$WORK"
 
           curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
             | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
-            > "$WORK/Tweak.m"
+            > "$BASE/Tweak.m"
 
-          python3 - "$WORK/Tweak.m" <<'PY'
+          python3 - "$BASE/Tweak.m" <<'PY'
           import re, sys
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
-
           s = s.replace("static void IQFOpenSettings(void) {", "void IQFOpenSettings(void) {", 1)
-
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
           replacement = "static void IQFAttachLongPress(UIView *view) {\n    (void)view;\n    (void)IQFGestureAssociationKey;\n    (void)IQFLongPressDuration;\n}"
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
-
           needle = "        if (!IQFSafeModeEnabled()) {\n            IQFInstallNavigationItemHooks();\n            IQFInstallTabBarHooks();\n        }\n"
           assert needle in s
           guard = "        IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);\n\n"
           s = s.replace(needle, guard + needle, 1)
-
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
-          assert '@"iQFace"' in s and '@"iqf_tapped"' in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
-          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
-          cp iqface-enhancer/iQFaceEnhancer.plist "$WORK/iQFaceEnhancer.plist"
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$BASE/WordmarkActivation.m"
+          cp iqface-enhancer/iQFaceEnhancer.plist "$BASE/iQFaceEnhancer.plist"
 
-          cat > "$WORK/Makefile" <<'EOF'
+          cat > "$BASE/Makefile" <<'EOF'
           ARCHS = arm64
           TARGET = iphone:clang:latest:14.0
 
@@ -83,27 +79,75 @@ jobs:
           include $(THEOS_MAKE_PATH)/library.mk
           EOF
 
-      - name: Build arm64 replacement dylib
+          cp "$BASE/Tweak.m" "$WORK/Tweak.m"
+          cp "$BASE/WordmarkActivation.m" "$WORK/WordmarkActivation.m"
+          cp "$BASE/iQFaceEnhancer.plist" "$WORK/iQFaceEnhancer.plist"
+          cp "$BASE/Makefile" "$WORK/Makefile"
+
+          python3 - "$WORK/Tweak.m" <<'PY'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          old = '''    IQFPresentSettingsFunction present = (IQFPresentSettingsFunction)IQFFindSymbol("IQFPresentSettings");
+    if (present == NULL) {
+        return;
+    }
+
+    IQFLastPresentationTime = now;'''
+          new = '''    IQFPresentSettingsFunction present = (IQFPresentSettingsFunction)IQFFindSymbol("IQFPresentSettings");
+    if (present == NULL) {
+        return;
+    }
+
+    if (IQFShouldUsePortuguese()) {
+        (void)IQFInstallLocalizationHook();
+    }
+
+    IQFLastPresentationTime = now;'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          diff -u "$BASE/Tweak.m" "$WORK/Tweak.m" > "$RUNNER_TEMP/PTBR-SOURCE-DELTA.txt" || true
+          cat "$RUNNER_TEMP/PTBR-SOURCE-DELTA.txt"
+
+      - name: Rebuild and verify exact working golden
         run: |
           set -euo pipefail
-          WORK="$RUNNER_TEMP/iqface-wordmark-no-flash"
+          BASE="$RUNNER_TEMP/iqface-golden-base"
+          cd "$BASE"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          sha="$(shasum -a 256 "$dylib_path" | awk '{print $1}')"
+          echo "Golden rebuilt SHA256: $sha"
+          test "$sha" = "13848d1f813ba6fe13434f87fa2a92c4f039b140acd6d22168ebf74baa43c98d"
+
+      - name: Build PT-BR lazy variant
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-golden-ptbr"
           cd "$WORK"
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
           test -n "$dylib_path"
           mkdir -p artifacts
-          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
-          file artifacts/iQFaceEnhancer.dylib
-          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
-          strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
+          cp "$dylib_path" artifacts/iQFaceEnhancer2.1-PTBR-Lazy.dylib
+          cp "$RUNNER_TEMP/PTBR-SOURCE-DELTA.txt" artifacts/PTBR-SOURCE-DELTA.txt
+          file artifacts/iQFaceEnhancer2.1-PTBR-Lazy.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer2.1-PTBR-Lazy.dylib > artifacts/SHA256SUMS.txt
+          strings -a artifacts/iQFaceEnhancer2.1-PTBR-Lazy.dylib > artifacts/strings.txt || true
           grep -q "IQFPresentSettings" artifacts/strings.txt
           grep -q "FBNavigationBar" artifacts/strings.txt
           grep -q "iqf_tapped" artifacts/strings.txt
+          grep -q "IQFLoc" artifacts/strings.txt
+          grep -q "MSHookFunction" artifacts/strings.txt
           ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceEnhancer-WordmarkNoFlashBeta-arm64
-          path: ${{ runner.temp }}/iqface-wordmark-no-flash/artifacts/
+          name: iQFaceEnhancer2.1-PTBR-Lazy
+          path: ${{ runner.temp }}/iqface-golden-ptbr/artifacts/
           if-no-files-found: error
