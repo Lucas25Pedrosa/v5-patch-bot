@@ -56,6 +56,8 @@ jobs:
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
           replacement = '''static void IQFAttachLongPress(UIView *view) {
               (void)view;
+              (void)IQFGestureAssociationKey;
+              (void)IQFLongPressDuration;
           }'''
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
