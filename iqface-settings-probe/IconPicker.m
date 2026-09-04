@@ -22,17 +22,9 @@ static NSString *IQFSPLoadStoredSelectedName(BOOL *hasStoredValue) {
     return (NSString *)value;
 }
 
-static BOOL IQFSPUsesPortuguese(void) {
-    return [NSLocale.preferredLanguages.firstObject.lowercaseString hasPrefix:@"pt"];
-}
-
-static NSString *IQFSPText(NSString *pt, NSString *en) {
-    return IQFSPUsesPortuguese() ? pt : en;
-}
-
 static NSString *IQFSPDisplayName(NSString *logicalName) {
     if (logicalName.length == 0) {
-        return IQFSPText(@"Padrão", @"Default");
+        return @"Default";
     }
     NSString *name = logicalName;
     for (NSString *prefix in @[@"AltAppIcon", @"AlternateAppIcon"]) {
@@ -98,7 +90,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     NSDictionary *primary = [icons[@"CFBundlePrimaryIcon"] isKindOfClass:NSDictionary.class] ? icons[@"CFBundlePrimaryIcon"] : @{};
     [result addObject:@{
         @"name": NSNull.null,
-        @"title": IQFSPText(@"Padrão", @"Default"),
+        @"title": @"Default",
         @"image": IQFSPIconImage(primary) ?: NSNull.null
     }];
 
@@ -203,7 +195,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = IQFSPText(@"Alterar ícone", @"Change Icon");
+    self.title = @"Change Icon";
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.entries = IQFSPEntries();
 
@@ -215,7 +207,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     }
 
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-        initWithTitle:IQFSPText(@"Fechar", @"Close")
+        initWithTitle:@"Close"
                 style:UIBarButtonItemStyleDone
                target:self
                action:@selector(iqfsp_close)];
@@ -288,7 +280,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     [collectionView deselectItemAtIndexPath:indexPath animated:YES];
     UIApplication *application = UIApplication.sharedApplication;
     if (!application.supportsAlternateIcons) {
-        [self iqfsp_error:IQFSPText(@"O iOS não permite alterar o ícone deste aplicativo.", @"iOS does not allow changing this app icon.")];
+        [self iqfsp_error:@"iOS does not allow changing this app icon."];
         return;
     }
 
@@ -304,7 +296,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
                 return;
             }
             if (error != nil) {
-                [self iqfsp_error:error.localizedDescription ?: IQFSPText(@"Não foi possível alterar o ícone.", @"The icon could not be changed.")];
+                [self iqfsp_error:error.localizedDescription ?: @"The icon could not be changed."];
                 return;
             }
 
