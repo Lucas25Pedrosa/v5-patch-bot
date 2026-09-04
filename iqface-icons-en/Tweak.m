@@ -24,34 +24,76 @@ static BOOL IQFIconsClassImplementsSelector(Class cls, SEL selector) {
     return found;
 }
 
-static BOOL IQFIconsIsToolsHeader(NSString *header) {
-    if (![header isKindOfClass:NSString.class]) {
-        return NO;
+static NSString *IQFIconsSectionHeader(id section) {
+    NSString *header = nil;
+    @try {
+        header = [section valueForKey:@"header"];
+    } @catch (__unused NSException *exception) {
+        header = nil;
     }
+    return [header isKindOfClass:NSString.class] ? header : nil;
+}
+
+static NSArray *IQFIconsSectionRows(id section) {
+    NSArray *rows = nil;
+    @try {
+        rows = [section valueForKey:@"rows"];
+    } @catch (__unused NSException *exception) {
+        rows = nil;
+    }
+    return [rows isKindOfClass:NSArray.class] ? rows : nil;
+}
+
+static NSString *IQFIconsRowTitle(id row) {
+    NSString *title = nil;
+    @try {
+        title = [row valueForKey:@"title"];
+    } @catch (__unused NSException *exception) {
+        title = nil;
+    }
+    return [title isKindOfClass:NSString.class] ? title : nil;
+}
+
+static NSString *IQFIconsRowDetail(id row) {
+    NSString *detail = nil;
+    @try {
+        detail = [row valueForKey:@"detail"];
+    } @catch (__unused NSException *exception) {
+        detail = nil;
+    }
+    return [detail isKindOfClass:NSString.class] ? detail : nil;
+}
+
+static BOOL IQFIconsIsToolsHeader(NSString *header) {
+    if (![header isKindOfClass:NSString.class]) return NO;
     NSString *normalized = header.lowercaseString;
     return [normalized isEqualToString:@"tools"] ||
            [normalized isEqualToString:@"ferramentas"] ||
            [normalized isEqualToString:@"herramientas"];
 }
 
-static BOOL IQFIconsAlreadyContainsRow(NSArray *sections) {
+static BOOL IQFIconsIsCreditsHeader(NSString *header) {
+    if (![header isKindOfClass:NSString.class]) return NO;
+    NSString *normalized = header.lowercaseString;
+    return [normalized isEqualToString:@"developer"] ||
+           [normalized isEqualToString:@"desenvolvedor"] ||
+           [normalized isEqualToString:@"desarrollador"] ||
+           [normalized isEqualToString:@"about"] ||
+           [normalized isEqualToString:@"sobre"];
+}
+
+static id IQFIconsFindSection(NSArray *sections, BOOL (^predicate)(NSString *header)) {
     for (id section in sections) {
-        NSArray *rows = nil;
-        @try {
-            rows = [section valueForKey:@"rows"];
-        } @catch (__unused NSException *exception) {
-            rows = nil;
-        }
-        if (![rows isKindOfClass:NSArray.class]) {
-            continue;
-        }
-        for (id row in rows) {
-            NSString *title = nil;
-            @try {
-                title = [row valueForKey:@"title"];
-            } @catch (__unused NSException *exception) {
-                title = nil;
-            }
+        NSString *header = IQFIconsSectionHeader(section);
+        if (predicate(header)) return section;
+    }
+    return nil;
+}
+
+static BOOL IQFIconsContainsChangeIconRow(NSArray *sections) {
+    for (id section in sections) {
+        for (id row in IQFIconsSectionRows(section)) {
+            NSString *title = IQFIconsRowTitle(row);
             if ([title isEqualToString:@"Change Icon"] || [title isEqualToString:@"Alterar ícone"]) {
                 return YES;
             }
@@ -60,47 +102,80 @@ static BOOL IQFIconsAlreadyContainsRow(NSArray *sections) {
     return NO;
 }
 
-static id IQFIconsFindToolsSection(NSArray *sections) {
+static BOOL IQFIconsContainsContributorRow(NSArray *sections) {
     for (id section in sections) {
-        NSString *header = nil;
-        @try {
-            header = [section valueForKey:@"header"];
-        } @catch (__unused NSException *exception) {
-            header = nil;
-        }
-        if (IQFIconsIsToolsHeader(header)) {
-            return section;
+        for (id row in IQFIconsSectionRows(section)) {
+            NSString *title = IQFIconsRowTitle(row);
+            NSString *detail = IQFIconsRowDetail(row);
+            if ([title isEqualToString:@"Lucas"] && [detail isEqualToString:@"Contributor"]) {
+                return YES;
+            }
         }
     }
-    return nil;
+    return NO;
 }
 
-static id IQFIconsCreateNativeRow(UIViewController *controller) {
+static id IQFIconsCreateNativeValueRow(UIViewController *controller,
+                                       NSString *title,
+                                       NSString *icon,
+                                       NSString *detail,
+                                       void (^tapBlock)(void)) {
     SEL selector = NSSelectorFromString(@"valueRowWithTitle:icon:detail:tap:");
-    if (controller == nil || ![controller respondsToSelector:selector]) {
-        return nil;
-    }
+    if (controller == nil || ![controller respondsToSelector:selector]) return nil;
 
+    typedef id (*IQFIconsNativeRowBuilder)(id, SEL, id, id, id, id);
+    IQFIconsNativeRowBuilder builder = (IQFIconsNativeRowBuilder)(void *)objc_msgSend;
+    return builder(controller, selector, title, icon, detail, [tapBlock copy]);
+}
+
+static id IQFIconsCreateChangeIconRow(UIViewController *controller) {
     __weak UIViewController *weakController = controller;
     void (^tapBlock)(void) = ^{
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *presenter = weakController;
-            if (presenter == nil || presenter.presentedViewController != nil) {
-                return;
-            }
+            if (presenter == nil || presenter.presentedViewController != nil) return;
             IQFIconsPresentIconPickerFromViewController(presenter);
         });
     };
 
-    typedef id (*IQFIconsNativeRowBuilder)(id, SEL, id, id, id, id);
-    IQFIconsNativeRowBuilder builder = (IQFIconsNativeRowBuilder)(void *)objc_msgSend;
-    return builder(controller, selector, @"Change Icon", @"app", @"", [tapBlock copy]);
+    return IQFIconsCreateNativeValueRow(controller, @"Change Icon", @"app", @"", tapBlock);
 }
 
-static void IQFIconsInstallRow(UIViewController *controller) {
-    if (controller == nil || objc_getAssociatedObject(controller, IQFIconsRowInstalledKey) != nil) {
-        return;
+static id IQFIconsCreateContributorRow(UIViewController *controller) {
+    void (^tapBlock)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSURL *url = [NSURL URLWithString:@"https://t.me/lucaspedrosa"];
+            if (url == nil) return;
+            [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+        });
+    };
+
+    return IQFIconsCreateNativeValueRow(controller,
+                                        @"Lucas",
+                                        @"person.crop.circle",
+                                        @"Contributor",
+                                        tapBlock);
+}
+
+static BOOL IQFIconsAppendNativeRow(id section, id row) {
+    Class rowClass = NSClassFromString(@"IQFRow");
+    NSArray *rows = IQFIconsSectionRows(section);
+    if (section == nil || row == nil || rowClass == Nil || ![row isKindOfClass:rowClass] || rows == nil) {
+        return NO;
     }
+
+    NSMutableArray *updatedRows = [rows mutableCopy];
+    [updatedRows addObject:row];
+    @try {
+        [section setValue:[updatedRows copy] forKey:@"rows"];
+        return YES;
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+}
+
+static void IQFIconsInstallRows(UIViewController *controller) {
+    if (controller == nil || objc_getAssociatedObject(controller, IQFIconsRowInstalledKey) != nil) return;
 
     NSArray *sections = nil;
     @try {
@@ -108,51 +183,48 @@ static void IQFIconsInstallRow(UIViewController *controller) {
     } @catch (__unused NSException *exception) {
         sections = nil;
     }
+    if (![sections isKindOfClass:NSArray.class] || sections.count == 0) return;
 
-    if (![sections isKindOfClass:NSArray.class] || sections.count == 0) {
-        return;
-    }
+    BOOL hasChangeIcon = IQFIconsContainsChangeIconRow(sections);
+    BOOL hasContributor = IQFIconsContainsContributorRow(sections);
+    BOOL changed = NO;
 
-    if (IQFIconsAlreadyContainsRow(sections)) {
-        objc_setAssociatedObject(controller, IQFIconsRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        return;
-    }
-
-    id toolsSection = IQFIconsFindToolsSection(sections);
-    if (toolsSection == nil) {
-        NSLog(@"[iQFaceIcons] Tools section not found; leaving settings untouched");
-        return;
-    }
-
-    NSArray *rows = nil;
-    @try {
-        rows = [toolsSection valueForKey:@"rows"];
-    } @catch (__unused NSException *exception) {
-        rows = nil;
-    }
-    if (![rows isKindOfClass:NSArray.class]) {
-        return;
-    }
-
-    id nativeRow = IQFIconsCreateNativeRow(controller);
-    Class rowClass = NSClassFromString(@"IQFRow");
-    if (nativeRow == nil || rowClass == Nil || ![nativeRow isKindOfClass:rowClass]) {
-        NSLog(@"[iQFaceIcons] native IQFRow builder unavailable");
-        return;
-    }
-
-    NSMutableArray *updatedRows = [rows mutableCopy];
-    [updatedRows addObject:nativeRow];
-
-    @try {
-        [toolsSection setValue:[updatedRows copy] forKey:@"rows"];
-        if ([controller isKindOfClass:UITableViewController.class]) {
-            [((UITableViewController *)controller).tableView reloadData];
+    if (!hasChangeIcon) {
+        id toolsSection = IQFIconsFindSection(sections, ^BOOL(NSString *header) {
+            return IQFIconsIsToolsHeader(header);
+        });
+        if (toolsSection != nil) {
+            id changeIconRow = IQFIconsCreateChangeIconRow(controller);
+            if (IQFIconsAppendNativeRow(toolsSection, changeIconRow)) {
+                hasChangeIcon = YES;
+                changed = YES;
+                NSLog(@"[iQFaceIcons] Change Icon row added");
+            }
         }
+    }
+
+    if (!hasContributor) {
+        id creditsSection = IQFIconsFindSection(sections, ^BOOL(NSString *header) {
+            return IQFIconsIsCreditsHeader(header);
+        });
+        if (creditsSection != nil) {
+            id contributorRow = IQFIconsCreateContributorRow(controller);
+            if (IQFIconsAppendNativeRow(creditsSection, contributorRow)) {
+                hasContributor = YES;
+                changed = YES;
+                NSLog(@"[iQFaceIcons] Lucas Contributor credit added");
+            }
+        } else {
+            NSLog(@"[iQFaceIcons] credits section not found; leaving contributor credit untouched");
+        }
+    }
+
+    if (changed && [controller isKindOfClass:UITableViewController.class]) {
+        [((UITableViewController *)controller).tableView reloadData];
+    }
+
+    if (hasChangeIcon && hasContributor) {
         objc_setAssociatedObject(controller, IQFIconsRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[iQFaceIcons] Change Icon row added");
-    } @catch (__unused NSException *exception) {
-        NSLog(@"[iQFaceIcons] could not add row; leaving settings untouched");
     }
 }
 
@@ -160,13 +232,11 @@ static void IQFIconsViewDidAppear(UIViewController *self, SEL command, BOOL anim
     if (IQFIconsOriginalViewDidAppear != NULL) {
         IQFIconsOriginalViewDidAppear(self, command, animated);
     }
-    IQFIconsInstallRow(self);
+    IQFIconsInstallRows(self);
 }
 
 static void IQFIconsTryInstallHook(void) {
-    if (IQFIconsHookInstalled) {
-        return;
-    }
+    if (IQFIconsHookInstalled) return;
 
     IQFIconsHookAttempts += 1;
     Class target = NSClassFromString(@"IQFSettingsViewController");
