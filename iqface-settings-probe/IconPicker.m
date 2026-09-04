@@ -2,6 +2,26 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 
+static NSString * const IQFSPSelectionDefaultsKey = @"com.lucas.iqface.iconpicker.selected";
+static NSString * const IQFSPDefaultSelectionSentinel = @"__IQFSP_DEFAULT__";
+
+static void IQFSPSaveSelectedName(NSString *name) {
+    NSString *value = name ?: IQFSPDefaultSelectionSentinel;
+    [NSUserDefaults.standardUserDefaults setObject:value forKey:IQFSPSelectionDefaultsKey];
+}
+
+static NSString *IQFSPLoadStoredSelectedName(BOOL *hasStoredValue) {
+    id value = [NSUserDefaults.standardUserDefaults objectForKey:IQFSPSelectionDefaultsKey];
+    BOOL valid = [value isKindOfClass:NSString.class];
+    if (hasStoredValue != NULL) {
+        *hasStoredValue = valid;
+    }
+    if (!valid || [(NSString *)value isEqualToString:IQFSPDefaultSelectionSentinel]) {
+        return nil;
+    }
+    return (NSString *)value;
+}
+
 static BOOL IQFSPUsesPortuguese(void) {
     return [NSLocale.preferredLanguages.firstObject.lowercaseString hasPrefix:@"pt"];
 }
@@ -186,7 +206,18 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     self.title = IQFSPText(@"Alterar ícone", @"Change Icon");
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.entries = IQFSPEntries();
-    self.selectedName = UIApplication.sharedApplication.alternateIconName;
+
+    NSString *systemName = UIApplication.sharedApplication.alternateIconName;
+    BOOL hasStoredValue = NO;
+    NSString *storedName = IQFSPLoadStoredSelectedName(&hasStoredValue);
+    if (systemName.length > 0) {
+        self.selectedName = systemName;
+        IQFSPSaveSelectedName(systemName);
+    } else if (hasStoredValue) {
+        self.selectedName = storedName;
+    } else {
+        self.selectedName = nil;
+    }
 
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithTitle:IQFSPText(@"Fechar", @"Close")
@@ -218,10 +249,14 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     NSString *systemName = UIApplication.sharedApplication.alternateIconName;
-    if ((systemName == nil && self.selectedName == nil) || [systemName isEqualToString:self.selectedName]) {
+    if (systemName.length == 0) {
+        return;
+    }
+    if ([systemName isEqualToString:self.selectedName]) {
         return;
     }
     self.selectedName = systemName;
+    IQFSPSaveSelectedName(systemName);
     [self.collectionView reloadData];
 }
 
@@ -279,6 +314,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
             }
 
             self.selectedName = name;
+            IQFSPSaveSelectedName(name);
             UISelectionFeedbackGenerator *feedback = [UISelectionFeedbackGenerator new];
             [feedback selectionChanged];
             [self.collectionView reloadData];
@@ -293,6 +329,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
                 BOOL systemMatchesRequested = (name == nil && systemName == nil) || [systemName isEqualToString:name];
                 if (systemMatchesRequested) {
                     strongSelf.selectedName = systemName;
+                    IQFSPSaveSelectedName(systemName);
                     [strongSelf.collectionView reloadData];
                 }
             });
