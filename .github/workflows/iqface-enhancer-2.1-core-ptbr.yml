@@ -1,0 +1,102 @@
+name: Build iQFaceEnhancer 2.1 Core PT-BR
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-enhancer-core-ptbr/**"
+      - ".github/workflows/iqface-enhancer-2.1-core-ptbr.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Prepare exact working golden source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BASE="$RUNNER_TEMP/iqface-golden"
+          FINAL="$RUNNER_TEMP/iqface-core-ptbr"
+          mkdir -p "$BASE" "$FINAL"
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$BASE/Tweak.m"
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/cf0e1fcb8809cf64564bce78d64fb03bbb91a50e" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$BASE/WordmarkActivation.m"
+
+          python3 iqface-enhancer-core-ptbr/prepare_golden.py "$BASE/Tweak.m"
+          cp iqface-enhancer-core-ptbr/Makefile "$BASE/Makefile"
+          perl -0pi -e 's/Tweak\.m WordmarkActivation\.m Translation\.m/Tweak.m WordmarkActivation.m/' "$BASE/Makefile"
+
+          cp -R "$BASE/." "$FINAL/"
+          cp iqface-enhancer-core-ptbr/Translation.m "$FINAL/Translation.m"
+          cp iqface-enhancer-core-ptbr/Makefile "$FINAL/Makefile"
+
+      - name: Rebuild golden baseline for comparison
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/iqface-golden"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib"
+          sha="$(shasum -a 256 "$dylib" | awk '{print $1}')"
+          echo "Golden uploaded SHA256: 13848d1f813ba6fe13434f87fa2a92c4f039b140acd6d22168ebf74baa43c98d"
+          echo "Golden rebuilt SHA256:  $sha"
+          if [ "$sha" != "13848d1f813ba6fe13434f87fa2a92c4f039b140acd6d22168ebf74baa43c98d" ]; then
+            echo "::warning::Rebuilt golden differs bytewise from uploaded golden; source recipe remains identical."
+          fi
+          echo "$sha" > "$RUNNER_TEMP/GOLDEN-REBUILT-SHA.txt"
+
+      - name: Build Core-style PT-BR variant
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/iqface-core-ptbr"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib"
+          mkdir -p artifacts
+          cp "$dylib" artifacts/iQFaceEnhancer2.1-PTBR-Core.dylib
+          cp "$RUNNER_TEMP/GOLDEN-REBUILT-SHA.txt" artifacts/GOLDEN-REBUILT-SHA.txt
+          file artifacts/iQFaceEnhancer2.1-PTBR-Core.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer2.1-PTBR-Core.dylib > artifacts/SHA256SUMS.txt
+          strings -a artifacts/iQFaceEnhancer2.1-PTBR-Core.dylib > artifacts/strings.txt || true
+          grep -q "IQFPresentSettings" artifacts/strings.txt
+          grep -q "FBNavigationBar" artifacts/strings.txt
+          grep -q "iqf_tapped" artifacts/strings.txt
+          grep -q "IQFSettingsViewController" artifacts/strings.txt
+          grep -q "MSHookMessageEx" artifacts/strings.txt
+          grep -q "Ajustes do iQFace" artifacts/strings.txt
+          grep -q "Confirmar amizades" artifacts/strings.txt
+          grep -q "Ocultar pessoas sugeridas" artifacts/strings.txt
+          ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
+
+      - name: Upload PT-BR dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer2.1-PTBR-Core
+          path: ${{ runner.temp }}/iqface-core-ptbr/artifacts/
+          if-no-files-found: error
