@@ -3,7 +3,9 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static id IQTStoredNavButton = nil;
+static UIControl *IQTStoredNavButton = nil;
+static id IQTStoredSettingsTarget = nil;
+static SEL IQTStoredSettingsAction = NULL;
 static char IQTLongPressKey;
 static BOOL IQTASNodeHooksInstalled = NO;
 static BOOL IQTNavHooksInstalled = NO;
@@ -39,16 +41,34 @@ static id IQTObjectBySelector(id object, NSString *selectorName) {
 }
 
 static UIView *IQTViewForNode(id node) {
+    if ([node isKindOfClass:UIView.class]) return (UIView *)node;
     id view = IQTObjectBySelector(node, @"view");
     return [view isKindOfClass:UIView.class] ? view : nil;
+}
+
+static void IQTCaptureOriginalSettingsAction(UIControl *button) {
+    if (button == nil) return;
+
+    for (id target in button.allTargets) {
+        NSArray<NSString *> *actions = [button actionsForTarget:target
+                                               forControlEvent:UIControlEventTouchUpInside];
+        for (NSString *actionName in actions) {
+            if ([actionName isEqualToString:@"buttonTapped:"]) {
+                IQTStoredSettingsTarget = target;
+                IQTStoredSettingsAction = NSSelectorFromString(actionName);
+                return;
+            }
+        }
+    }
 }
 
 static void IQTRememberAndHideNavButton(id object) {
     if (!IQTIsSettingsNavButton(object)) return;
 
-    // Preserve the exact original iQTele button instance. In iQTele 1.2 the
-    // button registers itself as target for @selector(iqtTapped).
-    IQTStoredNavButton = object;
+    if ([object isKindOfClass:UIControl.class]) {
+        IQTStoredNavButton = (UIControl *)object;
+        IQTCaptureOriginalSettingsAction(IQTStoredNavButton);
+    }
 
     SEL setHidden = NSSelectorFromString(@"setHidden:");
     if ([object respondsToSelector:setHidden]) {
@@ -76,17 +96,40 @@ static void IQTRememberAndHideNavButton(id object) {
     }
 }
 
-static BOOL IQTOpenSettingsThroughOriginalButton(void) {
-    id button = IQTStoredNavButton;
+static BOOL IQTOpenSettingsThroughOriginalAction(void) {
+    UIControl *button = IQTStoredNavButton;
     if (button == nil) return NO;
 
-    // This is the original action registered by IQTSettingsNavButton itself.
-    SEL tapped = NSSelectorFromString(@"iqtTapped");
-    if (![button respondsToSelector:tapped]) return NO;
+    // Refresh from the real iQTele control in case its target was attached
+    // after the first time we saw the button.
+    IQTCaptureOriginalSettingsAction(button);
 
-    void (*send)(id, SEL) = (void *)objc_msgSend;
-    send(button, tapped);
-    return YES;
+    id target = IQTStoredSettingsTarget;
+    SEL action = IQTStoredSettingsAction;
+    if (target != nil && action != NULL && [target respondsToSelector:action]) {
+        return [UIApplication.sharedApplication sendAction:action
+                                                        to:target
+                                                      from:button
+                                                  forEvent:nil];
+    }
+
+    // Exact iQTele 1.2 fallback: IQTSettingsButtonTarget implements
+    // -buttonTapped:, whose sender is the IQTSettingsNavButton.
+    Class targetClass = NSClassFromString(@"IQTSettingsButtonTarget");
+    SEL buttonTapped = NSSelectorFromString(@"buttonTapped:");
+    if (targetClass != Nil && [targetClass instancesRespondToSelector:buttonTapped]) {
+        id fallbackTarget = [[targetClass alloc] init];
+        if (fallbackTarget != nil) {
+            IQTStoredSettingsTarget = fallbackTarget;
+            IQTStoredSettingsAction = buttonTapped;
+            return [UIApplication.sharedApplication sendAction:buttonTapped
+                                                            to:fallbackTarget
+                                                          from:button
+                                                      forEvent:nil];
+        }
+    }
+
+    return NO;
 }
 
 @interface IQTMxGestureTarget : NSObject
@@ -106,7 +149,7 @@ static BOOL IQTOpenSettingsThroughOriginalButton(void) {
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        IQTOpenSettingsThroughOriginalButton();
+        IQTOpenSettingsThroughOriginalAction();
     }
 }
 @end
@@ -143,11 +186,8 @@ static void IQTPrioritizeMxStyleLongPress(UIView *view, UILongPressGestureRecogn
 static void IQTAttachMxStyleLongPressToAccessibilityNode(id accessibilityNode) {
     if (accessibilityNode == nil) return;
 
-    // MxGram attaches to the AccessibilityAreaNode's supernode, not to the
-    // AccessibilityAreaNode itself.
     id supernode = IQTObjectBySelector(accessibilityNode, @"supernode");
     if (supernode == nil) return;
-
     if (objc_getAssociatedObject(supernode, &IQTLongPressKey) != nil) return;
 
     UIView *view = IQTViewForNode(supernode);
@@ -157,7 +197,6 @@ static void IQTAttachMxStyleLongPressToAccessibilityNode(id accessibilityNode) {
         initWithTarget:IQTMxGestureTarget.shared
                 action:@selector(handleLongPress:)];
 
-    // Keep UIKit defaults, as MxGram does. Only preserve normal tap handling.
     gesture.cancelsTouchesInView = NO;
     gesture.delaysTouchesBegan = NO;
     gesture.delaysTouchesEnded = NO;
