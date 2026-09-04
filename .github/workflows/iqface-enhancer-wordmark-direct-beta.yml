@@ -52,7 +52,7 @@ jobs:
           assert old in s
           s = s.replace(old, "void IQFOpenSettings(void) {", 1)
 
-          # Keep the old implementation in source for minimal delta, but make it a no-op.
+          # Keep the old long-press implementation unreachable in this build.
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
           replacement = '''static void IQFAttachLongPress(UIView *view) {
               (void)view;
@@ -62,9 +62,34 @@ jobs:
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          # Sanity: this stable base must open original iQFace settings directly.
+          # Install only the precise top-button insertion guard even while Safe Mode is on.
+          # This prevents the original iQFace button from entering the hierarchy, avoiding
+          # the one-frame flash that occurred when the periodic scanner hid it afterwards.
+          constructor_needle = '''        if (!IQFSafeModeEnabled()) {
+              IQFInstallNavigationItemHooks();
+              IQFInstallTabBarHooks();
+          }
+'''
+          if constructor_needle not in s:
+              constructor_needle = '''        if (!IQFSafeModeEnabled()) {
+            IQFInstallNavigationItemHooks();
+            IQFInstallTabBarHooks();
+        }
+'''
+          assert constructor_needle in s
+          guard = '''        IQFReplaceMethod(UIView.class,
+                         @selector(addSubview:),
+                         (IMP)&IQFAddSubview,
+                         (IMP *)&IQFOriginalAddSubview);
+
+'''
+          s = s.replace(constructor_needle, guard + constructor_needle, 1)
+
+          # Sanity: stable base opens original iQFace settings directly and retains the
+          # exact iQFace-button predicate used by the existing enhancer.
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
+          assert 'accessibilityLabel' in s and '@"iQFace"' in s and '@"iqf_tapped"' in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
@@ -239,18 +264,20 @@ jobs:
           dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
           test -n "$dylib_path"
           mkdir -p artifacts
-          cp "$dylib_path" artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib
-          file artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib
-          shasum -a 256 artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
+          file artifacts/iQFaceEnhancer.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
 
-          strings -a artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib > artifacts/strings.txt || true
+          strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
           grep -q "IQFPresentSettings" artifacts/strings.txt
+          grep -q "iqf_tapped" artifacts/strings.txt
+          grep -q "FBNavigationBar" artifacts/strings.txt
           ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
           ! grep -q "Alterar ícone" artifacts/strings.txt || exit 1
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceEnhancer-WordmarkDirectBeta-arm64
+          name: iQFaceEnhancer-WordmarkNoFlashBeta-arm64
           path: ${{ runner.temp }}/iqface-wordmark-direct/artifacts/
           if-no-files-found: error
