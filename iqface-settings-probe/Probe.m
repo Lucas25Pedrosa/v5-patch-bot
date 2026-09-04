@@ -81,8 +81,7 @@ static id IQFSPCreateNativeIconRow(UIViewController *controller) {
         return nil;
     }
 
-    BOOL portuguese = [NSLocale.preferredLanguages.firstObject.lowercaseString hasPrefix:@"pt"];
-    NSString *title = portuguese ? @"Alterar ícone" : @"Change Icon";
+    NSString *title = @"Change Icon";
 
     __weak UIViewController *weakController = controller;
     void (^tapBlock)(void) = ^{
