@@ -1,0 +1,64 @@
+name: Inspect iQFace Settings
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/iqface-inspect.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout tools repo
+        uses: actions/checkout@v4
+
+      - name: Checkout injector core
+        uses: actions/checkout@v4
+        with:
+          repository: Lucas25Pedrosa/Bot-Injector-Core
+          path: core
+
+      - name: Inspect iQFace Mach-O
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="core/addons/facebook/dylib/iQFace.dylib"
+          OUT="iqface-inspection"
+          mkdir -p "$OUT"
+          test -f "$BIN"
+
+          file "$BIN" > "$OUT/file.txt"
+          shasum -a 256 "$BIN" > "$OUT/SHA256SUMS.txt"
+          otool -L "$BIN" > "$OUT/dependencies.txt" || true
+          otool -l "$BIN" > "$OUT/load-commands.txt" || true
+          nm -m "$BIN" > "$OUT/nm-all.txt" 2>&1 || true
+          otool -ov "$BIN" > "$OUT/objc-all.txt" 2>&1 || true
+          strings -a "$BIN" > "$OUT/strings-all.txt"
+
+          grep -Ein -C 4 'IQF|iQFace|Settings|Tools|Developer|About|UITable|UICollection|tableView|collectionView|numberOfSections|numberOfRows|didSelect|ViewController|Controller|section|row|cell' \
+            "$OUT/strings-all.txt" > "$OUT/settings-strings.txt" || true
+
+          grep -Ein -C 3 'IQF|iQFace|Settings|Tools|Developer|About|UITable|UICollection|tableView|collectionView|numberOfSections|numberOfRows|didSelect|ViewController|Controller' \
+            "$OUT/nm-all.txt" > "$OUT/settings-symbols.txt" || true
+
+          grep -Ein -C 5 'IQF|iQFace|Settings|Tools|Developer|About|UITable|UICollection|tableView|collectionView|numberOfSections|numberOfRows|didSelect|ViewController|Controller' \
+            "$OUT/objc-all.txt" > "$OUT/settings-objc.txt" || true
+
+          printf '\n=== Candidate Objective-C classes ===\n' > "$OUT/candidate-classes.txt"
+          grep -E '^ *name +0x[0-9a-f]+ ' "$OUT/objc-all.txt" \
+            | sed -E 's/^.* //' \
+            | grep -Ei 'IQF|Settings|Setting|Preference|Config|Menu|Tool|About' \
+            | sort -u >> "$OUT/candidate-classes.txt" || true
+
+      - name: Upload inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: iqface-settings-inspection
+          path: iqface-inspection/
+          if-no-files-found: error
