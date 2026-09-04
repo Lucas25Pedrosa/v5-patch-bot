@@ -41,10 +41,14 @@ jobs:
           cp "$dylib_path" artifacts/iQFaceIcons.dylib
           shasum -a 256 artifacts/iQFaceIcons.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceIcons.dylib
-          strings -a artifacts/iQFaceIcons.dylib | grep -F "Alterar ícone"
           strings -a artifacts/iQFaceIcons.dylib | grep -F "Fechar"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "iQFaceIcons"
           if strings -a artifacts/iQFaceIcons.dylib | grep -F "alternateIconName"; then
             echo "Unexpected alternateIconName reference in final sideload build"
+            exit 1
+          fi
+          if strings -a artifacts/iQFaceIcons.dylib | grep -F "iQFaceSettingsProbe"; then
+            echo "Unexpected probe identifier in final build"
             exit 1
           fi
 
