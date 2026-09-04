@@ -1,23 +1,19 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static __weak id IQTStoredSettingsTarget = nil;
-static NSTimeInterval IQTLastOpenTime = 0;
-static char IQTGestureKey;
-static BOOL IQTASNodeHooksInstalled = NO;
-static BOOL IQTNavHooksInstalled = NO;
-static BOOL IQTTargetHooksInstalled = NO;
-static BOOL IQTLoadedBannerShown = NO;
+static id IQTStoredSettingsTarget = nil;
+static id IQTActiveLocalization = nil;
 
-static NSString *IQTNormalized(NSString *value) {
-    if (value.length == 0) return @"";
-    NSString *folded = [value stringByFoldingWithOptions:(NSDiacriticInsensitiveSearch | NSCaseInsensitiveSearch)
-                                                   locale:NSLocale.currentLocale];
-    return folded.lowercaseString;
-}
+static char IQTLongPressKey;
+static BOOL IQTFallbackAttached = NO;
+
+static BOOL IQTASNodeHooked = NO;
+static BOOL IQTLocalizationHooked = NO;
+static BOOL IQTSettingsTargetHooked = NO;
+static BOOL IQTSettingsNavHooked = NO;
+static BOOL IQTUIViewHooked = NO;
 
 static BOOL IQTIsTelegramProcess(void) {
     NSString *exe = NSBundle.mainBundle.executablePath.lastPathComponent ?: @"";
@@ -35,66 +31,17 @@ static UIWindow *IQTKeyWindow(void) {
     return UIApplication.sharedApplication.windows.firstObject;
 }
 
-static void IQTShowLoadedBanner(void) {
-    if (IQTLoadedBannerShown) return;
-    IQTLoadedBannerShown = YES;
-    UIWindow *window = IQTKeyWindow();
-    if (window == nil) return;
-
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
-    label.text = @"iQTele Enhancer v0.2 loaded";
-    label.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightSemibold];
-    label.textAlignment = NSTextAlignmentCenter;
-    label.textColor = UIColor.labelColor;
-    label.backgroundColor = UIColor.secondarySystemBackgroundColor;
-    label.layer.cornerRadius = 10.0;
-    label.layer.masksToBounds = YES;
-    label.alpha = 0.0;
-    label.translatesAutoresizingMaskIntoConstraints = NO;
-    [window addSubview:label];
-    [NSLayoutConstraint activateConstraints:@[
-        [label.centerXAnchor constraintEqualToAnchor:window.centerXAnchor],
-        [label.bottomAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.bottomAnchor constant:-12.0],
-        [label.heightAnchor constraintEqualToConstant:28.0],
-        [label.widthAnchor constraintGreaterThanOrEqualToConstant:190.0]
-    ]];
-    [UIView animateWithDuration:0.2 animations:^{ label.alpha = 0.94; } completion:^(__unused BOOL finished) {
-        [UIView animateWithDuration:0.25 delay:1.4 options:0 animations:^{ label.alpha = 0.0; } completion:^(__unused BOOL done) {
-            [label removeFromSuperview];
-        }];
-    }];
-}
-
-static BOOL IQTLooksLikeSupportLabel(NSString *label) {
-    NSString *text = IQTNormalized(label);
-    if (text.length == 0) return NO;
-    NSArray<NSString *> *known = @[
-        @"settings.support",
-        @"ask a question",
-        @"fazer uma pergunta",
-        @"faca uma pergunta",
-        @"pergunte",
-        @"perguntar",
-        @"hacer una pregunta",
-        @"poser une question",
-        @"bir soru sor"
-    ];
-    for (NSString *needle in known) {
-        if ([text containsString:needle]) return YES;
-    }
-    return NO;
-}
-
 static BOOL IQTClassLooksLikeSettingsNavButton(id object) {
     if (object == nil) return NO;
-    Class target = NSClassFromString(@"IQTSettingsNavButton");
-    if (target != Nil && [object isKindOfClass:target]) return YES;
+    Class cls = NSClassFromString(@"IQTSettingsNavButton");
+    if (cls != Nil && [object isKindOfClass:cls]) return YES;
     return [NSStringFromClass([object class]) containsString:@"IQTSettingsNavButton"];
 }
 
 static UIView *IQTViewForNode(id node) {
     if (node == nil) return nil;
     if ([node isKindOfClass:UIView.class]) return (UIView *)node;
+
     SEL viewSel = NSSelectorFromString(@"view");
     if ([node respondsToSelector:viewSel]) {
         id (*send)(id, SEL) = (void *)objc_msgSend;
@@ -105,22 +52,24 @@ static UIView *IQTViewForNode(id node) {
 }
 
 static void IQTHideSettingsNavObject(id object) {
-    if (object == nil || !IQTClassLooksLikeSettingsNavButton(object)) return;
+    if (!IQTClassLooksLikeSettingsNavButton(object)) return;
 
     SEL setHiddenSel = NSSelectorFromString(@"setHidden:");
     if ([object respondsToSelector:setHiddenSel]) {
         void (*sendBool)(id, SEL, BOOL) = (void *)objc_msgSend;
         sendBool(object, setHiddenSel, YES);
     }
+
     SEL setAlphaSel = NSSelectorFromString(@"setAlpha:");
     if ([object respondsToSelector:setAlphaSel]) {
         void (*sendFloat)(id, SEL, CGFloat) = (void *)objc_msgSend;
         sendFloat(object, setAlphaSel, 0.0);
     }
-    SEL setUIESel = NSSelectorFromString(@"setUserInteractionEnabled:");
-    if ([object respondsToSelector:setUIESel]) {
+
+    SEL setInteractionSel = NSSelectorFromString(@"setUserInteractionEnabled:");
+    if ([object respondsToSelector:setInteractionSel]) {
         void (*sendBool)(id, SEL, BOOL) = (void *)objc_msgSend;
-        sendBool(object, setUIESel, NO);
+        sendBool(object, setInteractionSel, NO);
     }
 
     UIView *view = IQTViewForNode(object);
@@ -133,233 +82,424 @@ static void IQTHideSettingsNavObject(id object) {
 
 static BOOL IQTInvokeSettingsTarget(id target) {
     if (target == nil) return NO;
+
     SEL tapped = NSSelectorFromString(@"iqtTapped");
     if ([target respondsToSelector:tapped]) {
         [UIApplication.sharedApplication sendAction:tapped to:target from:nil forEvent:nil];
         return YES;
     }
+
     SEL show = NSSelectorFromString(@"showSettingsVC:");
     if ([target respondsToSelector:show]) {
         void (*send)(id, SEL, id) = (void *)objc_msgSend;
         send(target, show, nil);
         return YES;
     }
+
     return NO;
 }
 
-static BOOL IQTOpenSettings(void) {
-    NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
-    if (now - IQTLastOpenTime < 0.9) return NO;
-    IQTLastOpenTime = now;
-
-    id target = IQTStoredSettingsTarget;
-    if (IQTInvokeSettingsTarget(target)) return YES;
+static void IQTOpenSettings(void) {
+    if (IQTInvokeSettingsTarget(IQTStoredSettingsTarget)) return;
 
     Class targetClass = NSClassFromString(@"IQTSettingsButtonTarget");
     if (targetClass != Nil) {
         id candidate = [[targetClass alloc] init];
         if (candidate != nil) {
             IQTStoredSettingsTarget = candidate;
-            if (IQTInvokeSettingsTarget(candidate)) return YES;
+            (void)IQTInvokeSettingsTarget(candidate);
         }
     }
+}
+
+static NSString *IQTLower(NSString *value) {
+    return value.length ? value.lowercaseString : @"";
+}
+
+static BOOL IQTLabelMatchesLocalizedKey(NSString *lowerLabel, NSString *key, BOOL broadMatch) {
+    id localization = IQTActiveLocalization;
+    if (localization == nil || lowerLabel.length == 0 || key.length == 0) return NO;
+
+    SEL getSel = NSSelectorFromString(@"get:");
+    if (![localization respondsToSelector:getSel]) return NO;
+
+    id (*send)(id, SEL, id) = (void *)objc_msgSend;
+    id value = send(localization, getSel, key);
+    if (![value isKindOfClass:NSString.class]) return NO;
+
+    NSString *localized = [(NSString *)value lowercaseString];
+    if (localized.length == 0 || [localized isEqualToString:key.lowercaseString]) return NO;
+
+    if ([lowerLabel isEqualToString:localized]) return YES;
+
+    if (broadMatch) {
+        if ([lowerLabel containsString:localized] || [localized containsString:lowerLabel]) return YES;
+    } else if (localized.length >= 6 && [lowerLabel containsString:localized]) {
+        return YES;
+    }
+
     return NO;
 }
 
-@interface IQTGestureTarget : NSObject <UIGestureRecognizerDelegate>
-+ (instancetype)shared;
-- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture;
-@end
+static BOOL IQTLabelIsSupportRow(NSString *label) {
+    if (label.length == 0) return NO;
 
-@implementation IQTGestureTarget
-+ (instancetype)shared {
-    static IQTGestureTarget *target;
+    NSString *lower = IQTLower(label);
+
+    if ([lower containsString:@"turrit"]) return YES;
+    if ([lower containsString:@"leadgram"]) return YES;
+    if ([lower containsString:@"swiftgram"]) return YES;
+
+    if ([lower isEqualToString:@"support"]) return YES;
+    if ([lower isEqualToString:@"send a gift"]) return YES;
+
+    static NSArray<NSString *> *knownSupportLabels;
     static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{ target = [IQTGestureTarget new]; });
-    return target;
+    dispatch_once(&onceToken, ^{
+        knownSupportLabels = @[
+            @"ask a question",
+            @"fazer uma pergunta",
+            @"faça uma pergunta",
+            @"pergunte",
+            @"perguntar"
+        ];
+    });
+
+    for (NSString *candidate in knownSupportLabels) {
+        if ([lower containsString:candidate]) return YES;
+    }
+
+    if (IQTLabelMatchesLocalizedKey(lower, @"Settings.SendGift", NO)) return YES;
+    if (IQTLabelMatchesLocalizedKey(lower, @"Settings.Support", YES)) return YES;
+
+    return NO;
 }
-- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state != UIGestureRecognizerStateBegan) return;
-    if (IQTOpenSettings()) {
-        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-        [feedback prepare];
-        [feedback impactOccurred];
+
+static void IQTHandleASLongPress(id self, SEL _cmd, UILongPressGestureRecognizer *gesture) {
+    (void)self;
+    (void)_cmd;
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        IQTOpenSettings();
     }
 }
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
-        shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
-    (void)gestureRecognizer;
-    (void)otherGestureRecognizer;
-    return YES;
-}
-@end
 
-static void IQTAttachLongPressToView(UIView *view) {
-    if (view == nil || objc_getAssociatedObject(view, &IQTGestureKey) != nil) return;
-    UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:IQTGestureTarget.shared action:@selector(handleLongPress:)];
-    gesture.minimumPressDuration = 0.65;
-    gesture.cancelsTouchesInView = NO;
-    gesture.delaysTouchesBegan = NO;
-    gesture.delegate = IQTGestureTarget.shared;
-    view.userInteractionEnabled = YES;
-    [view addGestureRecognizer:gesture];
-    objc_setAssociatedObject(view, &IQTGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+static UILongPressGestureRecognizer *IQTGestureForNode(id node) {
+    return objc_getAssociatedObject(node, &IQTLongPressKey);
 }
 
-static void IQTConsiderASNode(id node) {
+static void IQTSetGestureForNode(id node, UILongPressGestureRecognizer *gesture) {
+    objc_setAssociatedObject(node, &IQTLongPressKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void IQTAttachMxStyleGestureToNode(id node) {
     if (node == nil) return;
-    if (IQTClassLooksLikeSettingsNavButton(node)) {
-        IQTHideSettingsNavObject(node);
-        return;
-    }
-    NSString *label = nil;
-    SEL labelSel = NSSelectorFromString(@"accessibilityLabel");
-    if ([node respondsToSelector:labelSel]) {
-        id (*send)(id, SEL) = (void *)objc_msgSend;
-        id value = send(node, labelSel);
-        if ([value isKindOfClass:NSString.class]) label = value;
-    }
-    if (IQTLooksLikeSupportLabel(label)) {
-        IQTAttachLongPressToView(IQTViewForNode(node));
-    }
-}
 
-static void IQTScanUIView(UIView *view) {
+    UILongPressGestureRecognizer *gesture = IQTGestureForNode(node);
+    if (gesture == nil) {
+        gesture = [[UILongPressGestureRecognizer alloc]
+            initWithTarget:node
+                    action:NSSelectorFromString(@"__handleIQTLongPress:")];
+
+        gesture.cancelsTouchesInView = NO;
+        gesture.delaysTouchesBegan = NO;
+        gesture.delaysTouchesEnded = NO;
+
+        IQTSetGestureForNode(node, gesture);
+    }
+
+    UIView *view = IQTViewForNode(node);
     if (view == nil) return;
-    if (IQTClassLooksLikeSettingsNavButton(view)) IQTHideSettingsNavObject(view);
-    if (IQTLooksLikeSupportLabel(view.accessibilityLabel) ||
-        ([view isKindOfClass:UILabel.class] && IQTLooksLikeSupportLabel(((UILabel *)view).text))) {
-        UIView *anchor = view;
-        for (NSInteger i = 0; i < 5 && anchor.superview != nil; i++) {
-            CGFloat h = CGRectGetHeight(anchor.bounds);
-            CGFloat w = CGRectGetWidth(anchor.bounds);
-            if (h >= 36.0 && h <= 100.0 && w >= 180.0) break;
-            anchor = anchor.superview;
+
+    if ([view.gestureRecognizers containsObject:gesture]) return;
+
+    UIView *cursor = view;
+    for (NSInteger level = 0; cursor != nil && level < 5; level++, cursor = cursor.superview) {
+        for (UIGestureRecognizer *existing in cursor.gestureRecognizers.copy) {
+            if (existing == gesture) continue;
+            if ([existing isKindOfClass:UILongPressGestureRecognizer.class]) {
+                [existing requireGestureRecognizerToFail:gesture];
+            }
         }
-        IQTAttachLongPressToView(anchor);
     }
-    for (UIView *subview in view.subviews.copy) IQTScanUIView(subview);
-}
 
-static void IQTScan(void) {
-    for (UIWindow *window in UIApplication.sharedApplication.windows) IQTScanUIView(window);
-}
-
-static void (*IQTOrigUIViewAddSubview)(UIView *, SEL, UIView *) = NULL;
-static void IQTUIViewAddSubview(UIView *self, SEL _cmd, UIView *view) {
-    IQTOrigUIViewAddSubview(self, _cmd, view);
-    if (IQTClassLooksLikeSettingsNavButton(view)) IQTHideSettingsNavObject(view);
+    [view addGestureRecognizer:gesture];
 }
 
 static void (*IQTOrigASSetAccessibilityLabel)(id, SEL, NSString *) = NULL;
 static void IQTASSetAccessibilityLabel(id self, SEL _cmd, NSString *label) {
     IQTOrigASSetAccessibilityLabel(self, _cmd, label);
-    if (IQTClassLooksLikeSettingsNavButton(self)) IQTHideSettingsNavObject(self);
-    if (IQTLooksLikeSupportLabel(label)) IQTAttachLongPressToView(IQTViewForNode(self));
+
+    NSString *className = NSStringFromClass([self class]);
+    if (![className containsString:@"AccessibilityAreaNode"]) return;
+    if (label.length == 0) return;
+
+    SEL supernodeSel = NSSelectorFromString(@"supernode");
+    if (![self respondsToSelector:supernodeSel]) return;
+
+    id (*send)(id, SEL) = (void *)objc_msgSend;
+    id supernode = send(self, supernodeSel);
+    if (supernode == nil) return;
+
+    NSString *superClassName = NSStringFromClass([supernode class]);
+    if ([superClassName containsString:@"ChatMessage"]) return;
+
+    if (!IQTLabelIsSupportRow(label)) return;
+
+    IQTAttachMxStyleGestureToNode(supernode);
 }
 
-static void (*IQTOrigASLayout)(id, SEL) = NULL;
-static void IQTASLayout(id self, SEL _cmd) {
-    IQTOrigASLayout(self, _cmd);
-    IQTConsiderASNode(self);
+@interface IQTFallbackGestureTarget : NSObject
++ (instancetype)shared;
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture;
+@end
+
+@implementation IQTFallbackGestureTarget
++ (instancetype)shared {
+    static IQTFallbackGestureTarget *target;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        target = [IQTFallbackGestureTarget new];
+    });
+    return target;
 }
 
-static id (*IQTOrigTargetInit)(id, SEL) = NULL;
-static id IQTTargetInit(id self, SEL _cmd) {
-    id obj = IQTOrigTargetInit(self, _cmd);
-    if (obj != nil) IQTStoredSettingsTarget = obj;
-    return obj;
+- (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        IQTOpenSettings();
+    }
+}
+@end
+
+static void IQTTryAttachMxFallbackInView(UIView *view) {
+    if (view == nil || IQTFallbackAttached) return;
+
+    if ([NSStringFromClass(view.class) isEqualToString:@"Display.AccessibilityAreaNode"]) {
+        NSString *label = view.accessibilityLabel;
+        if (IQTLabelIsSupportRow(label)) {
+            UIView *superview = view.superview;
+            if (superview != nil) {
+                for (UIGestureRecognizer *existing in superview.gestureRecognizers.copy) {
+                    if ([existing isKindOfClass:UILongPressGestureRecognizer.class]) {
+                        return;
+                    }
+                }
+
+                UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc]
+                    initWithTarget:IQTFallbackGestureTarget.shared
+                            action:@selector(handleLongPress:)];
+
+                [superview addGestureRecognizer:gesture];
+                IQTFallbackAttached = YES;
+                return;
+            }
+        }
+    }
+
+    for (UIView *subview in view.subviews.copy) {
+        IQTTryAttachMxFallbackInView(subview);
+        if (IQTFallbackAttached) return;
+    }
 }
 
-static void (*IQTOrigTargetTapped)(id, SEL) = NULL;
-static void IQTTargetTapped(id self, SEL _cmd) {
+static void IQTTryAttachMxFallback(void) {
+    if (IQTFallbackAttached) return;
+    UIWindow *window = IQTKeyWindow();
+    if (window != nil) {
+        IQTTryAttachMxFallbackInView(window);
+    }
+}
+
+static id (*IQTOrigLocalizationGet)(id, SEL, id) = NULL;
+static id IQTLocalizationGet(id self, SEL _cmd, id key) {
+    IQTActiveLocalization = self;
+
+    if (!IQTFallbackAttached) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            IQTTryAttachMxFallback();
+        });
+    }
+
+    return IQTOrigLocalizationGet(self, _cmd, key);
+}
+
+static id (*IQTOrigLocalizationInit)(id, SEL, int, id, id, BOOL) = NULL;
+static id IQTLocalizationInit(id self, SEL _cmd, int version, id code, id dict, BOOL active) {
+    id result = IQTOrigLocalizationInit(self, _cmd, version, code, dict, active);
+    if (result != nil) {
+        IQTActiveLocalization = result;
+        if (!IQTFallbackAttached) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                IQTTryAttachMxFallback();
+            });
+        }
+    }
+    return result;
+}
+
+static id (*IQTOrigSettingsTargetInit)(id, SEL) = NULL;
+static id IQTSettingsTargetInit(id self, SEL _cmd) {
+    id result = IQTOrigSettingsTargetInit(self, _cmd);
+    if (result != nil) IQTStoredSettingsTarget = result;
+    return result;
+}
+
+static void (*IQTOrigSettingsTargetTapped)(id, SEL) = NULL;
+static void IQTSettingsTargetTapped(id self, SEL _cmd) {
     IQTStoredSettingsTarget = self;
-    IQTOrigTargetTapped(self, _cmd);
+    IQTOrigSettingsTargetTapped(self, _cmd);
 }
 
-static void (*IQTOrigNavLayout)(id, SEL) = NULL;
-static void IQTNavLayout(id self, SEL _cmd) {
-    if (IQTOrigNavLayout != NULL) IQTOrigNavLayout(self, _cmd);
+static void (*IQTOrigSettingsNavLayout)(id, SEL) = NULL;
+static void IQTSettingsNavLayout(id self, SEL _cmd) {
+    if (IQTOrigSettingsNavLayout != NULL) {
+        IQTOrigSettingsNavLayout(self, _cmd);
+    }
     IQTHideSettingsNavObject(self);
 }
 
-static BOOL IQTAddOrReplaceHook(Class cls, SEL sel, IMP replacement, IMP *originalOut) {
+static void (*IQTOrigUIViewAddSubview)(UIView *, SEL, UIView *) = NULL;
+static void IQTUIViewAddSubview(UIView *self, SEL _cmd, UIView *view) {
+    IQTOrigUIViewAddSubview(self, _cmd, view);
+    if (IQTClassLooksLikeSettingsNavButton(view)) {
+        IQTHideSettingsNavObject(view);
+    }
+}
+
+static BOOL IQTHookMethod(Class cls, SEL sel, IMP replacement, IMP *originalOut) {
     if (cls == Nil) return NO;
-    Method inherited = class_getInstanceMethod(cls, sel);
-    if (inherited == NULL) return NO;
-    const char *types = method_getTypeEncoding(inherited);
-    IMP original = method_getImplementation(inherited);
-    Method own = class_getInstanceMethod(cls, sel);
-    BOOL owns = NO;
+
+    Method method = class_getInstanceMethod(cls, sel);
+    if (method == NULL) return NO;
+
+    IMP original = method_getImplementation(method);
+
     unsigned int count = 0;
     Method *methods = class_copyMethodList(cls, &count);
+    BOOL ownsMethod = NO;
     for (unsigned int i = 0; i < count; i++) {
-        if (method_getName(methods[i]) == sel) { owns = YES; break; }
+        if (method_getName(methods[i]) == sel) {
+            ownsMethod = YES;
+            break;
+        }
     }
     free(methods);
-    if (owns && own != NULL) {
-        original = method_setImplementation(own, replacement);
+
+    if (ownsMethod) {
+        original = method_setImplementation(method, replacement);
     } else {
-        class_addMethod(cls, sel, replacement, types);
+        class_addMethod(cls, sel, replacement, method_getTypeEncoding(method));
     }
-    if (originalOut) *originalOut = original;
+
+    if (originalOut != NULL) *originalOut = original;
     return YES;
 }
 
-static void IQTInstallRuntimeHooksIfReady(void) {
-    if (!IQTASNodeHooksInstalled) {
+static void IQTInstallHooksIfReady(void) {
+    if (!IQTUIViewHooked) {
+        Method method = class_getInstanceMethod(UIView.class, @selector(addSubview:));
+        if (method != NULL) {
+            IQTOrigUIViewAddSubview = (void *)method_setImplementation(method, (IMP)&IQTUIViewAddSubview);
+            IQTUIViewHooked = YES;
+        }
+    }
+
+    if (!IQTASNodeHooked) {
         Class asNode = NSClassFromString(@"ASDisplayNode");
         if (asNode != Nil) {
-            BOOL a = IQTAddOrReplaceHook(asNode, @selector(setAccessibilityLabel:), (IMP)&IQTASSetAccessibilityLabel, (IMP *)&IQTOrigASSetAccessibilityLabel);
-            BOOL b = IQTAddOrReplaceHook(asNode, @selector(layout), (IMP)&IQTASLayout, (IMP *)&IQTOrigASLayout);
-            IQTASNodeHooksInstalled = a || b;
+            class_addMethod(asNode,
+                            NSSelectorFromString(@"__handleIQTLongPress:"),
+                            (IMP)&IQTHandleASLongPress,
+                            "v@:@");
+
+            if (IQTHookMethod(asNode,
+                              @selector(setAccessibilityLabel:),
+                              (IMP)&IQTASSetAccessibilityLabel,
+                              (IMP *)&IQTOrigASSetAccessibilityLabel)) {
+                IQTASNodeHooked = YES;
+            }
         }
     }
 
-    if (!IQTTargetHooksInstalled) {
+    if (!IQTLocalizationHooked) {
+        Class localization = NSClassFromString(@"TGLocalization");
+        if (localization != Nil) {
+            BOOL getHooked = IQTHookMethod(localization,
+                                           NSSelectorFromString(@"get:"),
+                                           (IMP)&IQTLocalizationGet,
+                                           (IMP *)&IQTOrigLocalizationGet);
+
+            BOOL initHooked = IQTHookMethod(localization,
+                                            NSSelectorFromString(@"initWithVersion:code:dict:isActive:"),
+                                            (IMP)&IQTLocalizationInit,
+                                            (IMP *)&IQTOrigLocalizationInit);
+
+            IQTLocalizationHooked = getHooked || initHooked;
+        }
+    }
+
+    if (!IQTSettingsTargetHooked) {
         Class target = NSClassFromString(@"IQTSettingsButtonTarget");
         if (target != Nil) {
-            BOOL a = IQTAddOrReplaceHook(target, @selector(init), (IMP)&IQTTargetInit, (IMP *)&IQTOrigTargetInit);
-            BOOL b = IQTAddOrReplaceHook(target, NSSelectorFromString(@"iqtTapped"), (IMP)&IQTTargetTapped, (IMP *)&IQTOrigTargetTapped);
-            IQTTargetHooksInstalled = a || b;
+            BOOL initHooked = IQTHookMethod(target,
+                                            @selector(init),
+                                            (IMP)&IQTSettingsTargetInit,
+                                            (IMP *)&IQTOrigSettingsTargetInit);
+
+            BOOL tappedHooked = IQTHookMethod(target,
+                                              NSSelectorFromString(@"iqtTapped"),
+                                              (IMP)&IQTSettingsTargetTapped,
+                                              (IMP *)&IQTOrigSettingsTargetTapped);
+
+            IQTSettingsTargetHooked = initHooked || tappedHooked;
         }
     }
 
-    if (!IQTNavHooksInstalled) {
+    if (!IQTSettingsNavHooked) {
         Class nav = NSClassFromString(@"IQTSettingsNavButton");
         if (nav != Nil) {
-            BOOL hooked = IQTAddOrReplaceHook(nav, @selector(layout), (IMP)&IQTNavLayout, (IMP *)&IQTOrigNavLayout);
-            if (!hooked) hooked = IQTAddOrReplaceHook(nav, @selector(layoutSubviews), (IMP)&IQTNavLayout, (IMP *)&IQTOrigNavLayout);
-            IQTNavHooksInstalled = hooked;
+            BOOL hooked = IQTHookMethod(nav,
+                                        @selector(layout),
+                                        (IMP)&IQTSettingsNavLayout,
+                                        (IMP *)&IQTOrigSettingsNavLayout);
+            if (!hooked) {
+                hooked = IQTHookMethod(nav,
+                                       @selector(layoutSubviews),
+                                       (IMP)&IQTSettingsNavLayout,
+                                       (IMP *)&IQTOrigSettingsNavLayout);
+            }
+            IQTSettingsNavHooked = hooked;
         }
     }
-}
-
-static void IQTInstallUIViewHook(void) {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        Method method = class_getInstanceMethod(UIView.class, @selector(addSubview:));
-        if (method != NULL) IQTOrigUIViewAddSubview = (void *)method_setImplementation(method, (IMP)&IQTUIViewAddSubview);
-    });
 }
 
 __attribute__((constructor)) static void IQTEnhancerInit(void) {
     @autoreleasepool {
         if (!IQTIsTelegramProcess()) return;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            IQTInstallUIViewHook();
-            IQTInstallRuntimeHooksIfReady();
-            IQTScan();
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                IQTShowLoadedBanner();
-            });
 
-            NSTimer *timer = [NSTimer timerWithTimeInterval:0.35 repeats:YES block:^(__unused NSTimer *t) {
-                IQTInstallRuntimeHooksIfReady();
-                IQTScan();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            IQTInstallHooksIfReady();
+            IQTTryAttachMxFallback();
+
+            __block NSTimer *retryTimer = nil;
+            retryTimer = [NSTimer timerWithTimeInterval:0.25
+                                                repeats:YES
+                                                  block:^(__unused NSTimer *timer) {
+                IQTInstallHooksIfReady();
+
+                if (!IQTFallbackAttached) {
+                    IQTTryAttachMxFallback();
+                }
+
+                if (IQTASNodeHooked &&
+                    IQTLocalizationHooked &&
+                    IQTSettingsTargetHooked &&
+                    IQTSettingsNavHooked) {
+                    [retryTimer invalidate];
+                    retryTimer = nil;
+                }
             }];
-            [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+
+            [NSRunLoop.mainRunLoop addTimer:retryTimer forMode:NSRunLoopCommonModes];
         });
     }
 }
