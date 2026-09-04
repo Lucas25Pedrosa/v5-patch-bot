@@ -1,4 +1,4 @@
-name: Build iQFaceEnhancer Wordmark No Flash Beta
+name: Build iQFaceEnhancer 2.1 PT-BR 1-to-1
 
 on:
   workflow_dispatch:
@@ -26,12 +26,12 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Prepare stable enhancer with wordmark activation
+      - name: Prepare exact working beta with original PT-BR localization
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          WORK="$RUNNER_TEMP/iqface-wordmark-no-flash"
+          WORK="$RUNNER_TEMP/iqface-wordmark-ptbr"
           mkdir -p "$WORK"
 
           curl -fsSL \
@@ -46,6 +46,7 @@ jobs:
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
+          # Exact working beta transforms.
           s = s.replace("static void IQFOpenSettings(void) {", "void IQFOpenSettings(void) {", 1)
 
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
@@ -58,9 +59,18 @@ jobs:
           guard = "        IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);\n\n"
           s = s.replace(needle, guard + needle, 1)
 
+          # ONLY functional change versus the working beta:
+          # install the original IQFLoc/MSHookFunction localization hook in Safe Mode too.
+          old = "        dispatch_async(dispatch_get_main_queue(), ^{\n            if (!IQFSafeModeEnabled()) {\n                IQFTryInstallIQFaceHooks();\n                IQFCleanVisibleSettingsItems();\n            }\n        });"
+          new = "        dispatch_async(dispatch_get_main_queue(), ^{\n            IQFTryInstallIQFaceHooks();\n            if (!IQFSafeModeEnabled()) {\n                IQFCleanVisibleSettingsItems();\n            }\n        });"
+          assert old in s
+          s = s.replace(old, new, 1)
+
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
-          assert '@"iQFace"' in s and '@"iqf_tapped"' in s
+          assert '@"Ajustes do iQFace"' in s
+          assert 'IQFInstallLocalizationHook()' in s
+          assert 'MSHookFunction' in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
@@ -83,27 +93,32 @@ jobs:
           include $(THEOS_MAKE_PATH)/library.mk
           EOF
 
-      - name: Build arm64 replacement dylib
+      - name: Build arm64 PT-BR dylib
         run: |
           set -euo pipefail
-          WORK="$RUNNER_TEMP/iqface-wordmark-no-flash"
+          WORK="$RUNNER_TEMP/iqface-wordmark-ptbr"
           cd "$WORK"
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
           test -n "$dylib_path"
           mkdir -p artifacts
-          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
-          file artifacts/iQFaceEnhancer.dylib
-          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
-          strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
+          cp "$dylib_path" artifacts/iQFaceEnhancer2.1-PTBR.dylib
+          file artifacts/iQFaceEnhancer2.1-PTBR.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer2.1-PTBR.dylib > artifacts/SHA256SUMS.txt
+          strings -a artifacts/iQFaceEnhancer2.1-PTBR.dylib > artifacts/strings.txt || true
+
           grep -q "IQFPresentSettings" artifacts/strings.txt
           grep -q "FBNavigationBar" artifacts/strings.txt
           grep -q "iqf_tapped" artifacts/strings.txt
+          grep -q "IQFLoc" artifacts/strings.txt
+          grep -q "MSHookFunction" artifacts/strings.txt
+          grep -q "Ajustes do iQFace" artifacts/strings.txt
+          grep -q "Bloquear anúncios" artifacts/strings.txt
           ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceEnhancer-WordmarkNoFlashBeta-arm64
-          path: ${{ runner.temp }}/iqface-wordmark-no-flash/artifacts/
+          name: iQFaceEnhancer2.1-PTBR
+          path: ${{ runner.temp }}/iqface-wordmark-ptbr/artifacts/
           if-no-files-found: error
