@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#include <math.h>
 
 static const void *FBWTapRecognizerKey = &FBWTapRecognizerKey;
 static IMP FBWOriginalLayoutSubviews = NULL;
@@ -86,23 +87,20 @@ static BOOL FBWLooksLikeWordmarkContainer(UIView *view, UIView *navigationBar) {
 }
 
 static UIView *FBWFindWordmarkContainer(UIView *root, UIView *navigationBar) {
-    UIView *best = nil;
-
     for (UIView *subview in root.subviews) {
         UIView *nested = FBWFindWordmarkContainer(subview, navigationBar);
         if (nested != nil) {
-            best = nested;
+            return nested;
         }
 
         if (FBWLooksLikeWordmarkContainer(subview, navigationBar)) {
-            // Prefer the deepest matching plain UIView. The probe showed two
-            // nested UIViews with the same ~128x52 frame; the deepest one is
-            // the actual hit-test target for the Facebook wordmark.
-            best = subview;
+            // The probe showed two nested plain UIViews sharing the same
+            // ~128x52 frame. Recursing first prefers the deepest hit target.
+            return subview;
         }
     }
 
-    return best;
+    return nil;
 }
 
 static void FBWAttachRecognizerIfNeeded(UIView *navigationBar) {
