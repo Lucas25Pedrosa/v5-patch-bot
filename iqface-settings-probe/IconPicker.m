@@ -176,6 +176,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
 @interface IQFSPIconPickerController : UIViewController <UICollectionViewDataSource, UICollectionViewDelegateFlowLayout>
 @property(nonatomic, strong) UICollectionView *collectionView;
 @property(nonatomic, copy) NSArray<NSDictionary *> *entries;
+@property(nonatomic, copy) NSString *selectedName;
 @end
 
 @implementation IQFSPIconPickerController
@@ -185,6 +186,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     self.title = IQFSPText(@"Alterar ícone", @"Change Icon");
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.entries = IQFSPEntries();
+    self.selectedName = UIApplication.sharedApplication.alternateIconName;
 
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithTitle:IQFSPText(@"Fechar", @"Close")
@@ -213,6 +215,16 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     ]];
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    NSString *systemName = UIApplication.sharedApplication.alternateIconName;
+    if ((systemName == nil && self.selectedName == nil) || [systemName isEqualToString:self.selectedName]) {
+        return;
+    }
+    self.selectedName = systemName;
+    [self.collectionView reloadData];
+}
+
 - (void)iqfsp_close {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
@@ -228,7 +240,7 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     NSDictionary *entry = self.entries[(NSUInteger)indexPath.item];
     id value = entry[@"name"];
     NSString *name = [value isKindOfClass:NSString.class] ? value : nil;
-    NSString *current = UIApplication.sharedApplication.alternateIconName;
+    NSString *current = self.selectedName;
     BOOL selected = (name == nil && current == nil) || [name isEqualToString:current];
     [cell applyEntry:entry selected:selected];
     return cell;
@@ -265,9 +277,25 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
                 [self iqfsp_error:error.localizedDescription ?: IQFSPText(@"Não foi possível alterar o ícone.", @"The icon could not be changed.")];
                 return;
             }
+
+            self.selectedName = name;
             UISelectionFeedbackGenerator *feedback = [UISelectionFeedbackGenerator new];
             [feedback selectionChanged];
             [self.collectionView reloadData];
+
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                __strong typeof(weakSelf) strongSelf = weakSelf;
+                if (strongSelf == nil) {
+                    return;
+                }
+                NSString *systemName = UIApplication.sharedApplication.alternateIconName;
+                BOOL systemMatchesRequested = (name == nil && systemName == nil) || [systemName isEqualToString:name];
+                if (systemMatchesRequested) {
+                    strongSelf.selectedName = systemName;
+                    [strongSelf.collectionView reloadData];
+                }
+            });
         });
     }];
 }
