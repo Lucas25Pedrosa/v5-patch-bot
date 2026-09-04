@@ -1,0 +1,51 @@
+name: Build iQFaceEnhancer 2.0 Clean
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-enhancer-v2/**"
+      - ".github/workflows/iqface-enhancer-v2-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build
+        run: |
+          cd iqface-enhancer-v2
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          mkdir -p artifacts
+          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
+          file artifacts/iQFaceEnhancer.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
+          strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
+          grep -q "2.0" artifacts/strings.txt
+          grep -q "IQFPresentSettings" artifacts/strings.txt
+          grep -q "FBNavigationBar" artifacts/strings.txt
+          grep -q "iqf_tapped" artifacts/strings.txt
+          ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
+          ! grep -q "UILongPressGestureRecognizer" artifacts/strings.txt
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer-2.0-Clean-arm64
+          path: iqface-enhancer-v2/artifacts/
+          if-no-files-found: error
