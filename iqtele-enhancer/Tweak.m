@@ -1,12 +1,16 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
-static UIBarButtonItem *IQTStoredBarItem = nil;
-static UIControl *IQTStoredControl = nil;
-static UIView *IQTStoredNavView = nil;
+static __weak id IQTStoredSettingsTarget = nil;
 static NSTimeInterval IQTLastOpenTime = 0;
 static char IQTGestureKey;
+static BOOL IQTASNodeHooksInstalled = NO;
+static BOOL IQTNavHooksInstalled = NO;
+static BOOL IQTTargetHooksInstalled = NO;
+static BOOL IQTLoadedBannerShown = NO;
 
 static NSString *IQTNormalized(NSString *value) {
     if (value.length == 0) return @"";
@@ -15,142 +19,151 @@ static NSString *IQTNormalized(NSString *value) {
     return folded.lowercaseString;
 }
 
-static BOOL IQTActionIsTapped(SEL action) {
-    return action != NULL && [NSStringFromSelector(action) isEqualToString:@"iqtTapped"];
+static BOOL IQTIsTelegramProcess(void) {
+    NSString *exe = NSBundle.mainBundle.executablePath.lastPathComponent ?: @"";
+    NSString *proc = NSProcessInfo.processInfo.processName ?: @"";
+    NSString *bid = NSBundle.mainBundle.bundleIdentifier ?: @"";
+    return [exe isEqualToString:@"Telegram"] ||
+           [proc isEqualToString:@"Telegram"] ||
+           [bid isEqualToString:@"ph.telegra.Telegraph"];
 }
 
-static BOOL IQTIsSettingsNavView(UIView *view) {
-    if (view == nil) return NO;
+static UIWindow *IQTKeyWindow(void) {
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        if (window.isKeyWindow) return window;
+    }
+    return UIApplication.sharedApplication.windows.firstObject;
+}
 
-    Class navClass = NSClassFromString(@"IQTSettingsNavButton");
-    if (navClass != Nil && [view isKindOfClass:navClass]) return YES;
+static void IQTShowLoadedBanner(void) {
+    if (IQTLoadedBannerShown) return;
+    IQTLoadedBannerShown = YES;
+    UIWindow *window = IQTKeyWindow();
+    if (window == nil) return;
 
-    if ([view isKindOfClass:UIControl.class]) {
-        UIControl *control = (UIControl *)view;
-        for (id target in control.allTargets) {
-            NSArray<NSString *> *actions = [control actionsForTarget:target
-                                                     forControlEvent:UIControlEventTouchUpInside];
-            for (NSString *actionName in actions) {
-                if ([actionName isEqualToString:@"iqtTapped"]) return YES;
-            }
-            if (@available(iOS 14.0, *)) {
-                actions = [control actionsForTarget:target
-                                    forControlEvent:UIControlEventPrimaryActionTriggered];
-                for (NSString *actionName in actions) {
-                    if ([actionName isEqualToString:@"iqtTapped"]) return YES;
-                }
-            }
-        }
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = @"iQTele Enhancer v0.2 loaded";
+    label.font = [UIFont systemFontOfSize:12.0 weight:UIFontWeightSemibold];
+    label.textAlignment = NSTextAlignmentCenter;
+    label.textColor = UIColor.labelColor;
+    label.backgroundColor = UIColor.secondarySystemBackgroundColor;
+    label.layer.cornerRadius = 10.0;
+    label.layer.masksToBounds = YES;
+    label.alpha = 0.0;
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    [window addSubview:label];
+    [NSLayoutConstraint activateConstraints:@[
+        [label.centerXAnchor constraintEqualToAnchor:window.centerXAnchor],
+        [label.bottomAnchor constraintEqualToAnchor:window.safeAreaLayoutGuide.bottomAnchor constant:-12.0],
+        [label.heightAnchor constraintEqualToConstant:28.0],
+        [label.widthAnchor constraintGreaterThanOrEqualToConstant:190.0]
+    ]];
+    [UIView animateWithDuration:0.2 animations:^{ label.alpha = 0.94; } completion:^(__unused BOOL finished) {
+        [UIView animateWithDuration:0.25 delay:1.4 options:0 animations:^{ label.alpha = 0.0; } completion:^(__unused BOOL done) {
+            [label removeFromSuperview];
+        }];
+    }];
+}
+
+static BOOL IQTLooksLikeSupportLabel(NSString *label) {
+    NSString *text = IQTNormalized(label);
+    if (text.length == 0) return NO;
+    NSArray<NSString *> *known = @[
+        @"settings.support",
+        @"ask a question",
+        @"fazer uma pergunta",
+        @"faca uma pergunta",
+        @"pergunte",
+        @"perguntar",
+        @"hacer una pregunta",
+        @"poser une question",
+        @"bir soru sor"
+    ];
+    for (NSString *needle in known) {
+        if ([text containsString:needle]) return YES;
     }
     return NO;
 }
 
-static void IQTCaptureSettingsView(UIView *view) {
-    if (view == nil) return;
-    IQTStoredNavView = view;
-    if ([view isKindOfClass:UIControl.class]) {
-        IQTStoredControl = (UIControl *)view;
+static BOOL IQTClassLooksLikeSettingsNavButton(id object) {
+    if (object == nil) return NO;
+    Class target = NSClassFromString(@"IQTSettingsNavButton");
+    if (target != Nil && [object isKindOfClass:target]) return YES;
+    return [NSStringFromClass([object class]) containsString:@"IQTSettingsNavButton"];
+}
+
+static UIView *IQTViewForNode(id node) {
+    if (node == nil) return nil;
+    if ([node isKindOfClass:UIView.class]) return (UIView *)node;
+    SEL viewSel = NSSelectorFromString(@"view");
+    if ([node respondsToSelector:viewSel]) {
+        id (*send)(id, SEL) = (void *)objc_msgSend;
+        id value = send(node, viewSel);
+        if ([value isKindOfClass:UIView.class]) return value;
     }
-    view.hidden = YES;
-    view.alpha = 0.0;
-    view.userInteractionEnabled = NO;
+    return nil;
 }
 
-static BOOL IQTIsSettingsBarItem(UIBarButtonItem *item) {
-    if (item == nil) return NO;
-    if (IQTActionIsTapped(item.action)) return YES;
-    return IQTIsSettingsNavView(item.customView);
-}
+static void IQTHideSettingsNavObject(id object) {
+    if (object == nil || !IQTClassLooksLikeSettingsNavButton(object)) return;
 
-static void IQTCaptureBarItem(UIBarButtonItem *item) {
-    if (item == nil) return;
-    IQTStoredBarItem = item;
-    if (item.customView != nil) IQTCaptureSettingsView(item.customView);
-}
-
-static NSArray<UIBarButtonItem *> *IQTFilterItems(NSArray<UIBarButtonItem *> *items) {
-    if (items.count == 0) return items;
-    NSMutableArray<UIBarButtonItem *> *result = [NSMutableArray arrayWithCapacity:items.count];
-    for (UIBarButtonItem *item in items) {
-        if (IQTIsSettingsBarItem(item)) {
-            IQTCaptureBarItem(item);
-        } else {
-            [result addObject:item];
-        }
+    SEL setHiddenSel = NSSelectorFromString(@"setHidden:");
+    if ([object respondsToSelector:setHiddenSel]) {
+        void (*sendBool)(id, SEL, BOOL) = (void *)objc_msgSend;
+        sendBool(object, setHiddenSel, YES);
     }
-    return result;
-}
-
-static BOOL IQTActivateStoredControl(void) {
-    UIControl *control = IQTStoredControl;
-    if (control == nil) return NO;
-
-    for (id target in control.allTargets) {
-        NSArray<NSString *> *actions = [control actionsForTarget:target
-                                                 forControlEvent:UIControlEventTouchUpInside];
-        for (NSString *actionName in actions) {
-            SEL action = NSSelectorFromString(actionName);
-            if (IQTActionIsTapped(action)) {
-                return [UIApplication.sharedApplication sendAction:action
-                                                                to:target
-                                                              from:control
-                                                          forEvent:nil];
-            }
-        }
-        if (@available(iOS 14.0, *)) {
-            actions = [control actionsForTarget:target
-                                forControlEvent:UIControlEventPrimaryActionTriggered];
-            for (NSString *actionName in actions) {
-                SEL action = NSSelectorFromString(actionName);
-                if (IQTActionIsTapped(action)) {
-                    return [UIApplication.sharedApplication sendAction:action
-                                                                    to:target
-                                                                  from:control
-                                                              forEvent:nil];
-                }
-            }
-        }
+    SEL setAlphaSel = NSSelectorFromString(@"setAlpha:");
+    if ([object respondsToSelector:setAlphaSel]) {
+        void (*sendFloat)(id, SEL, CGFloat) = (void *)objc_msgSend;
+        sendFloat(object, setAlphaSel, 0.0);
+    }
+    SEL setUIESel = NSSelectorFromString(@"setUserInteractionEnabled:");
+    if ([object respondsToSelector:setUIESel]) {
+        void (*sendBool)(id, SEL, BOOL) = (void *)objc_msgSend;
+        sendBool(object, setUIESel, NO);
     }
 
-    [control sendActionsForControlEvents:UIControlEventTouchUpInside];
-    return YES;
+    UIView *view = IQTViewForNode(object);
+    if (view != nil) {
+        view.hidden = YES;
+        view.alpha = 0.0;
+        view.userInteractionEnabled = NO;
+    }
 }
 
-static BOOL IQTActivateStoredBarItem(void) {
-    UIBarButtonItem *item = IQTStoredBarItem;
-    if (item == nil || item.action == NULL) return NO;
-    return [UIApplication.sharedApplication sendAction:item.action
-                                                    to:item.target
-                                                  from:item
-                                              forEvent:nil];
-}
-
-static BOOL IQTActivateStoredNavView(void) {
-    UIView *view = IQTStoredNavView;
-    SEL selector = NSSelectorFromString(@"iqtTapped");
-    if (view != nil && [view respondsToSelector:selector]) {
-        return [UIApplication.sharedApplication sendAction:selector
-                                                        to:view
-                                                      from:view
-                                                  forEvent:nil];
+static BOOL IQTInvokeSettingsTarget(id target) {
+    if (target == nil) return NO;
+    SEL tapped = NSSelectorFromString(@"iqtTapped");
+    if ([target respondsToSelector:tapped]) {
+        [UIApplication.sharedApplication sendAction:tapped to:target from:nil forEvent:nil];
+        return YES;
+    }
+    SEL show = NSSelectorFromString(@"showSettingsVC:");
+    if ([target respondsToSelector:show]) {
+        void (*send)(id, SEL, id) = (void *)objc_msgSend;
+        send(target, show, nil);
+        return YES;
     }
     return NO;
 }
 
-static void IQTOpenSettings(void) {
+static BOOL IQTOpenSettings(void) {
     NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;
-    if (now - IQTLastOpenTime < 0.9) return;
+    if (now - IQTLastOpenTime < 0.9) return NO;
     IQTLastOpenTime = now;
 
-    BOOL opened = IQTActivateStoredBarItem();
-    if (!opened) opened = IQTActivateStoredControl();
-    if (!opened) opened = IQTActivateStoredNavView();
+    id target = IQTStoredSettingsTarget;
+    if (IQTInvokeSettingsTarget(target)) return YES;
 
-    if (opened) {
-        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-        [feedback prepare];
-        [feedback impactOccurred];
+    Class targetClass = NSClassFromString(@"IQTSettingsButtonTarget");
+    if (targetClass != Nil) {
+        id candidate = [[targetClass alloc] init];
+        if (candidate != nil) {
+            IQTStoredSettingsTarget = candidate;
+            if (IQTInvokeSettingsTarget(candidate)) return YES;
+        }
     }
+    return NO;
 }
 
 @interface IQTGestureTarget : NSObject <UIGestureRecognizerDelegate>
@@ -166,7 +179,12 @@ static void IQTOpenSettings(void) {
     return target;
 }
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) IQTOpenSettings();
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    if (IQTOpenSettings()) {
+        UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [feedback prepare];
+        [feedback impactOccurred];
+    }
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
         shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
@@ -176,188 +194,172 @@ static void IQTOpenSettings(void) {
 }
 @end
 
-static NSString *IQTViewText(UIView *view) {
-    NSMutableArray<NSString *> *parts = [NSMutableArray array];
-    if (view.accessibilityIdentifier.length) [parts addObject:view.accessibilityIdentifier];
-    if (view.accessibilityLabel.length) [parts addObject:view.accessibilityLabel];
-    if (view.accessibilityValue.length) [parts addObject:view.accessibilityValue];
-    if ([view isKindOfClass:UILabel.class]) {
-        NSString *text = ((UILabel *)view).text;
-        if (text.length) [parts addObject:text];
-    }
-    if ([view isKindOfClass:UIButton.class]) {
-        NSString *title = [(UIButton *)view titleForState:UIControlStateNormal];
-        if (title.length) [parts addObject:title];
-    }
-    return [parts componentsJoinedByString:@" "];
-}
-
-static BOOL IQTLooksLikeSupportRow(UIView *view) {
-    NSString *text = IQTNormalized(IQTViewText(view));
-    if (text.length == 0) return NO;
-
-    NSArray<NSString *> *needles = @[
-        @"settings.support",
-        @"ask a question",
-        @"fazer uma pergunta",
-        @"faca uma pergunta",
-        @"pergunte",
-        @"perguntar"
-    ];
-    for (NSString *needle in needles) {
-        if ([text containsString:needle]) return YES;
-    }
-    return NO;
-}
-
-static UIView *IQTAnchorViewForCandidate(UIView *view) {
-    UIView *current = view;
-    UIView *best = view;
-    for (NSInteger i = 0; i < 5 && current != nil; i++, current = current.superview) {
-        NSString *className = NSStringFromClass(current.class);
-        CGFloat h = CGRectGetHeight(current.bounds);
-        CGFloat w = CGRectGetWidth(current.bounds);
-        if ([className containsString:@"AccessibilityArea"] ||
-            (h >= 36.0 && h <= 100.0 && w >= 180.0)) {
-            best = current;
-            break;
-        }
-    }
-    return best;
-}
-
-static void IQTAttachLongPress(UIView *view) {
-    UIView *anchor = IQTAnchorViewForCandidate(view);
-    if (anchor == nil || objc_getAssociatedObject(anchor, &IQTGestureKey) != nil) return;
-    if (IQTIsSettingsNavView(anchor)) return;
-
+static void IQTAttachLongPressToView(UIView *view) {
+    if (view == nil || objc_getAssociatedObject(view, &IQTGestureKey) != nil) return;
     UILongPressGestureRecognizer *gesture = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:IQTGestureTarget.shared
-                action:@selector(handleLongPress:)];
+        initWithTarget:IQTGestureTarget.shared action:@selector(handleLongPress:)];
     gesture.minimumPressDuration = 0.65;
     gesture.cancelsTouchesInView = NO;
     gesture.delaysTouchesBegan = NO;
     gesture.delegate = IQTGestureTarget.shared;
-    anchor.userInteractionEnabled = YES;
-    [anchor addGestureRecognizer:gesture];
-    objc_setAssociatedObject(anchor, &IQTGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    view.userInteractionEnabled = YES;
+    [view addGestureRecognizer:gesture];
+    objc_setAssociatedObject(view, &IQTGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-static void IQTScanView(UIView *view) {
+static void IQTConsiderASNode(id node) {
+    if (node == nil) return;
+    if (IQTClassLooksLikeSettingsNavButton(node)) {
+        IQTHideSettingsNavObject(node);
+        return;
+    }
+    NSString *label = nil;
+    SEL labelSel = NSSelectorFromString(@"accessibilityLabel");
+    if ([node respondsToSelector:labelSel]) {
+        id (*send)(id, SEL) = (void *)objc_msgSend;
+        id value = send(node, labelSel);
+        if ([value isKindOfClass:NSString.class]) label = value;
+    }
+    if (IQTLooksLikeSupportLabel(label)) {
+        IQTAttachLongPressToView(IQTViewForNode(node));
+    }
+}
+
+static void IQTScanUIView(UIView *view) {
     if (view == nil) return;
-
-    if (IQTIsSettingsNavView(view)) IQTCaptureSettingsView(view);
-    if (IQTLooksLikeSupportRow(view)) IQTAttachLongPress(view);
-
-    for (UIView *subview in view.subviews.copy) IQTScanView(subview);
-}
-
-static void IQTScanController(UIViewController *controller) {
-    if (controller == nil) return;
-
-    UINavigationItem *item = controller.navigationItem;
-    NSArray<UIBarButtonItem *> *left = IQTFilterItems(item.leftBarButtonItems);
-    NSArray<UIBarButtonItem *> *right = IQTFilterItems(item.rightBarButtonItems);
-    if (left.count != item.leftBarButtonItems.count) item.leftBarButtonItems = left;
-    if (right.count != item.rightBarButtonItems.count) item.rightBarButtonItems = right;
-    if (IQTIsSettingsBarItem(item.leftBarButtonItem)) {
-        IQTCaptureBarItem(item.leftBarButtonItem);
-        item.leftBarButtonItem = nil;
+    if (IQTClassLooksLikeSettingsNavButton(view)) IQTHideSettingsNavObject(view);
+    if (IQTLooksLikeSupportLabel(view.accessibilityLabel) ||
+        ([view isKindOfClass:UILabel.class] && IQTLooksLikeSupportLabel(((UILabel *)view).text))) {
+        UIView *anchor = view;
+        for (NSInteger i = 0; i < 5 && anchor.superview != nil; i++) {
+            CGFloat h = CGRectGetHeight(anchor.bounds);
+            CGFloat w = CGRectGetWidth(anchor.bounds);
+            if (h >= 36.0 && h <= 100.0 && w >= 180.0) break;
+            anchor = anchor.superview;
+        }
+        IQTAttachLongPressToView(anchor);
     }
-    if (IQTIsSettingsBarItem(item.rightBarButtonItem)) {
-        IQTCaptureBarItem(item.rightBarButtonItem);
-        item.rightBarButtonItem = nil;
-    }
-
-    for (UIViewController *child in controller.childViewControllers) IQTScanController(child);
-    IQTScanController(controller.presentedViewController);
+    for (UIView *subview in view.subviews.copy) IQTScanUIView(subview);
 }
 
 static void IQTScan(void) {
-    for (UIWindow *window in UIApplication.sharedApplication.windows) {
-        IQTScanView(window);
-        IQTScanController(window.rootViewController);
+    for (UIWindow *window in UIApplication.sharedApplication.windows) IQTScanUIView(window);
+}
+
+static void (*IQTOrigUIViewAddSubview)(UIView *, SEL, UIView *) = NULL;
+static void IQTUIViewAddSubview(UIView *self, SEL _cmd, UIView *view) {
+    IQTOrigUIViewAddSubview(self, _cmd, view);
+    if (IQTClassLooksLikeSettingsNavButton(view)) IQTHideSettingsNavObject(view);
+}
+
+static void (*IQTOrigASSetAccessibilityLabel)(id, SEL, NSString *) = NULL;
+static void IQTASSetAccessibilityLabel(id self, SEL _cmd, NSString *label) {
+    IQTOrigASSetAccessibilityLabel(self, _cmd, label);
+    if (IQTClassLooksLikeSettingsNavButton(self)) IQTHideSettingsNavObject(self);
+    if (IQTLooksLikeSupportLabel(label)) IQTAttachLongPressToView(IQTViewForNode(self));
+}
+
+static void (*IQTOrigASLayout)(id, SEL) = NULL;
+static void IQTASLayout(id self, SEL _cmd) {
+    IQTOrigASLayout(self, _cmd);
+    IQTConsiderASNode(self);
+}
+
+static id (*IQTOrigTargetInit)(id, SEL) = NULL;
+static id IQTTargetInit(id self, SEL _cmd) {
+    id obj = IQTOrigTargetInit(self, _cmd);
+    if (obj != nil) IQTStoredSettingsTarget = obj;
+    return obj;
+}
+
+static void (*IQTOrigTargetTapped)(id, SEL) = NULL;
+static void IQTTargetTapped(id self, SEL _cmd) {
+    IQTStoredSettingsTarget = self;
+    IQTOrigTargetTapped(self, _cmd);
+}
+
+static void (*IQTOrigNavLayout)(id, SEL) = NULL;
+static void IQTNavLayout(id self, SEL _cmd) {
+    if (IQTOrigNavLayout != NULL) IQTOrigNavLayout(self, _cmd);
+    IQTHideSettingsNavObject(self);
+}
+
+static BOOL IQTAddOrReplaceHook(Class cls, SEL sel, IMP replacement, IMP *originalOut) {
+    if (cls == Nil) return NO;
+    Method inherited = class_getInstanceMethod(cls, sel);
+    if (inherited == NULL) return NO;
+    const char *types = method_getTypeEncoding(inherited);
+    IMP original = method_getImplementation(inherited);
+    Method own = class_getInstanceMethod(cls, sel);
+    BOOL owns = NO;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == sel) { owns = YES; break; }
+    }
+    free(methods);
+    if (owns && own != NULL) {
+        original = method_setImplementation(own, replacement);
+    } else {
+        class_addMethod(cls, sel, replacement, types);
+    }
+    if (originalOut) *originalOut = original;
+    return YES;
+}
+
+static void IQTInstallRuntimeHooksIfReady(void) {
+    if (!IQTASNodeHooksInstalled) {
+        Class asNode = NSClassFromString(@"ASDisplayNode");
+        if (asNode != Nil) {
+            BOOL a = IQTAddOrReplaceHook(asNode, @selector(setAccessibilityLabel:), (IMP)&IQTASSetAccessibilityLabel, (IMP *)&IQTOrigASSetAccessibilityLabel);
+            BOOL b = IQTAddOrReplaceHook(asNode, @selector(layout), (IMP)&IQTASLayout, (IMP *)&IQTOrigASLayout);
+            IQTASNodeHooksInstalled = a || b;
+        }
+    }
+
+    if (!IQTTargetHooksInstalled) {
+        Class target = NSClassFromString(@"IQTSettingsButtonTarget");
+        if (target != Nil) {
+            BOOL a = IQTAddOrReplaceHook(target, @selector(init), (IMP)&IQTTargetInit, (IMP *)&IQTOrigTargetInit);
+            BOOL b = IQTAddOrReplaceHook(target, NSSelectorFromString(@"iqtTapped"), (IMP)&IQTTargetTapped, (IMP *)&IQTOrigTargetTapped);
+            IQTTargetHooksInstalled = a || b;
+        }
+    }
+
+    if (!IQTNavHooksInstalled) {
+        Class nav = NSClassFromString(@"IQTSettingsNavButton");
+        if (nav != Nil) {
+            BOOL hooked = IQTAddOrReplaceHook(nav, @selector(layout), (IMP)&IQTNavLayout, (IMP *)&IQTOrigNavLayout);
+            if (!hooked) hooked = IQTAddOrReplaceHook(nav, @selector(layoutSubviews), (IMP)&IQTNavLayout, (IMP *)&IQTOrigNavLayout);
+            IQTNavHooksInstalled = hooked;
+        }
     }
 }
 
-static void (*IQTOriginalAddSubview)(UIView *, SEL, UIView *) = NULL;
-static void IQTAddSubview(UIView *self, SEL command, UIView *view) {
-    if (IQTIsSettingsNavView(view)) IQTCaptureSettingsView(view);
-    IQTOriginalAddSubview(self, command, view);
-}
-
-static void (*IQTOriginalSetLeftItem)(UINavigationItem *, SEL, UIBarButtonItem *) = NULL;
-static void (*IQTOriginalSetLeftItemAnimated)(UINavigationItem *, SEL, UIBarButtonItem *, BOOL) = NULL;
-static void (*IQTOriginalSetRightItem)(UINavigationItem *, SEL, UIBarButtonItem *) = NULL;
-static void (*IQTOriginalSetRightItemAnimated)(UINavigationItem *, SEL, UIBarButtonItem *, BOOL) = NULL;
-static void (*IQTOriginalSetLeftItems)(UINavigationItem *, SEL, NSArray<UIBarButtonItem *> *) = NULL;
-static void (*IQTOriginalSetLeftItemsAnimated)(UINavigationItem *, SEL, NSArray<UIBarButtonItem *> *, BOOL) = NULL;
-static void (*IQTOriginalSetRightItems)(UINavigationItem *, SEL, NSArray<UIBarButtonItem *> *) = NULL;
-static void (*IQTOriginalSetRightItemsAnimated)(UINavigationItem *, SEL, NSArray<UIBarButtonItem *> *, BOOL) = NULL;
-
-static void IQTSetLeftItem(UINavigationItem *self, SEL command, UIBarButtonItem *item) {
-    if (IQTIsSettingsBarItem(item)) { IQTCaptureBarItem(item); item = nil; }
-    IQTOriginalSetLeftItem(self, command, item);
-}
-static void IQTSetLeftItemAnimated(UINavigationItem *self, SEL command, UIBarButtonItem *item, BOOL animated) {
-    if (IQTIsSettingsBarItem(item)) { IQTCaptureBarItem(item); item = nil; }
-    IQTOriginalSetLeftItemAnimated(self, command, item, animated);
-}
-static void IQTSetRightItem(UINavigationItem *self, SEL command, UIBarButtonItem *item) {
-    if (IQTIsSettingsBarItem(item)) { IQTCaptureBarItem(item); item = nil; }
-    IQTOriginalSetRightItem(self, command, item);
-}
-static void IQTSetRightItemAnimated(UINavigationItem *self, SEL command, UIBarButtonItem *item, BOOL animated) {
-    if (IQTIsSettingsBarItem(item)) { IQTCaptureBarItem(item); item = nil; }
-    IQTOriginalSetRightItemAnimated(self, command, item, animated);
-}
-static void IQTSetLeftItems(UINavigationItem *self, SEL command, NSArray<UIBarButtonItem *> *items) {
-    IQTOriginalSetLeftItems(self, command, IQTFilterItems(items));
-}
-static void IQTSetLeftItemsAnimated(UINavigationItem *self, SEL command, NSArray<UIBarButtonItem *> *items, BOOL animated) {
-    IQTOriginalSetLeftItemsAnimated(self, command, IQTFilterItems(items), animated);
-}
-static void IQTSetRightItems(UINavigationItem *self, SEL command, NSArray<UIBarButtonItem *> *items) {
-    IQTOriginalSetRightItems(self, command, IQTFilterItems(items));
-}
-static void IQTSetRightItemsAnimated(UINavigationItem *self, SEL command, NSArray<UIBarButtonItem *> *items, BOOL animated) {
-    IQTOriginalSetRightItemsAnimated(self, command, IQTFilterItems(items), animated);
-}
-
-static void IQTReplaceMethod(Class cls, SEL selector, IMP replacement, IMP *original) {
-    Method method = class_getInstanceMethod(cls, selector);
-    if (method == NULL) return;
-    *original = method_setImplementation(method, replacement);
-}
-
-static void IQTInstallHooks(void) {
-    IQTReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQTAddSubview, (IMP *)&IQTOriginalAddSubview);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItem:), (IMP)&IQTSetLeftItem, (IMP *)&IQTOriginalSetLeftItem);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItem:animated:), (IMP)&IQTSetLeftItemAnimated, (IMP *)&IQTOriginalSetLeftItemAnimated);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setRightBarButtonItem:), (IMP)&IQTSetRightItem, (IMP *)&IQTOriginalSetRightItem);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setRightBarButtonItem:animated:), (IMP)&IQTSetRightItemAnimated, (IMP *)&IQTOriginalSetRightItemAnimated);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItems:), (IMP)&IQTSetLeftItems, (IMP *)&IQTOriginalSetLeftItems);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItems:animated:), (IMP)&IQTSetLeftItemsAnimated, (IMP *)&IQTOriginalSetLeftItemsAnimated);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setRightBarButtonItems:), (IMP)&IQTSetRightItems, (IMP *)&IQTOriginalSetRightItems);
-    IQTReplaceMethod(UINavigationItem.class, @selector(setRightBarButtonItems:animated:), (IMP)&IQTSetRightItemsAnimated, (IMP *)&IQTOriginalSetRightItemsAnimated);
+static void IQTInstallUIViewHook(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Method method = class_getInstanceMethod(UIView.class, @selector(addSubview:));
+        if (method != NULL) IQTOrigUIViewAddSubview = (void *)method_setImplementation(method, (IMP)&IQTUIViewAddSubview);
+    });
 }
 
 __attribute__((constructor)) static void IQTEnhancerInit(void) {
     @autoreleasepool {
-        if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"ph.telegra.Telegraph"]) return;
+        if (!IQTIsTelegramProcess()) return;
         dispatch_async(dispatch_get_main_queue(), ^{
-            IQTInstallHooks();
+            IQTInstallUIViewHook();
+            IQTInstallRuntimeHooksIfReady();
             IQTScan();
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                IQTShowLoadedBanner();
+            });
 
-            NSTimer *timer = [NSTimer timerWithTimeInterval:0.45
-                                                   repeats:YES
-                                                     block:^(__unused NSTimer *t) { IQTScan(); }];
+            NSTimer *timer = [NSTimer timerWithTimeInterval:0.35 repeats:YES block:^(__unused NSTimer *t) {
+                IQTInstallRuntimeHooksIfReady();
+                IQTScan();
+            }];
             [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
-
-            [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
-                                                            object:nil
-                                                             queue:NSOperationQueue.mainQueue
-                                                        usingBlock:^(__unused NSNotification *note) { IQTScan(); }];
         });
     }
 }
