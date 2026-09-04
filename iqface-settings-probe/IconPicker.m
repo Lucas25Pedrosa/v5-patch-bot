@@ -207,16 +207,11 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.entries = IQFSPEntries();
 
-    NSString *systemName = UIApplication.sharedApplication.alternateIconName;
     BOOL hasStoredValue = NO;
-    NSString *storedName = IQFSPLoadStoredSelectedName(&hasStoredValue);
-    if (systemName.length > 0) {
-        self.selectedName = systemName;
-        IQFSPSaveSelectedName(systemName);
-    } else if (hasStoredValue) {
-        self.selectedName = storedName;
-    } else {
+    self.selectedName = IQFSPLoadStoredSelectedName(&hasStoredValue);
+    if (!hasStoredValue) {
         self.selectedName = nil;
+        IQFSPSaveSelectedName(nil);
     }
 
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
@@ -248,16 +243,16 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    NSString *systemName = UIApplication.sharedApplication.alternateIconName;
-    if (systemName.length == 0) {
+    BOOL hasStoredValue = NO;
+    NSString *storedName = IQFSPLoadStoredSelectedName(&hasStoredValue);
+    if (!hasStoredValue) {
         return;
     }
-    if ([systemName isEqualToString:self.selectedName]) {
-        return;
+    BOOL sameSelection = (storedName == nil && self.selectedName == nil) || [storedName isEqualToString:self.selectedName];
+    if (!sameSelection) {
+        self.selectedName = storedName;
+        [self.collectionView reloadData];
     }
-    self.selectedName = systemName;
-    IQFSPSaveSelectedName(systemName);
-    [self.collectionView reloadData];
 }
 
 - (void)iqfsp_close {
@@ -318,21 +313,6 @@ static NSArray<NSDictionary *> *IQFSPEntries(void) {
             UISelectionFeedbackGenerator *feedback = [UISelectionFeedbackGenerator new];
             [feedback selectionChanged];
             [self.collectionView reloadData];
-
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.75 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                __strong typeof(weakSelf) strongSelf = weakSelf;
-                if (strongSelf == nil) {
-                    return;
-                }
-                NSString *systemName = UIApplication.sharedApplication.alternateIconName;
-                BOOL systemMatchesRequested = (name == nil && systemName == nil) || [systemName isEqualToString:name];
-                if (systemMatchesRequested) {
-                    strongSelf.selectedName = systemName;
-                    IQFSPSaveSelectedName(systemName);
-                    [strongSelf.collectionView reloadData];
-                }
-            });
         });
     }];
 }
