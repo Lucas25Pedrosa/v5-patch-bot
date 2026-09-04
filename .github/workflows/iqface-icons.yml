@@ -1,0 +1,56 @@
+name: Build iQFace Icons
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-icons/**"
+      - ".github/workflows/iqface-icons.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-icons
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceIcons.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceIcons.dylib
+          shasum -a 256 artifacts/iQFaceIcons.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceIcons.dylib
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "Alterar ícone"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "Fechar"
+          if strings -a artifacts/iQFaceIcons.dylib | grep -F "alternateIconName"; then
+            echo "Unexpected alternateIconName reference in final sideload build"
+            exit 1
+          fi
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceIcons-1.0.0-arm64
+          path: iqface-icons/artifacts/
+          if-no-files-found: error
