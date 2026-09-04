@@ -11,6 +11,8 @@ typedef BOOL (*IQFSettingsVisibleFunction)(void);
 typedef void (*IQFPresentSettingsFunction)(void);
 typedef void (*MSHookFunctionType)(void *symbol, void *replacement, void **original);
 
+extern void IQFPresentLauncherMenu(void);
+
 static IQFLocFunction IQFOriginalLoc = NULL;
 static BOOL IQFLocalizationInstalled = NO;
 static NSInteger IQFInstallAttempt = 0;
@@ -133,7 +135,7 @@ static NSDictionary<NSString *, NSString *> *IQFPortugueseTranslations(void) {
             @"Download failed": @"Falha no download",
             @"Photos refused the file.": @"O app Fotos recusou o arquivo.",
             @"Blocks sponsored posts in the feed, and ads inside stories and Reels.": @"Bloqueia publicações patrocinadas no feed e anúncios dentro de stories e Reels.",
-            @"Removes these cards from the feed entirely — nothing is left in their place. Each is off until you turn it on.": @"Remove completamente esses cartões do feed, sem deixar espaços no lugar. Cada opção fica desativada até você ativá-la.",
+            @"Removes these cards from the feed entirely — nothing is left in their place. Each is off until you turn it on.": @"Remove completamente esses cartões do feed, sem deixar espaços no lugar. Cada opção fica desativada até você ativá-las.",
             @"OK": @"OK"
         };
     });
@@ -190,8 +192,7 @@ static BOOL IQFIsTopSettingsButton(UIView *view) {
     }
 
     for (id target in button.allTargets) {
-        NSArray<NSString *> *actions = [button actionsForTarget:target
-                                                forControlEvent:UIControlEventTouchUpInside];
+        NSArray<NSString *> *actions = [button actionsForTarget:target forControlEvent:UIControlEventTouchUpInside];
         if ([actions containsObject:@"iqf_tapped"]) {
             return YES;
         }
@@ -265,26 +266,11 @@ static void IQFReplaceMethod(Class targetClass, SEL selector, IMP replacement, I
 }
 
 static void IQFInstallNavigationItemHooks(void) {
-    IQFReplaceMethod(UINavigationItem.class,
-                     @selector(setLeftBarButtonItem:),
-                     (IMP)&IQFSetLeftItem,
-                     (IMP *)&IQFOriginalSetLeftItem);
-    IQFReplaceMethod(UINavigationItem.class,
-                     @selector(setLeftBarButtonItem:animated:),
-                     (IMP)&IQFSetLeftItemAnimated,
-                     (IMP *)&IQFOriginalSetLeftItemAnimated);
-    IQFReplaceMethod(UINavigationItem.class,
-                     @selector(setLeftBarButtonItems:),
-                     (IMP)&IQFSetLeftItems,
-                     (IMP *)&IQFOriginalSetLeftItems);
-    IQFReplaceMethod(UINavigationItem.class,
-                     @selector(setLeftBarButtonItems:animated:),
-                     (IMP)&IQFSetLeftItemsAnimated,
-                     (IMP *)&IQFOriginalSetLeftItemsAnimated);
-    IQFReplaceMethod(UIView.class,
-                     @selector(addSubview:),
-                     (IMP)&IQFAddSubview,
-                     (IMP *)&IQFOriginalAddSubview);
+    IQFReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItem:), (IMP)&IQFSetLeftItem, (IMP *)&IQFOriginalSetLeftItem);
+    IQFReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItem:animated:), (IMP)&IQFSetLeftItemAnimated, (IMP *)&IQFOriginalSetLeftItemAnimated);
+    IQFReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItems:), (IMP)&IQFSetLeftItems, (IMP *)&IQFOriginalSetLeftItems);
+    IQFReplaceMethod(UINavigationItem.class, @selector(setLeftBarButtonItems:animated:), (IMP)&IQFSetLeftItemsAnimated, (IMP *)&IQFOriginalSetLeftItemsAnimated);
+    IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);
 }
 
 static void IQFCleanTopSettingsButtons(UIView *view) {
@@ -338,16 +324,11 @@ static void IQFOpenSettings(void) {
         return;
     }
 
-    IQFPresentSettingsFunction present = (IQFPresentSettingsFunction)IQFFindSymbol("IQFPresentSettings");
-    if (present == NULL) {
-        return;
-    }
-
     IQFLastPresentationTime = now;
     UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback prepare];
     [feedback impactOccurred];
-    present();
+    IQFPresentLauncherMenu();
 }
 
 @interface IQFEnhancerGestureTarget : NSObject <UIGestureRecognizerDelegate>
@@ -366,8 +347,7 @@ static void IQFOpenSettings(void) {
     return target;
 }
 
-- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
-        shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
     return YES;
 }
 
@@ -409,9 +389,7 @@ static void IQFAttachLongPress(UIView *view) {
         return;
     }
 
-    UILongPressGestureRecognizer *recognizer = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:IQFEnhancerGestureTarget.sharedTarget
-                action:@selector(handleLongPress:)];
+    UILongPressGestureRecognizer *recognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:IQFEnhancerGestureTarget.sharedTarget action:@selector(handleLongPress:)];
     recognizer.minimumPressDuration = IQFLongPressDuration;
     recognizer.allowableMovement = 16.0;
     recognizer.cancelsTouchesInView = NO;
@@ -477,10 +455,7 @@ static BOOL IQFHookTabBarClass(Class targetClass) {
     if (original == (IMP)&IQFTabBarDidMoveToWindow) {
         return YES;
     }
-    objc_setAssociatedObject(targetClass,
-                             IQFOriginalDidMoveAssociationKey,
-                             [NSValue valueWithPointer:original],
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(targetClass, IQFOriginalDidMoveAssociationKey, [NSValue valueWithPointer:original], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     const char *types = method_getTypeEncoding(inheritedMethod);
     if (IQFClassImplementsSelector(targetClass, selector)) {
@@ -558,8 +533,7 @@ static void IQFSafeScanWindows(void) {
 }
 
 static void IQFScheduleSafeScan(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         IQFSafeScanWindows();
         IQFScheduleSafeScan();
     });
@@ -576,8 +550,7 @@ static void IQFStartSafeScanner(void) {
 
 static void IQFApplicationDidBecomeActive(NSNotification *notification) {
     (void)notification;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         IQFStartSafeScanner();
     });
 }
@@ -585,8 +558,7 @@ static void IQFApplicationDidBecomeActive(NSNotification *notification) {
 static void IQFTryInstallIQFaceHooks(void) {
     IQFInstallAttempt += 1;
     if (!IQFInstallLocalizationHook() && IQFInstallAttempt < 20) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             IQFTryInstallIQFaceHooks();
         });
     }
@@ -596,8 +568,7 @@ __attribute__((constructor))
 static void IQFEnhancerInitialize(void) {
     @autoreleasepool {
         NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier;
-        if (![bundleIdentifier isEqualToString:@"com.facebook.Facebook"] ||
-            [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) {
+        if (![bundleIdentifier isEqualToString:@"com.facebook.Facebook"] || [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) {
             return;
         }
 
