@@ -34,7 +34,6 @@ jobs:
           WORK="$RUNNER_TEMP/iqface-enhancer-2.0"
           mkdir -p "$WORK"
 
-          # Exact stable enhancer source used by the working WordmarkDirect beta.
           curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -47,12 +46,12 @@ jobs:
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
-          # Wordmark module calls the already-proven direct settings opener.
+          # Wordmark opens original iQFace settings directly.
           old = "static void IQFOpenSettings(void) {"
           assert old in s
           s = s.replace(old, "void IQFOpenSettings(void) {", 1)
 
-          # Disable only the old long-press attachment. Keep the proven scanner behavior unchanged.
+          # Disable only the old long-press activation.
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
           replacement = '''static void IQFAttachLongPress(UIView *view) {
               (void)view;
@@ -62,7 +61,7 @@ jobs:
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          # 2.0 final is English-only. Do not alter the rest of the stable localization code.
+          # English-only.
           pattern = r"static BOOL IQFShouldUsePortuguese\(void\) \{.*?\n\}"
           replacement = '''static BOOL IQFShouldUsePortuguese(void) {
               return NO;
@@ -70,20 +69,61 @@ jobs:
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          # Export a simple version marker without changing behavior.
+          # Exact button-removal mechanism from the proven earlier safe beta.
+          old_hide = '''        if (IQFIsTopSettingsButton(subview)) {
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+            subview.userInteractionEnabled = NO;
+            continue;
+        }'''
+          new_remove = '''        if (IQFIsTopSettingsButton(subview)) {
+            [subview removeFromSuperview];
+            continue;
+        }'''
+          assert old_hide in s
+          s = s.replace(old_hide, new_remove, 1)
+
+          # Same timing as the earlier beta: immediate scanner + 0.4s rescan on foreground.
+          old_active = '''    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQFStartSafeScanner();
+    });'''
+          new_active = '''    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQFSafeScanWindows();
+    });'''
+          assert old_active in s
+          s = s.replace(old_active, new_active, 1)
+
+          ctor_old = '''        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!IQFSafeModeEnabled()) {
+                IQFTryInstallIQFaceHooks();
+                IQFCleanVisibleSettingsItems();
+            }
+        });'''
+          ctor_new = '''        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!IQFSafeModeEnabled()) {
+                IQFTryInstallIQFaceHooks();
+                IQFCleanVisibleSettingsItems();
+            }
+            IQFStartSafeScanner();
+        });'''
+          assert ctor_old in s
+          s = s.replace(ctor_old, ctor_new, 1)
+
           marker = '__attribute__((visibility("default"))) NSString * const IQFEnhancerVersion = @"2.0";\n\n'
           insert_after = '#import <string.h>\n\n'
           assert insert_after in s
           s = s.replace(insert_after, insert_after + marker, 1)
 
-          # Critical sanity checks against the previously broken launcher/no-flash variants.
+          assert '[subview removeFromSuperview];' in s
+          assert 'IQFStartSafeScanner();' in s
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
           assert 'IQFReplaceMethod(UIView.class, @selector(addSubview:)' not in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
-          # Exact wordmark activation module already proven on Facebook 577.
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
           cp iqface-enhancer/iQFaceEnhancer.plist "$WORK/iQFaceEnhancer.plist"
 
@@ -94,7 +134,6 @@ jobs:
           include $(THEOS)/makefiles/common.mk
 
           LIBRARY_NAME = iQFaceEnhancer
-
           iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m
           iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
           iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
@@ -112,19 +151,16 @@ jobs:
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
           test -n "$dylib_path"
-
           mkdir -p artifacts
           cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
-          printf 'iQFaceEnhancer 2.0\nEnglish-only final\n' > artifacts/VERSION.txt
+          printf 'iQFaceEnhancer 2.0\nEnglish-only final\nProven safe scanner removal\n' > artifacts/VERSION.txt
           file artifacts/iQFaceEnhancer.dylib
           shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
           strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
-
           grep -q "2.0" artifacts/strings.txt
           grep -q "IQFPresentSettings" artifacts/strings.txt
           grep -q "FBNavigationBar" artifacts/strings.txt
           ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
-          ! grep -q "IQFEnhancerForcePortuguese" artifacts/strings.txt || true
 
       - name: Upload final dylib
         uses: actions/upload-artifact@v4
