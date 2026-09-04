@@ -1,1 +1,1 @@
-3f978e89e3caa3462ffda48520c069b1314269a025c27cedd5c883205a0accd4  artifacts/iQTeleEnhancer.dylib
+a72b98b2f92a480b4349beec93a899e08280937bd3ab3edb0dcedf1de6bc9c5f  artifacts/iQTeleEnhancer.dylib
