@@ -1,0 +1,87 @@
+name: Build iQFaceEnhancer Wordmark Beta
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-enhancer/**"
+      - "iqface-enhancer-wordmark-beta/**"
+      - ".github/workflows/iqface-enhancer-wordmark-beta.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Prepare integrated beta source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R iqface-enhancer "$RUNNER_TEMP/iqface-enhancer-wordmark"
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$RUNNER_TEMP/iqface-enhancer-wordmark/WordmarkActivation.m"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path(__import__('os').environ['RUNNER_TEMP']) / 'iqface-enhancer-wordmark'
+          tweak = root / 'Tweak.m'
+          text = tweak.read_text()
+
+          old = 'static void IQFOpenSettings(void) {'
+          new = 'void IQFOpenSettings(void) {'
+          if old not in text:
+              raise SystemExit('IQFOpenSettings signature not found')
+          text = text.replace(old, new, 1)
+
+          old_attach = '        IQFAttachLongPress(window);\n'
+          if old_attach not in text:
+              raise SystemExit('window long-press attachment not found')
+          text = text.replace(old_attach, '', 1)
+          tweak.write_text(text)
+
+          makefile = root / 'Makefile'
+          mk = makefile.read_text()
+          old_files = 'iQFaceEnhancer_FILES = Tweak.m IconPicker.m'
+          new_files = 'iQFaceEnhancer_FILES = Tweak.m IconPicker.m WordmarkActivation.m'
+          if old_files not in mk:
+              raise SystemExit('Makefile source list not found')
+          makefile.write_text(mk.replace(old_files, new_files, 1))
+          PY
+
+          grep -F 'void IQFOpenSettings(void)' "$RUNNER_TEMP/iqface-enhancer-wordmark/Tweak.m"
+          ! grep -F '        IQFAttachLongPress(window);' "$RUNNER_TEMP/iqface-enhancer-wordmark/Tweak.m"
+          grep -F 'WordmarkActivation.m' "$RUNNER_TEMP/iqface-enhancer-wordmark/Makefile"
+
+      - name: Build replacement iQFaceEnhancer arm64 dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/iqface-enhancer-wordmark"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts-wordmark-beta"
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" "$GITHUB_WORKSPACE/artifacts-wordmark-beta/iQFaceEnhancer-WordmarkBeta.dylib"
+          file "$GITHUB_WORKSPACE/artifacts-wordmark-beta/iQFaceEnhancer-WordmarkBeta.dylib"
+          shasum -a 256 "$GITHUB_WORKSPACE/artifacts-wordmark-beta/iQFaceEnhancer-WordmarkBeta.dylib" > "$GITHUB_WORKSPACE/artifacts-wordmark-beta/SHA256SUMS.txt"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer-WordmarkBeta-arm64
+          path: artifacts-wordmark-beta/
+          if-no-files-found: error
