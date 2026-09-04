@@ -1,0 +1,254 @@
+name: Build iQFaceEnhancer Wordmark Direct Beta
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/iqface-enhancer-wordmark-direct-beta.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Prepare clean stable-base source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-wordmark-direct"
+          mkdir -p "$WORK"
+
+          # Exact last stable enhancer Tweak.m blob, before launcher/icon experiments.
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$WORK/Tweak.m"
+
+          python3 - "$WORK/Tweak.m" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+
+          # Make the already-proven direct opener callable from the wordmark module.
+          old = "static void IQFOpenSettings(void) {"
+          assert old in s
+          s = s.replace(old, "void IQFOpenSettings(void) {", 1)
+
+          # Keep the old implementation in source for minimal delta, but make it a no-op.
+          pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
+          replacement = '''static void IQFAttachLongPress(UIView *view) {
+              (void)view;
+          }'''
+          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          assert n == 1
+
+          # Sanity: this stable base must open original iQFace settings directly.
+          assert 'IQFFindSymbol("IQFPresentSettings")' in s
+          assert 'IQFPresentLauncherMenu' not in s
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          cat > "$WORK/WordmarkActivation.m" <<'EOF'
+          #import <Foundation/Foundation.h>
+          #import <UIKit/UIKit.h>
+          #import <objc/runtime.h>
+
+          extern void IQFOpenSettings(void);
+
+          static const void *IQFWMRecognizerKey = &IQFWMRecognizerKey;
+          static IMP IQFWMOriginalLayoutSubviews = NULL;
+          static BOOL IQFWMHookInstalled = NO;
+          static NSInteger IQFWMHookAttempts = 0;
+
+          @interface IQFWMTarget : NSObject <UIGestureRecognizerDelegate>
+          + (instancetype)shared;
+          - (void)handleTap:(UITapGestureRecognizer *)recognizer;
+          @end
+
+          @implementation IQFWMTarget
+
+          + (instancetype)shared {
+              static IQFWMTarget *target;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{ target = [IQFWMTarget new]; });
+              return target;
+          }
+
+          - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+                  shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+              (void)gestureRecognizer;
+              (void)otherGestureRecognizer;
+              return YES;
+          }
+
+          - (void)handleTap:(UITapGestureRecognizer *)recognizer {
+              if (recognizer.state != UIGestureRecognizerStateEnded) return;
+              dispatch_async(dispatch_get_main_queue(), ^{
+                  IQFOpenSettings();
+              });
+          }
+
+          @end
+
+          static BOOL IQFWMLooksLikeWordmarkContainer(UIView *view, UIView *navigationBar) {
+              if (view == nil || navigationBar == nil || view == navigationBar) return NO;
+              if (![NSStringFromClass(view.class) isEqualToString:@"UIView"]) return NO;
+              if (view.hidden || view.alpha < 0.01 || !view.userInteractionEnabled) return NO;
+
+              CGRect rect = [view convertRect:view.bounds toView:navigationBar];
+              CGFloat navWidth = CGRectGetWidth(navigationBar.bounds);
+              CGFloat navHeight = CGRectGetHeight(navigationBar.bounds);
+              if (navWidth <= 0.0 || navHeight <= 0.0) return NO;
+
+              BOOL leftRegion = rect.origin.x >= 28.0 && rect.origin.x <= 64.0;
+              BOOL topAligned = fabs(rect.origin.y) <= 3.0;
+              BOOL expectedWidth = rect.size.width >= 95.0 && rect.size.width <= 180.0;
+              BOOL fullHeight = rect.size.height >= navHeight * 0.82 && rect.size.height <= navHeight * 1.18;
+              return leftRegion && topAligned && expectedWidth && fullHeight;
+          }
+
+          static UIView *IQFWMFindWordmarkContainer(UIView *root, UIView *navigationBar) {
+              UIView *best = nil;
+              for (UIView *subview in root.subviews) {
+                  if (IQFWMLooksLikeWordmarkContainer(subview, navigationBar)) {
+                      best = subview;
+                  }
+                  UIView *nested = IQFWMFindWordmarkContainer(subview, navigationBar);
+                  if (nested != nil) {
+                      best = nested;
+                  }
+              }
+              return best;
+          }
+
+          static void IQFWMAttachRecognizerIfNeeded(UIView *navigationBar) {
+              UIView *target = IQFWMFindWordmarkContainer(navigationBar, navigationBar);
+              if (target == nil || objc_getAssociatedObject(target, IQFWMRecognizerKey) != nil) return;
+
+              UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+                  initWithTarget:IQFWMTarget.shared
+                          action:@selector(handleTap:)];
+              tap.numberOfTapsRequired = 1;
+              tap.numberOfTouchesRequired = 1;
+              tap.cancelsTouchesInView = NO;
+              tap.delaysTouchesBegan = NO;
+              tap.delaysTouchesEnded = NO;
+              tap.delegate = IQFWMTarget.shared;
+              [target addGestureRecognizer:tap];
+              objc_setAssociatedObject(target, IQFWMRecognizerKey, tap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+          }
+
+          static void IQFWMNavigationBarLayoutSubviews(id self, SEL _cmd) {
+              if (IQFWMOriginalLayoutSubviews != NULL) {
+                  ((void (*)(id, SEL))IQFWMOriginalLayoutSubviews)(self, _cmd);
+              }
+              if ([self isKindOfClass:UIView.class]) {
+                  IQFWMAttachRecognizerIfNeeded((UIView *)self);
+              }
+          }
+
+          static BOOL IQFWMTryInstallHook(void) {
+              if (IQFWMHookInstalled) return YES;
+              Class navigationBarClass = NSClassFromString(@"FBNavigationBar");
+              if (navigationBarClass == Nil) return NO;
+
+              Method method = class_getInstanceMethod(navigationBarClass, @selector(layoutSubviews));
+              if (method == NULL) return NO;
+
+              IMP current = method_getImplementation(method);
+              if (current == (IMP)&IQFWMNavigationBarLayoutSubviews) {
+                  IQFWMHookInstalled = YES;
+                  return YES;
+              }
+
+              IQFWMOriginalLayoutSubviews = method_setImplementation(method, (IMP)&IQFWMNavigationBarLayoutSubviews);
+              IQFWMHookInstalled = (IQFWMOriginalLayoutSubviews != NULL);
+              return IQFWMHookInstalled;
+          }
+
+          static void IQFWMScheduleHookAttempt(void) {
+              IQFWMHookAttempts += 1;
+              if (IQFWMTryInstallHook()) return;
+              if (IQFWMHookAttempts >= 120) return;
+              dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                             dispatch_get_main_queue(), ^{
+                  IQFWMScheduleHookAttempt();
+              });
+          }
+
+          __attribute__((constructor))
+          static void IQFWMInitialize(void) {
+              @autoreleasepool {
+                  NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
+                  if (![bundleID isEqualToString:@"com.facebook.Facebook"] ||
+                      [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) {
+                      return;
+                  }
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                      IQFWMScheduleHookAttempt();
+                  });
+              }
+          }
+          EOF
+
+          cp iqface-enhancer/iQFaceEnhancer.plist "$WORK/iQFaceEnhancer.plist"
+
+          cat > "$WORK/Makefile" <<'EOF'
+          ARCHS = arm64
+          TARGET = iphone:clang:latest:14.0
+
+          include $(THEOS)/makefiles/common.mk
+
+          LIBRARY_NAME = iQFaceEnhancer
+
+          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m
+          iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
+          iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
+          iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
+          iQFaceEnhancer_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
+
+          include $(THEOS_MAKE_PATH)/library.mk
+          EOF
+
+      - name: Build clean replacement dylib
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-wordmark-direct"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          mkdir -p artifacts
+          cp "$dylib_path" artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib
+          file artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib > artifacts/SHA256SUMS.txt
+
+          strings -a artifacts/iQFaceEnhancer-WordmarkDirectBeta.dylib > artifacts/strings.txt || true
+          grep -q "IQFPresentSettings" artifacts/strings.txt
+          ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
+          ! grep -q "Alterar ícone" artifacts/strings.txt || exit 1
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer-WordmarkDirectBeta-arm64
+          path: ${{ runner.temp }}/iqface-wordmark-direct/artifacts/
+          if-no-files-found: error
