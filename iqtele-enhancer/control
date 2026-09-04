@@ -1,0 +1,8 @@
+Package: com.lucas.iqteleenhancer
+Name: iQTele Enhancer
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: Oculta o botao de ajustes do iQTele e abre os ajustes por long press na linha de suporte do Telegram.
+Maintainer: Lucas
+Author: Lucas
+Section: Tweaks
