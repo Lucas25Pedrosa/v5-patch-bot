@@ -2,59 +2,38 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-static void (*IQTOriginalHandleLongPress)(id, SEL, UILongPressGestureRecognizer *) = NULL;
+static id (*IQTOriginalLongPressInit)(id, SEL, id, SEL) = NULL;
 
-static void IQTTemporarilyCancelSupportCompletion(UILongPressGestureRecognizer *gesture) {
-    UIView *view = gesture.view;
-    if (view == nil) return;
+static id IQTLongPressInit(id self, SEL _cmd, id target, SEL action) {
+    id recognizer = IQTOriginalLongPressInit(self, _cmd, target, action);
 
-    NSMutableArray<UIGestureRecognizer *> *disabledRecognizers = [NSMutableArray array];
-    UIView *current = view;
-    for (NSInteger level = 0; level < 5 && current != nil; level++, current = current.superview) {
-        for (UIGestureRecognizer *recognizer in current.gestureRecognizers.copy) {
-            if (recognizer == gesture || !recognizer.enabled) continue;
-            recognizer.enabled = NO;
-            [disabledRecognizers addObject:recognizer];
+    if ([recognizer isKindOfClass:UILongPressGestureRecognizer.class]) {
+        NSString *targetClass = target ? NSStringFromClass([target class]) : @"";
+        NSString *actionName = action ? NSStringFromSelector(action) : @"";
+
+        if ([targetClass isEqualToString:@"IQTMxGestureTarget"] &&
+            [actionName isEqualToString:@"handleLongPress:"]) {
+            // iQTele presents its settings without removing the native Telegram
+            // support row from the active touch cycle. Cancel the underlying
+            // row touch only once this long-press is recognized. Short taps are
+            // unaffected because the long-press recognizer fails normally.
+            ((UILongPressGestureRecognizer *)recognizer).cancelsTouchesInView = YES;
         }
     }
 
-    BOOL wasInteractive = view.userInteractionEnabled;
-    if (wasInteractive) view.userInteractionEnabled = NO;
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        for (UIGestureRecognizer *recognizer in disabledRecognizers) {
-            recognizer.enabled = YES;
-        }
-        if (wasInteractive) view.userInteractionEnabled = YES;
-    });
+    return recognizer;
 }
 
-static void IQTHandleLongPressSuppressingNativeTap(id self,
-                                                    SEL _cmd,
-                                                    UILongPressGestureRecognizer *gesture) {
-    UIGestureRecognizerState state = gesture.state;
-
-    if (IQTOriginalHandleLongPress != NULL) {
-        IQTOriginalHandleLongPress(self, _cmd, gesture);
-    }
-
-    if (state == UIGestureRecognizerStateBegan) {
-        IQTTemporarilyCancelSupportCompletion(gesture);
-    }
-}
-
-__attribute__((constructor)) static void IQTInstallSupportTapSuppression(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        Class cls = NSClassFromString(@"IQTMxGestureTarget");
-        SEL selector = NSSelectorFromString(@"handleLongPress:");
-        Method method = cls != Nil ? class_getInstanceMethod(cls, selector) : NULL;
+__attribute__((constructor)) static void IQTInstallLongPressTouchCancellation(void) {
+    @autoreleasepool {
+        Method method = class_getInstanceMethod(UILongPressGestureRecognizer.class,
+                                                @selector(initWithTarget:action:));
         if (method == NULL) return;
 
         IMP current = method_getImplementation(method);
-        if (current == (IMP)&IQTHandleLongPressSuppressingNativeTap) return;
+        if (current == (IMP)&IQTLongPressInit) return;
 
-        IQTOriginalHandleLongPress = (void *)current;
-        method_setImplementation(method, (IMP)&IQTHandleLongPressSuppressingNativeTap);
-    });
+        IQTOriginalLongPressInit = (void *)current;
+        method_setImplementation(method, (IMP)&IQTLongPressInit);
+    }
 }
