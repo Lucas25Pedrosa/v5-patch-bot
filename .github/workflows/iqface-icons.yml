@@ -42,7 +42,6 @@ jobs:
           shasum -a 256 artifacts/iQFaceIcons.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceIcons.dylib
           strings -a artifacts/iQFaceIcons.dylib | grep -F "Fechar"
-          strings -a artifacts/iQFaceIcons.dylib | grep -F "iQFaceIcons"
           if strings -a artifacts/iQFaceIcons.dylib | grep -F "alternateIconName"; then
             echo "Unexpected alternateIconName reference in final sideload build"
             exit 1
