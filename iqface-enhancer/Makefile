@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = iQFaceEnhancer
 
-iQFaceEnhancer_FILES = Tweak.m
+iQFaceEnhancer_FILES = Tweak.m IconPicker.m
 iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
 iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
 iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
