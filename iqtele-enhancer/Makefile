@@ -7,7 +7,7 @@ LIBRARY_NAME = iQTeleEnhancer
 
 iQTeleEnhancer_FILES = Tweak.m MxPresentation.m Translation.m
 iQTeleEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
-iQTeleEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-deprecated-declarations
+iQTeleEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-deprecated-declarations -Wno-sign-compare
 iQTeleEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQTeleEnhancer.dylib
 iQTeleEnhancer_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
 
