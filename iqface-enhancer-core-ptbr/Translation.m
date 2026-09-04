@@ -104,7 +104,7 @@ static void IQFTranslateViewTree(UIView *view) {
         if (![translatedPlaceholder isEqualToString:field.placeholder]) field.placeholder = translatedPlaceholder;
     } else if ([view isKindOfClass:UISegmentedControl.class]) {
         UISegmentedControl *segmented = (UISegmentedControl *)view;
-        for (NSInteger index = 0; index < segmented.numberOfSegments; index++) {
+        for (NSUInteger index = 0; index < segmented.numberOfSegments; index++) {
             NSString *source = [segmented titleForSegmentAtIndex:index];
             if (source.length == 0) continue;
             NSString *translated = IQFTranslateUIString(source);
