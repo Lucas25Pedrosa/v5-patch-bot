@@ -1,0 +1,173 @@
+name: Build iQFaceEnhancer 2.0 Scanner Final
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/iqface-enhancer-2.0-scanner-final.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Prepare validated 2.0 source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-enhancer-2.0-scanner"
+          mkdir -p "$WORK"
+
+          # Stable enhancer source before launcher/icon experiments.
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$WORK/Tweak.m"
+
+          python3 - "$WORK/Tweak.m" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+
+          # Wordmark module calls the direct iQFace settings opener.
+          old = "static void IQFOpenSettings(void) {"
+          assert old in s
+          s = s.replace(old, "void IQFOpenSettings(void) {", 1)
+
+          # No old long-press activation.
+          pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
+          replacement = '''static void IQFAttachLongPress(UIView *view) {
+              (void)view;
+              (void)IQFGestureAssociationKey;
+              (void)IQFLongPressDuration;
+          }'''
+          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          assert n == 1
+
+          # English-only 2.0.
+          pattern = r"static BOOL IQFShouldUsePortuguese\(void\) \{.*?\n\}"
+          replacement = '''static BOOL IQFShouldUsePortuguese(void) {
+              return NO;
+          }'''
+          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          assert n == 1
+
+          # Restore the exact proven safe-scanner removal behavior from the earlier beta:
+          # remove the iQFace button from the hierarchy instead of only hiding it.
+          old_hide = '''        if (IQFIsTopSettingsButton(subview)) {
+            subview.hidden = YES;
+            subview.alpha = 0.0;
+            subview.userInteractionEnabled = NO;
+            continue;
+        }'''
+          new_remove = '''        if (IQFIsTopSettingsButton(subview)) {
+            [subview removeFromSuperview];
+            continue;
+        }'''
+          assert old_hide in s
+          s = s.replace(old_hide, new_remove, 1)
+
+          # Restore the proven active-rescan timing from the earlier safe beta.
+          old_active = '''    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQFStartSafeScanner();
+    });'''
+          new_active = '''    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQFSafeScanWindows();
+    });'''
+          assert old_active in s
+          s = s.replace(old_active, new_active, 1)
+
+          # Start the proven safe scanner immediately after launch.
+          ctor_old = '''        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!IQFSafeModeEnabled()) {
+                IQFTryInstallIQFaceHooks();
+                IQFCleanVisibleSettingsItems();
+            }
+        });'''
+          ctor_new = '''        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!IQFSafeModeEnabled()) {
+                IQFTryInstallIQFaceHooks();
+                IQFCleanVisibleSettingsItems();
+            }
+            IQFStartSafeScanner();
+        });'''
+          assert ctor_old in s
+          s = s.replace(ctor_old, ctor_new, 1)
+
+          marker = '__attribute__((visibility("default"))) NSString * const IQFEnhancerVersion = @"2.0";\n\n'
+          insert_after = '#import <string.h>\n\n'
+          assert insert_after in s
+          s = s.replace(insert_after, insert_after + marker, 1)
+
+          assert '[subview removeFromSuperview];' in s
+          assert 'IQFStartSafeScanner();' in s
+          assert 'IQFFindSymbol("IQFPresentSettings")' in s
+          assert 'IQFPresentLauncherMenu' not in s
+          assert 'IQFReplaceMethod(UIView.class, @selector(addSubview:)' not in s
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
+          cp iqface-enhancer/iQFaceEnhancer.plist "$WORK/iQFaceEnhancer.plist"
+
+          cat > "$WORK/Makefile" <<'EOF'
+          ARCHS = arm64
+          TARGET = iphone:clang:latest:14.0
+
+          include $(THEOS)/makefiles/common.mk
+
+          LIBRARY_NAME = iQFaceEnhancer
+          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m
+          iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
+          iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
+          iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
+          iQFaceEnhancer_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
+
+          include $(THEOS_MAKE_PATH)/library.mk
+          EOF
+
+      - name: Build final arm64 dylib
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-enhancer-2.0-scanner"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          mkdir -p artifacts
+          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
+          printf 'iQFaceEnhancer 2.0\nEnglish-only\nProven safe scanner removal\n' > artifacts/VERSION.txt
+          file artifacts/iQFaceEnhancer.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
+          strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
+          grep -q "2.0" artifacts/strings.txt
+          grep -q "IQFPresentSettings" artifacts/strings.txt
+          grep -q "FBNavigationBar" artifacts/strings.txt
+          ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
+
+      - name: Upload final dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer-2.0-ScannerFinal-arm64
+          path: ${{ runner.temp }}/iqface-enhancer-2.0-scanner/artifacts/
+          if-no-files-found: error
