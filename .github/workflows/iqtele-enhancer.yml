@@ -8,7 +8,7 @@ name: Build iQTele Enhancer
       - ".github/workflows/iqtele-enhancer.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -47,3 +47,18 @@ jobs:
           name: iQTeleEnhancer-arm64
           path: iqtele-enhancer/artifacts/
           if-no-files-found: error
+
+      - name: Publish test build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-output/iqtele
+          cp iqtele-enhancer/artifacts/iQTeleEnhancer.dylib build-output/iqtele/iQTeleEnhancer.dylib
+          cp iqtele-enhancer/artifacts/SHA256SUMS.txt build-output/iqtele/SHA256SUMS.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-output/iqtele/iQTeleEnhancer.dylib build-output/iqtele/SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Build iQTeleEnhancer test dylib"
+            git push
+          fi
