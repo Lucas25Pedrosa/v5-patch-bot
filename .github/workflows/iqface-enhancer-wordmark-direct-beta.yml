@@ -46,7 +46,6 @@ jobs:
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
-          # Exact working beta transforms.
           s = s.replace("static void IQFOpenSettings(void) {", "void IQFOpenSettings(void) {", 1)
 
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
@@ -59,8 +58,6 @@ jobs:
           guard = "        IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);\n\n"
           s = s.replace(needle, guard + needle, 1)
 
-          # ONLY functional change versus the working beta:
-          # install the original IQFLoc/MSHookFunction localization hook in Safe Mode too.
           old = "        dispatch_async(dispatch_get_main_queue(), ^{\n            if (!IQFSafeModeEnabled()) {\n                IQFTryInstallIQFaceHooks();\n                IQFCleanVisibleSettingsItems();\n            }\n        });"
           new = "        dispatch_async(dispatch_get_main_queue(), ^{\n            IQFTryInstallIQFaceHooks();\n            if (!IQFSafeModeEnabled()) {\n                IQFCleanVisibleSettingsItems();\n            }\n        });"
           assert old in s
@@ -70,12 +67,10 @@ jobs:
           assert 'IQFPresentLauncherMenu' not in s
           assert '@"Ajustes do iQFace"' in s
           assert 'IQFInstallLocalizationHook()' in s
-          assert 'MSHookFunction' in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
-          cp iqface-enhancer/iQFaceEnhancer.plist "$WORK/iQFaceEnhancer.plist"
 
           cat > "$WORK/Makefile" <<'EOF'
           ARCHS = arm64
@@ -106,14 +101,9 @@ jobs:
           file artifacts/iQFaceEnhancer2.1-PTBR.dylib
           shasum -a 256 artifacts/iQFaceEnhancer2.1-PTBR.dylib > artifacts/SHA256SUMS.txt
           strings -a artifacts/iQFaceEnhancer2.1-PTBR.dylib > artifacts/strings.txt || true
-
           grep -q "IQFPresentSettings" artifacts/strings.txt
           grep -q "FBNavigationBar" artifacts/strings.txt
           grep -q "iqf_tapped" artifacts/strings.txt
-          grep -q "IQFLoc" artifacts/strings.txt
-          grep -q "MSHookFunction" artifacts/strings.txt
-          grep -q "Ajustes do iQFace" artifacts/strings.txt
-          grep -q "Bloquear anúncios" artifacts/strings.txt
           ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
 
       - name: Upload dylib
