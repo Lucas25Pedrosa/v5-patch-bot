@@ -1,0 +1,59 @@
+name: Build iQFace OLED
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-oled/**"
+      - ".github/workflows/iqface-oled.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-oled
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceOLED.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceOLED.dylib
+          shasum -a 256 artifacts/iQFaceOLED.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceOLED.dylib
+          grep -F '@"Modo OLED"' Tweak.m
+          grep -F '@"Ativado"' Tweak.m
+          grep -F '@"Desativado"' Tweak.m
+          grep -F 'iQFaceOLEDEnabled' Tweak.m
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "FBNewsFeedView"
+          if strings -a artifacts/iQFaceOLED.dylib | grep -F "UILongPressGestureRecognizer"; then
+            echo "Unexpected gesture recognizer in iQFaceOLED"
+            exit 1
+          fi
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceOLED-0.1.0-arm64
+          path: iqface-oled/artifacts/
+          if-no-files-found: error
