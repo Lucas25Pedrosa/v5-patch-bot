@@ -51,6 +51,12 @@ void IQFOLEDSetEnabledFromPicker(BOOL enabled) {
 replace_once(set_enabled_block, set_enabled_with_api, "picker engine API")
 
 replace_once(
+    "static void IQFOLEDPresentControlMenu(UIViewController *controller) {",
+    "__attribute__((unused)) static void IQFOLEDPresentControlMenu(UIViewController *controller) {",
+    "legacy alert",
+)
+
+replace_once(
     "            IQFOLEDPresentControlMenu(presenter);",
     "            IQFOLEDPresentModePickerFromViewController(presenter);",
     "row tap",
