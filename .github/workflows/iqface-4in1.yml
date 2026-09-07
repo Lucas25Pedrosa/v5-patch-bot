@@ -1,0 +1,139 @@
+name: Build iQFace 4-in-1 English
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-4in1/**"
+      - "iqface-enhancer/**"
+      - "iqface-icons-en/**"
+      - "iqface-cache-en/**"
+      - "iqface-oled/**"
+      - "iqface-oled-en/prepare_oled_en.py"
+      - ".github/workflows/iqface-4in1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-4in1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Prepare validated module sources
+        run: |
+          set -euo pipefail
+
+          cp ../iqface-enhancer/Tweak.m EnhancerTweak.m
+          cp ../iqface-enhancer/IconPicker.m EnhancerPicker.m
+
+          cp ../iqface-icons-en/Tweak.m IconsTweak.m
+          cp ../iqface-icons-en/IconPicker.m IconsPicker.m
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("IconsTweak.m")
+          s = p.read_text(encoding="utf-8")
+          if "IPA Souce" not in s and "IPA Source" not in s:
+              raise SystemExit("IPA Vault credit marker not found")
+          s = s.replace("IPA Souce", "IPA Source")
+          p.write_text(s, encoding="utf-8")
+          assert "IPA Source" in s
+          assert "IPA Souce" not in s
+          PY
+
+          cp ../iqface-cache-en/Tweak.m CacheTweak.m
+
+          cp ../iqface-oled/Tweak.m Tweak.m
+          python3 ../iqface-oled-en/prepare_oled_en.py
+          mv Tweak.m OLEDTweak.m
+
+          test -s EnhancerTweak.m
+          test -s EnhancerPicker.m
+          test -s IconsTweak.m
+          test -s IconsPicker.m
+          test -s CacheTweak.m
+          test -s OLEDTweak.m
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+
+          dylib_path=""
+          while IFS= read -r candidate; do
+            if file "$candidate" | grep -q "dynamically linked shared library"; then
+              dylib_path="$candidate"
+              break
+            fi
+          done < <(find .theos -name iQFace4in1.dylib -print)
+
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFace4in1.dylib
+          shasum -a 256 artifacts/iQFace4in1.dylib > artifacts/SHA256SUMS.txt
+
+          file_info="$(file artifacts/iQFace4in1.dylib)"
+          echo "$file_info"
+          echo "$file_info" | grep -F "Mach-O 64-bit"
+          echo "$file_info" | grep -F "arm64"
+          echo "$file_info" | grep -F "dynamically linked shared library"
+
+          strings -a artifacts/iQFace4in1.dylib > artifacts/strings.txt
+
+          # Enhancer
+          grep -F "IQFEnhancerGestureTarget" artifacts/strings.txt
+          grep -F "IQFPresentLauncherMenu" artifacts/strings.txt
+
+          # Icons + credits
+          grep -F "Change Icon" artifacts/strings.txt
+          grep -F "Lucas" artifacts/strings.txt
+          grep -F "Contributor" artifacts/strings.txt
+          grep -F "IPA Vault" artifacts/strings.txt
+          grep -F "IPA Source" artifacts/strings.txt
+          grep -F "https://t.me/ipavault" artifacts/strings.txt
+
+          # Cache
+          grep -F "Clear cache" artifacts/strings.txt
+          grep -F "com.facebook.Facebook.MosaicIGImageDiskCache" artifacts/strings.txt
+
+          # OLED
+          grep -F "OLED Mode" artifacts/strings.txt
+          grep -F "iQFaceOLEDEnabled" artifacts/strings.txt
+          grep -F "FBNewsFeedView" artifacts/strings.txt
+          grep -F "rowWithTitle:icon:key:def:onChange:" artifacts/strings.txt
+
+          # Combined identity / regressions
+          grep -F "@rpath/iQFace4in1.dylib" artifacts/strings.txt
+          if grep -F "IPA Souce" artifacts/strings.txt; then
+            echo "Unexpected misspelled IPA Souce string"
+            exit 1
+          fi
+          for old in '@rpath/iQFaceIcons.dylib' '@rpath/iQFaceEnhancer.dylib' '@rpath/iQFaceCache.dylib' '@rpath/iQFaceOLED.dylib'; do
+            if grep -F "$old" artifacts/strings.txt; then
+              echo "Unexpected standalone dylib dependency: $old"
+              exit 1
+            fi
+          done
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFace4in1-1.0.0-English-arm64
+          path: iqface-4in1/artifacts/
+          if-no-files-found: error
