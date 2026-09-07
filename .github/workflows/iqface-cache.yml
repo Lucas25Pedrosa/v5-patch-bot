@@ -1,0 +1,57 @@
+name: Build iQFace Cache
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-cache/**"
+      - ".github/workflows/iqface-cache.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceCache.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceCache.dylib
+          shasum -a 256 artifacts/iQFaceCache.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceCache.dylib
+          strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache"
+          strings -a artifacts/iQFaceCache.dylib | grep -F "Serão removidos aproximadamente"
+          strings -a artifacts/iQFaceCache.dylib | grep -F "Cache limpo"
+          if strings -a artifacts/iQFaceCache.dylib | grep -F "UILongPressGestureRecognizer"; then
+            echo "Unexpected gesture recognizer in iQFaceCache"
+            exit 1
+          fi
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceCache-0.1.0-arm64
+          path: iqface-cache/artifacts/
+          if-no-files-found: error
