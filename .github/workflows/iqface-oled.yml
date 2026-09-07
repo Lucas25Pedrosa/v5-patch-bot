@@ -31,6 +31,10 @@ jobs:
         run: |
           brew install ldid
 
+      - name: Prepare 0.1.3 from validated 0.1.1 base
+        run: |
+          python3 prepare_oled.py
+
       - name: Build arm64 dylib
         run: |
           set -euo pipefail
@@ -41,15 +45,21 @@ jobs:
           cp "$dylib_path" artifacts/iQFaceOLED.dylib
           shasum -a 256 artifacts/iQFaceOLED.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceOLED.dylib
-          grep -F '// iQFaceOLED 0.1.2' Tweak.m
-          grep -F '@"Modo OLED"' Tweak.m
-          grep -F '@"Ativado"' Tweak.m
-          grep -F '@"Desativado"' Tweak.m
-          grep -F '@"Ativar"' Tweak.m
-          grep -F '@"Desativar"' Tweak.m
-          grep -F 'updatedRows[rowIndex] = refreshedRow;' Tweak.m
+          grep -F '// iQFaceOLED 0.1.3' Tweak.m
+          grep -F 'IQFOLEDPresentModePickerFromViewController(presenter);' Tweak.m
+          grep -F 'BOOL IQFOLEDGetEnabled(void)' Tweak.m
+          grep -F 'void IQFOLEDSetEnabledFromPicker(BOOL enabled)' Tweak.m
+          grep -F '@"Modo OLED"' OLEDPicker.m
+          grep -F '@"Ativado"' OLEDPicker.m
+          grep -F '@"Desativado"' OLEDPicker.m
+          grep -F '@"checkmark.circle.fill"' OLEDPicker.m
           grep -F 'iQFaceOLEDEnabled' Tweak.m
+          if grep -F 'updatedRows[rowIndex] = refreshedRow;' Tweak.m; then
+            echo "Unexpected 0.1.2 row replacement logic"
+            exit 1
+          fi
           strings -a artifacts/iQFaceOLED.dylib | grep -F "FBNewsFeedView"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFOLEDModePickerController"
           if strings -a artifacts/iQFaceOLED.dylib | grep -F "UILongPressGestureRecognizer"; then
             echo "Unexpected gesture recognizer in iQFaceOLED"
             exit 1
@@ -58,6 +68,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceOLED-0.1.2-arm64
+          name: iQFaceOLED-0.1.3-arm64
           path: iqface-oled/artifacts/
           if-no-files-found: error

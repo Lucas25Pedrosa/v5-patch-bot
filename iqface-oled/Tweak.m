@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <math.h>
 
-// iQFaceOLED 0.1.2
+// iQFaceOLED 0.1.1
 // Standalone replacement for FBOLED with an iQFace control row.
 // Does not modify iQFace, iQFaceEnhancer, iQFaceIcons, iQFaceCache or FBOLED.
 // OLED engine is based on the validated FBOLED 0.2.0 behavior for Facebook 577+.
@@ -397,41 +397,14 @@ static NSString *IQFOLEDStatusText(void) {
     return gIQFOLEDEnabled ? @"Ativado" : @"Desativado";
 }
 
-static id IQFOLEDCreateNativeRow(UIViewController *controller);
-
 static void IQFOLEDRefreshSettingsRow(UIViewController *controller) {
     NSArray *sections = IQFOLEDSections(controller);
-    id toolsSection = IQFOLEDFindToolsSection(sections);
-    if (toolsSection == nil) return;
+    id row = IQFOLEDFindOwnRow(sections);
 
-    NSArray *rows = nil;
-    @try {
-        rows = [toolsSection valueForKey:@"rows"];
-    } @catch (__unused NSException *exception) {
-        rows = nil;
-    }
-    if (![rows isKindOfClass:NSArray.class]) return;
-
-    NSMutableArray *updatedRows = [rows mutableCopy];
-    NSUInteger rowIndex = NSNotFound;
-    for (NSUInteger i = 0; i < updatedRows.count; i++) {
-        if (IQFOLEDIsOwnRowTitle(IQFOLEDRowTitle(updatedRows[i]))) {
-            rowIndex = i;
-            break;
-        }
-    }
-
-    if (rowIndex != NSNotFound) {
-        id refreshedRow = IQFOLEDCreateNativeRow(controller);
-        Class rowClass = NSClassFromString(@"IQFRow");
-        if (refreshedRow != nil && rowClass != Nil && [refreshedRow isKindOfClass:rowClass]) {
-            updatedRows[rowIndex] = refreshedRow;
-            @try {
-                [toolsSection setValue:[updatedRows copy] forKey:@"rows"];
-                NSLog(@"[iQFaceOLED] estado visual atualizado: %@", IQFOLEDStatusText());
-            } @catch (__unused NSException *exception) {
-                NSLog(@"[iQFaceOLED] não foi possível substituir a linha de estado");
-            }
+    if (row != nil) {
+        @try {
+            [row setValue:IQFOLEDStatusText() forKey:@"detail"];
+        } @catch (__unused NSException *exception) {
         }
     }
 
