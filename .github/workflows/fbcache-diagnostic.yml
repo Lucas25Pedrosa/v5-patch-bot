@@ -1,0 +1,48 @@
+name: Build FBCacheDiagnostic
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "fbcache-diagnostic/**"
+      - ".github/workflows/fbcache-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: fbcache-diagnostic
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build FBCacheDiagnostic dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name FBCacheDiagnostic.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/FBCacheDiagnostic.dylib
+          file artifacts/FBCacheDiagnostic.dylib
+          shasum -a 256 artifacts/FBCacheDiagnostic.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload FBCacheDiagnostic dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBCacheDiagnostic-0.1.0-arm64
+          path: fbcache-diagnostic/artifacts/
+          if-no-files-found: error
