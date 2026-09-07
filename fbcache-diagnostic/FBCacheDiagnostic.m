@@ -1,14 +1,19 @@
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
-// FBCacheDiagnostic 0.1.0
-// Read-only sandbox size mapper for Facebook.
-// It never deletes, moves, truncates, or modifies Facebook data.
+// FBCacheDiagnostic 0.2.0
+// Read-only cache mapper for Facebook.
+// This version intentionally scans only cache-like roots first so results appear quickly.
+// It never deletes, moves, truncates, or modifies Facebook data (except its own report files).
 
 typedef struct {
     unsigned long long bytes;
     NSUInteger files;
     NSUInteger directories;
 } FBCDStats;
+
+static NSString *gReportTXTPath = nil;
+static NSString *gReportCSVPath = nil;
 
 static NSString *FBCDCSVQuote(NSString *value) {
     if (!value) return @"\"\"";
@@ -32,18 +37,88 @@ static NSString *FBCDHumanBytes(unsigned long long bytes) {
     return [NSString stringWithFormat:(unit == 0 ? @"%.0f %@" : @"%.2f %@"), value, units[unit]];
 }
 
+static UIViewController *FBCDTopViewController(void) {
+    UIApplication *app = UIApplication.sharedApplication;
+    UIWindow *window = nil;
+
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in app.connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            UIWindowScene *windowScene = (UIWindowScene *)scene;
+            for (UIWindow *candidate in windowScene.windows) {
+                if (candidate.isKeyWindow) {
+                    window = candidate;
+                    break;
+                }
+            }
+            if (!window) {
+                for (UIWindow *candidate in windowScene.windows) {
+                    if (!candidate.hidden && candidate.alpha > 0.0) {
+                        window = candidate;
+                        break;
+                    }
+                }
+            }
+            if (window) break;
+        }
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    if (!window) window = app.keyWindow;
+#pragma clang diagnostic pop
+
+    UIViewController *vc = window.rootViewController;
+    if (!vc) return nil;
+
+    while (YES) {
+        if (vc.presentedViewController) {
+            vc = vc.presentedViewController;
+            continue;
+        }
+        if ([vc isKindOfClass:UINavigationController.class]) {
+            UIViewController *next = ((UINavigationController *)vc).visibleViewController;
+            if (next) { vc = next; continue; }
+        }
+        if ([vc isKindOfClass:UITabBarController.class]) {
+            UIViewController *next = ((UITabBarController *)vc).selectedViewController;
+            if (next) { vc = next; continue; }
+        }
+        break;
+    }
+    return vc;
+}
+
+static void FBCDPresentLoadedNotice(NSUInteger attempt) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *vc = FBCDTopViewController();
+        if (!vc) {
+            if (attempt < 8) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    FBCDPresentLoadedNotice(attempt + 1);
+                });
+            }
+            return;
+        }
+
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FBCacheDiagnostic 0.2"
+                                                                       message:@"Tweak carregado. Analisando o cache do Facebook sem apagar nenhum arquivo."
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [vc presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 static FBCDStats FBCDStatsForItem(NSString *path) {
     FBCDStats result = {0, 0, 0};
-    NSFileManager *fm = [NSFileManager defaultManager];
+    NSFileManager *fm = NSFileManager.defaultManager;
     BOOL isDirectory = NO;
-
-    if (![fm fileExistsAtPath:path isDirectory:&isDirectory]) {
-        return result;
-    }
+    if (![fm fileExistsAtPath:path isDirectory:&isDirectory]) return result;
 
     if (!isDirectory) {
         NSError *error = nil;
-        NSDictionary<NSFileAttributeKey, id> *attrs = [fm attributesOfItemAtPath:path error:&error];
+        NSDictionary *attrs = [fm attributesOfItemAtPath:path error:&error];
         if (attrs && !error && [attrs[NSFileType] isEqual:NSFileTypeRegular]) {
             result.bytes = [attrs[NSFileSize] unsignedLongLongValue];
             result.files = 1;
@@ -52,18 +127,15 @@ static FBCDStats FBCDStatsForItem(NSString *path) {
     }
 
     result.directories = 1;
-    NSDirectoryEnumerator<NSString *> *enumerator = [fm enumeratorAtPath:path];
+    NSDirectoryEnumerator *enumerator = [fm enumeratorAtPath:path];
     for (NSString *relative in enumerator) {
         @autoreleasepool {
             NSString *fullPath = [path stringByAppendingPathComponent:relative];
             NSError *error = nil;
-            NSDictionary<NSFileAttributeKey, id> *attrs = [fm attributesOfItemAtPath:fullPath error:&error];
+            NSDictionary *attrs = [fm attributesOfItemAtPath:fullPath error:&error];
             if (!attrs || error) continue;
-
             NSString *type = attrs[NSFileType];
-            if ([type isEqual:NSFileTypeSymbolicLink]) {
-                continue;
-            }
+            if ([type isEqual:NSFileTypeSymbolicLink]) continue;
             if ([type isEqual:NSFileTypeDirectory]) {
                 result.directories++;
             } else if ([type isEqual:NSFileTypeRegular]) {
@@ -75,59 +147,26 @@ static FBCDStats FBCDStatsForItem(NSString *path) {
     return result;
 }
 
-static void FBCDAppendRow(NSMutableString *csv,
-                          NSMutableArray<NSDictionary *> *ranked,
-                          NSString *classification,
-                          NSString *rootName,
-                          NSString *relativePath,
-                          NSString *fullPath,
-                          FBCDStats stats) {
-    [csv appendFormat:@"%@,%@,%@,%llu,%@,%lu,%lu\n",
-     FBCDCSVQuote(classification),
-     FBCDCSVQuote(rootName),
-     FBCDCSVQuote(relativePath),
-     stats.bytes,
-     FBCDCSVQuote(FBCDHumanBytes(stats.bytes)),
-     (unsigned long)stats.files,
-     (unsigned long)stats.directories];
-
-    [ranked addObject:@{
-        @"classification": classification ?: @"",
-        @"root": rootName ?: @"",
-        @"path": relativePath ?: @"",
-        @"fullPath": fullPath ?: @"",
-        @"bytes": @(stats.bytes),
-        @"files": @(stats.files),
-        @"directories": @(stats.directories)
-    }];
-}
-
 static FBCDStats FBCDScanRoot(NSMutableString *csv,
                               NSMutableArray<NSDictionary *> *ranked,
                               NSString *home,
                               NSString *relativeRoot,
                               NSString *classification) {
-    NSFileManager *fm = [NSFileManager defaultManager];
+    NSFileManager *fm = NSFileManager.defaultManager;
     NSString *root = [home stringByAppendingPathComponent:relativeRoot];
     BOOL isDirectory = NO;
     FBCDStats total = {0, 0, 0};
-
-    if (![fm fileExistsAtPath:root isDirectory:&isDirectory]) {
-        return total;
-    }
+    if (![fm fileExistsAtPath:root isDirectory:&isDirectory]) return total;
 
     if (!isDirectory) {
         total = FBCDStatsForItem(root);
-        FBCDAppendRow(csv, ranked, classification, relativeRoot, @"(root file)", root, total);
         return total;
     }
 
     total.directories = 1;
     NSError *listError = nil;
     NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:root error:&listError];
-    if (!children || listError) {
-        return total;
-    }
+    if (!children || listError) return total;
 
     children = [children sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
     for (NSString *child in children) {
@@ -137,29 +176,71 @@ static FBCDStats FBCDScanRoot(NSMutableString *csv,
             total.bytes += stats.bytes;
             total.files += stats.files;
             total.directories += stats.directories;
-            FBCDAppendRow(csv, ranked, classification, relativeRoot, child, childPath, stats);
+
+            [csv appendFormat:@"%@,%@,%@,%llu,%@,%lu,%lu\n",
+             FBCDCSVQuote(classification), FBCDCSVQuote(relativeRoot), FBCDCSVQuote(child),
+             stats.bytes, FBCDCSVQuote(FBCDHumanBytes(stats.bytes)),
+             (unsigned long)stats.files, (unsigned long)stats.directories];
+
+            [ranked addObject:@{@"class": classification,
+                                @"root": relativeRoot,
+                                @"item": child,
+                                @"bytes": @(stats.bytes)}];
         }
     }
-
     return total;
+}
+
+static void FBCDShareReports(UIViewController *vc) {
+    NSMutableArray *items = [NSMutableArray array];
+    if (gReportTXTPath && [NSFileManager.defaultManager fileExistsAtPath:gReportTXTPath]) {
+        [items addObject:[NSURL fileURLWithPath:gReportTXTPath]];
+    }
+    if (gReportCSVPath && [NSFileManager.defaultManager fileExistsAtPath:gReportCSVPath]) {
+        [items addObject:[NSURL fileURLWithPath:gReportCSVPath]];
+    }
+    if (!items.count) return;
+
+    UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];
+    if (share.popoverPresentationController) {
+        share.popoverPresentationController.sourceView = vc.view;
+        share.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(vc.view.bounds), CGRectGetMidY(vc.view.bounds), 1, 1);
+    }
+    [vc presentViewController:share animated:YES completion:nil];
+}
+
+static void FBCDPresentResult(NSString *message, NSUInteger attempt) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *vc = FBCDTopViewController();
+        if (!vc || [vc isKindOfClass:UIAlertController.class]) {
+            if (attempt < 20) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    FBCDPresentResult(message, attempt + 1);
+                });
+            }
+            return;
+        }
+
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Diagnóstico concluído"
+                                                                       message:message
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Compartilhar relatório" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                UIViewController *top = FBCDTopViewController();
+                if (top) FBCDShareReports(top);
+            });
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"Fechar" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:alert animated:YES completion:nil];
+    });
 }
 
 static void FBCDWriteReport(void) {
     @autoreleasepool {
-        NSFileManager *fm = [NSFileManager defaultManager];
+        NSFileManager *fm = NSFileManager.defaultManager;
         NSString *home = NSHomeDirectory();
-        NSString *documents = [home stringByAppendingPathComponent:@"Documents"];
-        NSString *reportDirectory = [documents stringByAppendingPathComponent:@"FBCacheDiagnostic"];
-
-        NSError *mkdirError = nil;
-        [fm createDirectoryAtPath:reportDirectory
-      withIntermediateDirectories:YES
-                       attributes:nil
-                            error:&mkdirError];
-        if (mkdirError) {
-            NSLog(@"[FBCacheDiagnostic] Could not create report directory: %@", mkdirError);
-            return;
-        }
+        NSString *reportDirectory = [[home stringByAppendingPathComponent:@"Documents"] stringByAppendingPathComponent:@"FBCacheDiagnostic"];
+        [fm createDirectoryAtPath:reportDirectory withIntermediateDirectories:YES attributes:nil error:nil];
 
         NSMutableString *csv = [NSMutableString stringWithString:@"classification,root,item,bytes,human_size,files,directories\n"];
         NSMutableArray<NSDictionary *> *ranked = [NSMutableArray array];
@@ -169,105 +250,76 @@ static void FBCDWriteReport(void) {
             @{@"path": @"Library/Caches", @"class": @"cache_candidate"},
             @{@"path": @"tmp", @"class": @"cache_candidate"},
             @{@"path": @"Library/WebKit", @"class": @"inspect_only"},
-            @{@"path": @"Library/HTTPStorages", @"class": @"inspect_only"},
-            @{@"path": @"Library/Cookies", @"class": @"keep_session_data"},
-            @{@"path": @"Library/Application Support", @"class": @"inspect_only"},
-            @{@"path": @"Library/Preferences", @"class": @"keep_preferences"},
-            @{@"path": @"Documents", @"class": @"user_data"}
+            @{@"path": @"Library/HTTPStorages", @"class": @"inspect_only"}
         ];
 
+        unsigned long long candidateBytes = 0;
         for (NSDictionary *entry in roots) {
             NSString *relativeRoot = entry[@"path"];
             NSString *classification = entry[@"class"];
             FBCDStats stats = FBCDScanRoot(csv, ranked, home, relativeRoot, classification);
-            [rootTotals addObject:@{
-                @"path": relativeRoot,
-                @"classification": classification,
-                @"bytes": @(stats.bytes),
-                @"files": @(stats.files),
-                @"directories": @(stats.directories)
-            }];
+            if ([classification isEqualToString:@"cache_candidate"]) candidateBytes += stats.bytes;
+            [rootTotals addObject:@{@"path": relativeRoot,
+                                    @"classification": classification,
+                                    @"bytes": @(stats.bytes),
+                                    @"files": @(stats.files),
+                                    @"directories": @(stats.directories)}];
         }
 
         [ranked sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
             return [b[@"bytes"] compare:a[@"bytes"]];
         }];
 
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier] ?: @"unknown";
-        NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown";
-        NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"unknown";
+        NSString *bundleID = NSBundle.mainBundle.bundleIdentifier ?: @"unknown";
+        NSString *version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown";
+        NSString *build = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"unknown";
 
         NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
         formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
         formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss ZZZZZ";
-        NSString *timestamp = [formatter stringFromDate:[NSDate date]];
 
         NSMutableString *summary = [NSMutableString string];
-        [summary appendString:@"FBCacheDiagnostic 0.1.0\n"];
-        [summary appendString:@"READ-ONLY: no files were deleted or modified.\n\n"];
-        [summary appendFormat:@"Generated: %@\n", timestamp];
-        [summary appendFormat:@"Bundle: %@\n", bundleID];
-        [summary appendFormat:@"Facebook version: %@ (%@)\n\n", version, build];
-
-        [summary appendString:@"ROOT TOTALS\n"];
-        [summary appendString:@"-----------\n"];
+        [summary appendString:@"FBCacheDiagnostic 0.2.0\nREAD-ONLY: no Facebook data was deleted.\n\n"];
+        [summary appendFormat:@"Generated: %@\nBundle: %@\nFacebook version: %@ (%@)\n\n",
+         [formatter stringFromDate:NSDate.date], bundleID, version, build];
+        [summary appendString:@"ROOT TOTALS\n-----------\n"];
         for (NSDictionary *entry in rootTotals) {
-            [summary appendFormat:@"%-28@  %10@  files=%@  dirs=%@  [%@]\n",
-             entry[@"path"],
-             FBCDHumanBytes([entry[@"bytes"] unsignedLongLongValue]),
-             entry[@"files"],
-             entry[@"directories"],
-             entry[@"classification"]];
+            [summary appendFormat:@"%@ = %@ | files=%@ | dirs=%@ | %@\n",
+             entry[@"path"], FBCDHumanBytes([entry[@"bytes"] unsignedLongLongValue]),
+             entry[@"files"], entry[@"directories"], entry[@"classification"]];
         }
 
-        [summary appendString:@"\nTOP 40 FIRST-LEVEL ITEMS\n"];
-        [summary appendString:@"------------------------\n"];
+        [summary appendString:@"\nTOP 40 ITEMS\n------------\n"];
         NSUInteger limit = MIN((NSUInteger)40, ranked.count);
         for (NSUInteger i = 0; i < limit; i++) {
             NSDictionary *entry = ranked[i];
-            [summary appendFormat:@"%2lu. %10@  %@/%@  [%@]\n",
-             (unsigned long)(i + 1),
-             FBCDHumanBytes([entry[@"bytes"] unsignedLongLongValue]),
-             entry[@"root"],
-             entry[@"path"],
-             entry[@"classification"]];
+            [summary appendFormat:@"%lu. %@ | %@/%@ | %@\n",
+             (unsigned long)(i + 1), FBCDHumanBytes([entry[@"bytes"] unsignedLongLongValue]),
+             entry[@"root"], entry[@"item"], entry[@"class"]];
         }
 
-        [summary appendString:@"\nCLASSIFICATION GUIDE\n"];
-        [summary appendString:@"--------------------\n"];
-        [summary appendString:@"cache_candidate   = likely disposable, but this diagnostic does not delete it.\n"];
-        [summary appendString:@"inspect_only       = measure first; may contain state/session data.\n"];
-        [summary appendString:@"keep_session_data  = do not clear blindly; may affect login/session.\n"];
-        [summary appendString:@"keep_preferences   = settings; do not clear.\n"];
-        [summary appendString:@"user_data          = user/app documents; do not clear blindly.\n"];
+        gReportCSVPath = [reportDirectory stringByAppendingPathComponent:@"FBCacheDiagnostic.csv"];
+        gReportTXTPath = [reportDirectory stringByAppendingPathComponent:@"FBCacheDiagnostic.txt"];
+        [csv writeToFile:gReportCSVPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [summary writeToFile:gReportTXTPath atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-        NSString *csvPath = [reportDirectory stringByAppendingPathComponent:@"FBCacheDiagnostic.csv"];
-        NSString *txtPath = [reportDirectory stringByAppendingPathComponent:@"FBCacheDiagnostic.txt"];
-        NSError *csvError = nil;
-        NSError *txtError = nil;
-        [csv writeToFile:csvPath atomically:YES encoding:NSUTF8StringEncoding error:&csvError];
-        [summary writeToFile:txtPath atomically:YES encoding:NSUTF8StringEncoding error:&txtError];
-
-        if (csvError || txtError) {
-            NSLog(@"[FBCacheDiagnostic] Report write error. CSV=%@ TXT=%@", csvError, txtError);
-        } else {
-            NSLog(@"[FBCacheDiagnostic] Report written to %@", reportDirectory);
-            NSLog(@"[FBCacheDiagnostic] No Facebook data was deleted or modified.");
-        }
+        NSString *resultMessage = [NSString stringWithFormat:@"Cache candidato: %@\n\nLibrary/Caches + tmp. WebKit e HTTPStorages foram apenas medidos. Nenhum arquivo foi apagado.", FBCDHumanBytes(candidateBytes)];
+        NSLog(@"[FBCacheDiagnostic] 0.2.0 finished. Candidate cache=%@", FBCDHumanBytes(candidateBytes));
+        FBCDPresentResult(resultMessage, 0);
     }
 }
 
 __attribute__((constructor))
 static void FBCacheDiagnosticInit(void) {
     @autoreleasepool {
-        NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
-        if (![bundleID isEqualToString:@"com.facebook.Facebook"]) {
-            return;
-        }
+        NSString *bundleID = NSBundle.mainBundle.bundleIdentifier;
+        if (![bundleID isEqualToString:@"com.facebook.Facebook"]) return;
 
-        NSLog(@"[FBCacheDiagnostic] 0.1.0 loaded (read-only)");
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
-                       dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSLog(@"[FBCacheDiagnostic] 0.2.0 loaded (read-only)");
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            FBCDPresentLoadedNotice(0);
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
             FBCDWriteReport();
         });
     }
