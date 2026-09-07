@@ -36,7 +36,17 @@ jobs:
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name iQFaceToggleProbe.dylib ! -path '*.dSYM/*' -print -quit)"
+
+          dylib_path=""
+          while IFS= read -r candidate; do
+            echo "Candidate: $candidate"
+            file "$candidate" || true
+            if file "$candidate" | grep -q "dynamically linked shared library"; then
+              dylib_path="$candidate"
+              break
+            fi
+          done < <(find .theos -name iQFaceToggleProbe.dylib -print)
+
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQFaceToggleProbe.dylib
           shasum -a 256 artifacts/iQFaceToggleProbe.dylib > artifacts/SHA256SUMS.txt
