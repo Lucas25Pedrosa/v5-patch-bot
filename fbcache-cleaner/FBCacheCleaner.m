@@ -251,7 +251,9 @@ static void FBCacheCleanerInit(void) {
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                           object:nil
                                                            queue:[NSOperationQueue mainQueue]
-                                                      usingBlock:FBCCAppBecameActive];
+                                                      usingBlock:^(NSNotification *note) {
+            FBCCAppBecameActive(note);
+        }];
         NSLog(@"[FBCacheCleaner] 0.1.0 loaded");
     }
 }
