@@ -1,0 +1,52 @@
+name: Build iQFace Toggle Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-toggle-probe/**"
+      - ".github/workflows/iqface-toggle-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-toggle-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceToggleProbe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceToggleProbe.dylib
+          shasum -a 256 artifacts/iQFaceToggleProbe.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceToggleProbe.dylib
+          strings -a artifacts/iQFaceToggleProbe.dylib | grep -F "IQFSettingsViewController"
+          strings -a artifacts/iQFaceToggleProbe.dylib | grep -F "iQFaceToggleProbe.txt"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceToggleProbe-0.1.0-arm64
+          path: iqface-toggle-probe/artifacts/
+          if-no-files-found: error
