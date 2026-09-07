@@ -1,0 +1,48 @@
+name: Build FBCacheCleaner
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "fbcache-cleaner/**"
+      - ".github/workflows/fbcache-cleaner.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: fbcache-cleaner
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build FBCacheCleaner dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name FBCacheCleaner.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/FBCacheCleaner.dylib
+          file artifacts/FBCacheCleaner.dylib
+          shasum -a 256 artifacts/FBCacheCleaner.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload FBCacheCleaner dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBCacheCleaner-0.1.0-arm64
+          path: fbcache-cleaner/artifacts/
+          if-no-files-found: error
