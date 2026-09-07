@@ -96,9 +96,11 @@ jobs:
 
           strings -a artifacts/iQFace4in1.dylib > artifacts/strings.txt
 
-          # Enhancer
+          # Enhancer — markers also present in the supplied 0.2.1 binary.
           grep -F "IQFEnhancerGestureTarget" artifacts/strings.txt
-          grep -F "IQFPresentLauncherMenu" artifacts/strings.txt
+          grep -F "IQFPresentSettings" artifacts/strings.txt
+          grep -F "iqf_tapped" artifacts/strings.txt
+          grep -F "FBNavigationBar" artifacts/strings.txt
 
           # Icons + credits
           grep -F "Change Icon" artifacts/strings.txt
