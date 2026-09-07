@@ -1,0 +1,93 @@
+name: Build iQFace OLED English
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-oled-en/**"
+      - ".github/workflows/iqface-oled-en.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-oled-en
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Prepare English 0.1.4 from validated 0.1.1 base
+        run: |
+          cp ../iqface-oled/Tweak.m Tweak.m
+          python3 prepare_oled_en.py
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+
+          dylib_path=""
+          while IFS= read -r candidate; do
+            if file "$candidate" | grep -q "dynamically linked shared library"; then
+              dylib_path="$candidate"
+              break
+            fi
+          done < <(find .theos -name iQFaceOLED.dylib -print)
+
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceOLED.dylib
+          shasum -a 256 artifacts/iQFaceOLED.dylib > artifacts/SHA256SUMS.txt
+
+          file_info="$(file artifacts/iQFaceOLED.dylib)"
+          echo "$file_info"
+          echo "$file_info" | grep -F "Mach-O 64-bit"
+          echo "$file_info" | grep -F "arm64"
+          echo "$file_info" | grep -F "dynamically linked shared library"
+
+          grep -F '// iQFaceOLED 0.1.4 EN' Tweak.m
+          grep -F 'rowWithTitle:icon:key:def:onChange:' Tweak.m
+          grep -F '@"OLED Mode"' Tweak.m
+          grep -F 'IQFOLEDPreferenceKey' Tweak.m
+          grep -F 'IQFOLEDSetEnabled(!gIQFOLEDEnabled, nil);' Tweak.m
+          grep -F 'iQFaceOLEDEnabled' Tweak.m
+
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "FBNewsFeedView"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "OLED Mode"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "rowWithTitle:icon:key:def:onChange:"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDEnabled"
+
+          if strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFOLEDModePickerController"; then
+            echo "Unexpected legacy OLED picker in English iQFaceOLED 0.1.4"
+            exit 1
+          fi
+          if strings -a artifacts/iQFaceOLED.dylib | grep -F "valueRowWithTitle:icon:detail:tap:"; then
+            echo "Unexpected legacy value row in English iQFaceOLED 0.1.4"
+            exit 1
+          fi
+          if strings -a artifacts/iQFaceOLED.dylib | grep -F "UILongPressGestureRecognizer"; then
+            echo "Unexpected gesture recognizer in English iQFaceOLED"
+            exit 1
+          fi
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceOLED-en-0.1.4-arm64
+          path: iqface-oled-en/artifacts/
+          if-no-files-found: error
