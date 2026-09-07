@@ -1,0 +1,48 @@
+name: Build TeraBoxStorageDiagnostic
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "terabox-storage-diagnostic/**"
+      - ".github/workflows/terabox-storage-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: terabox-storage-diagnostic
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build TeraBoxStorageDiagnostic dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name TeraBoxStorageDiagnostic.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/TeraBoxStorageDiagnostic.dylib
+          file artifacts/TeraBoxStorageDiagnostic.dylib
+          shasum -a 256 artifacts/TeraBoxStorageDiagnostic.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload TeraBoxStorageDiagnostic dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeraBoxStorageDiagnostic-0.1.0-arm64
+          path: terabox-storage-diagnostic/artifacts/
+          if-no-files-found: error
