@@ -120,13 +120,16 @@ jobs:
           grep -F "rowWithTitle:icon:key:def:onChange:" artifacts/strings.txt
 
           # Combined identity / regressions
-          grep -F "@rpath/iQFace4in1.dylib" artifacts/strings.txt
+          otool -D artifacts/iQFace4in1.dylib | tee artifacts/install-name.txt
+          grep -F "@rpath/iQFace4in1.dylib" artifacts/install-name.txt
+          otool -L artifacts/iQFace4in1.dylib | tee artifacts/dependencies.txt
+
           if grep -F "IPA Souce" artifacts/strings.txt; then
             echo "Unexpected misspelled IPA Souce string"
             exit 1
           fi
           for old in '@rpath/iQFaceIcons.dylib' '@rpath/iQFaceEnhancer.dylib' '@rpath/iQFaceCache.dylib' '@rpath/iQFaceOLED.dylib'; do
-            if grep -F "$old" artifacts/strings.txt; then
+            if grep -F "$old" artifacts/dependencies.txt; then
               echo "Unexpected standalone dylib dependency: $old"
               exit 1
             fi
