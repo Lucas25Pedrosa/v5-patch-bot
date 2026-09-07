@@ -5,8 +5,8 @@
 #import <objc/message.h>
 #import <math.h>
 
-// iQFaceOLED 0.1.0
-// Standalone replacement for FBOLED when an iQFace on/off control is desired.
+// iQFaceOLED 0.1.1
+// Standalone replacement for FBOLED with an iQFace control row.
 // Does not modify iQFace, iQFaceEnhancer, iQFaceIcons, iQFaceCache or FBOLED.
 // OLED engine is based on the validated FBOLED 0.2.0 behavior for Facebook 577+.
 
@@ -23,8 +23,8 @@ static BOOL gIQFOLEDDarkMode;
 static BOOL gIQFOLEDEnabled = YES;
 
 static void (*IQFOLEDOriginalViewDidAppear)(UIViewController *, SEL, BOOL) = NULL;
-static BOOL IQFOLEDSettingsHookInstalled = NO;
-static NSInteger IQFOLEDSettingsHookAttempts = 0;
+static BOOL gIQFOLEDSettingsHookInstalled = NO;
+static NSInteger gIQFOLEDSettingsHookAttempts = 0;
 
 static BOOL IQFOLEDLoadEnabledPreference(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
@@ -100,15 +100,18 @@ static BOOL IQFOLEDIsBlack(uint32_t rgba) {
     uint32_t rgba = IQFOLEDRGBA(color, self.traitCollection);
 
     if (gIQFOLEDEnabled && IQFOLEDIsMappedDark(rgba)) {
-        objc_setAssociatedObject(self, kIQFOLEDOriginalViewColorKey, color,
+        objc_setAssociatedObject(self,
+                                 kIQFOLEDOriginalViewColorKey,
+                                 color,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [self iqfoled_setBackgroundColor:UIColor.blackColor];
         return;
     }
 
-    // Preserve the saved source while an already-transformed black surface is reinforced.
     if (!(original && IQFOLEDIsBlack(rgba))) {
-        objc_setAssociatedObject(self, kIQFOLEDOriginalViewColorKey, nil,
+        objc_setAssociatedObject(self,
+                                 kIQFOLEDOriginalViewColorKey,
+                                 nil,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [self iqfoled_setBackgroundColor:color];
@@ -145,7 +148,9 @@ static UIColor *IQFOLEDSourceViewColor(UIView *view) {
     uint32_t currentRGBA = IQFOLEDRGBA(current, view.traitCollection);
     if (IQFOLEDIsBlack(currentRGBA)) return original;
 
-    objc_setAssociatedObject(view, kIQFOLEDOriginalViewColorKey, nil,
+    objc_setAssociatedObject(view,
+                             kIQFOLEDOriginalViewColorKey,
+                             nil,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return current;
 }
@@ -168,22 +173,20 @@ static NSArray<UIWindow *> *IQFOLEDWindows(void) {
     NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
     UIApplication *application = UIApplication.sharedApplication;
 
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in application.connectedScenes) {
-            if (![scene isKindOfClass:UIWindowScene.class]) continue;
-            UIWindowScene *windowScene = (UIWindowScene *)scene;
-            if (windowScene.activationState == UISceneActivationStateUnattached) continue;
-            [windows addObjectsFromArray:windowScene.windows];
-        }
-    } else {
-        [windows addObjectsFromArray:application.windows];
+    for (UIScene *scene in application.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
+        if (windowScene.activationState == UISceneActivationStateUnattached) continue;
+        [windows addObjectsFromArray:windowScene.windows];
     }
+
     return windows;
 }
 
 static void IQFOLEDResolveMode(NSArray<UIWindow *> *windows) {
     NSUInteger dark = 0;
     NSUInteger light = 0;
+
     for (UIWindow *window in windows) {
         IQFOLEDCountThemeAnchors(window, &dark, &light);
     }
@@ -213,9 +216,12 @@ static void IQFOLEDTransformView(UIView *view) {
     if (gIQFOLEDEnabled && gIQFOLEDDarkMode) {
         UIColor *source = IQFOLEDSourceViewColor(view);
         original = objc_getAssociatedObject(view, kIQFOLEDOriginalViewColorKey);
+
         if (IQFOLEDIsMappedDark(IQFOLEDRGBA(source, view.traitCollection))) {
             if (!original) {
-                objc_setAssociatedObject(view, kIQFOLEDOriginalViewColorKey, source,
+                objc_setAssociatedObject(view,
+                                         kIQFOLEDOriginalViewColorKey,
+                                         source,
                                          OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             }
             if (!IQFOLEDIsBlack(IQFOLEDRGBA(view.backgroundColor, view.traitCollection))) {
@@ -224,7 +230,9 @@ static void IQFOLEDTransformView(UIView *view) {
         }
     } else if (original) {
         view.backgroundColor = original;
-        objc_setAssociatedObject(view, kIQFOLEDOriginalViewColorKey, nil,
+        objc_setAssociatedObject(view,
+                                 kIQFOLEDOriginalViewColorKey,
+                                 nil,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
@@ -236,14 +244,18 @@ static void IQFOLEDTransformView(UIView *view) {
             UIColor *source = layerOriginal ?: layerCurrent;
             if (IQFOLEDIsMappedDark(IQFOLEDRGBA(source, view.traitCollection))) {
                 if (!layerOriginal) {
-                    objc_setAssociatedObject(view.layer, kIQFOLEDOriginalLayerColorKey, source,
+                    objc_setAssociatedObject(view.layer,
+                                             kIQFOLEDOriginalLayerColorKey,
+                                             source,
                                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 }
                 view.layer.backgroundColor = UIColor.blackColor.CGColor;
             }
         } else if (layerOriginal) {
             view.layer.backgroundColor = layerOriginal.CGColor;
-            objc_setAssociatedObject(view.layer, kIQFOLEDOriginalLayerColorKey, nil,
+            objc_setAssociatedObject(view.layer,
+                                     kIQFOLEDOriginalLayerColorKey,
+                                     nil,
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
     }
@@ -255,7 +267,9 @@ static void IQFOLEDTransformView(UIView *view) {
 
 static void IQFOLEDRunPass(void) {
     if (!NSThread.isMainThread) {
-        dispatch_async(dispatch_get_main_queue(), ^{ IQFOLEDRunPass(); });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            IQFOLEDRunPass();
+        });
         return;
     }
 
@@ -272,7 +286,7 @@ static void IQFOLEDRunPass(void) {
                 IQFOLEDTransformView(window);
             }
         } @catch (__unused NSException *exception) {
-            // Never let a transient Facebook view-tree mutation terminate the app.
+            // A transient Facebook view-tree mutation must never terminate the app.
         }
     }
 }
@@ -305,12 +319,14 @@ static BOOL IQFOLEDClassImplementsSelector(Class cls, SEL selector) {
     unsigned int count = 0;
     Method *methods = class_copyMethodList(cls, &count);
     BOOL found = NO;
+
     for (unsigned int i = 0; i < count; i++) {
         if (method_getName(methods[i]) == selector) {
             found = YES;
             break;
         }
     }
+
     free(methods);
     return found;
 }
@@ -369,6 +385,7 @@ static id IQFOLEDFindOwnRow(NSArray *sections) {
             rows = nil;
         }
         if (![rows isKindOfClass:NSArray.class]) continue;
+
         for (id row in rows) {
             if (IQFOLEDIsOwnRowTitle(IQFOLEDRowTitle(row))) return row;
         }
@@ -383,6 +400,7 @@ static NSString *IQFOLEDStatusText(void) {
 static void IQFOLEDRefreshSettingsRow(UIViewController *controller) {
     NSArray *sections = IQFOLEDSections(controller);
     id row = IQFOLEDFindOwnRow(sections);
+
     if (row != nil) {
         @try {
             [row setValue:IQFOLEDStatusText() forKey:@"detail"];
@@ -395,15 +413,45 @@ static void IQFOLEDRefreshSettingsRow(UIViewController *controller) {
     }
 }
 
-static void IQFOLEDToggleFromController(UIViewController *controller) {
-    gIQFOLEDEnabled = !gIQFOLEDEnabled;
-    IQFOLEDSaveEnabledPreference(gIQFOLEDEnabled);
+static void IQFOLEDSetEnabled(BOOL enabled, UIViewController *controller) {
+    if (gIQFOLEDEnabled == enabled) return;
+
+    gIQFOLEDEnabled = enabled;
+    IQFOLEDSaveEnabledPreference(enabled);
 
     UISelectionFeedbackGenerator *feedback = [UISelectionFeedbackGenerator new];
     [feedback selectionChanged];
 
     IQFOLEDRefreshSettingsRow(controller);
     IQFOLEDRunPass();
+}
+
+static void IQFOLEDPresentControlMenu(UIViewController *controller) {
+    if (controller == nil || controller.presentedViewController != nil) return;
+
+    NSString *message = gIQFOLEDEnabled ? @"O modo OLED está ativado." : @"O modo OLED está desativado.";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Modo OLED"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+
+    __weak UIViewController *weakController = controller;
+    BOOL currentlyEnabled = gIQFOLEDEnabled;
+    NSString *actionTitle = currentlyEnabled ? @"Desativar" : @"Ativar";
+    UIAlertActionStyle actionStyle = currentlyEnabled ? UIAlertActionStyleDestructive : UIAlertActionStyleDefault;
+
+    [alert addAction:[UIAlertAction actionWithTitle:actionTitle
+                                              style:actionStyle
+                                            handler:^(__unused UIAlertAction *action) {
+        UIViewController *presenter = weakController;
+        if (presenter == nil) return;
+        IQFOLEDSetEnabled(!currentlyEnabled, presenter);
+    }]];
+
+    [controller presentViewController:alert animated:YES completion:nil];
 }
 
 static id IQFOLEDCreateNativeRow(UIViewController *controller) {
@@ -415,7 +463,7 @@ static id IQFOLEDCreateNativeRow(UIViewController *controller) {
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *presenter = weakController;
             if (presenter == nil) return;
-            IQFOLEDToggleFromController(presenter);
+            IQFOLEDPresentControlMenu(presenter);
         });
     };
 
@@ -436,7 +484,10 @@ static void IQFOLEDInstallSettingsRow(UIViewController *controller) {
     if (sections.count == 0) return;
 
     if (IQFOLEDFindOwnRow(sections) != nil) {
-        objc_setAssociatedObject(controller, kIQFOLEDRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(controller,
+                                 kIQFOLEDRowInstalledKey,
+                                 @YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         IQFOLEDRefreshSettingsRow(controller);
         return;
     }
@@ -465,7 +516,6 @@ static void IQFOLEDInstallSettingsRow(UIViewController *controller) {
     NSMutableArray *updatedRows = [rows mutableCopy];
     NSUInteger insertionIndex = updatedRows.count;
 
-    // Prefer placing OLED after Cache; if Cache is absent, place it after Change Icon.
     for (NSUInteger i = 0; i < updatedRows.count; i++) {
         NSString *title = IQFOLEDRowTitle(updatedRows[i]);
         if ([title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"]) {
@@ -473,6 +523,7 @@ static void IQFOLEDInstallSettingsRow(UIViewController *controller) {
             break;
         }
     }
+
     if (insertionIndex == updatedRows.count) {
         for (NSUInteger i = 0; i < updatedRows.count; i++) {
             NSString *title = IQFOLEDRowTitle(updatedRows[i]);
@@ -487,10 +538,15 @@ static void IQFOLEDInstallSettingsRow(UIViewController *controller) {
 
     @try {
         [toolsSection setValue:[updatedRows copy] forKey:@"rows"];
-        objc_setAssociatedObject(controller, kIQFOLEDRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(controller,
+                                 kIQFOLEDRowInstalledKey,
+                                 @YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
         if ([controller isKindOfClass:UITableViewController.class]) {
             [((UITableViewController *)controller).tableView reloadData];
         }
+
         NSLog(@"[iQFaceOLED] linha Modo OLED adicionada (%@)", IQFOLEDStatusText());
     } @catch (__unused NSException *exception) {
         NSLog(@"[iQFaceOLED] não foi possível adicionar a linha; tela mantida intacta");
@@ -505,27 +561,29 @@ static void IQFOLEDSettingsViewDidAppear(UIViewController *self, SEL command, BO
 }
 
 static void IQFOLEDTryInstallSettingsHook(void) {
-    if (IQFOLEDSettingsHookInstalled) return;
+    if (gIQFOLEDSettingsHookInstalled) return;
 
-    IQFOLEDSettingsHookAttempts += 1;
+    gIQFOLEDSettingsHookAttempts += 1;
     Class target = NSClassFromString(@"IQFSettingsViewController");
+
     if (target != Nil) {
         SEL selector = @selector(viewDidAppear:);
         Method method = class_getInstanceMethod(target, selector);
+
         if (method != NULL) {
             IQFOLEDOriginalViewDidAppear = (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(method);
             const char *types = method_getTypeEncoding(method);
 
             if (IQFOLEDClassImplementsSelector(target, selector)) {
                 method_setImplementation(method, (IMP)&IQFOLEDSettingsViewDidAppear);
-                IQFOLEDSettingsHookInstalled = YES;
+                gIQFOLEDSettingsHookInstalled = YES;
             } else if (class_addMethod(target, selector, (IMP)&IQFOLEDSettingsViewDidAppear, types)) {
-                IQFOLEDSettingsHookInstalled = YES;
+                gIQFOLEDSettingsHookInstalled = YES;
             }
         }
     }
 
-    if (!IQFOLEDSettingsHookInstalled && IQFOLEDSettingsHookAttempts < 120) {
+    if (!gIQFOLEDSettingsHookInstalled && gIQFOLEDSettingsHookAttempts < 120) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             IQFOLEDTryInstallSettingsHook();
