@@ -1,0 +1,9 @@
+Package: com.lucaspedrosa.fbcachecleaner
+Name: FBCacheCleaner
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Conservative Facebook cache cleaner targeting only validated disposable cache directories.
+Maintainer: Lucas Pedrosa
+Author: Lucas Pedrosa
+Section: Tweaks
+Depends: firmware (>= 15.0)
