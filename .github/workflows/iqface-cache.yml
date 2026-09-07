@@ -34,6 +34,8 @@ jobs:
       - name: Build arm64 dylib
         run: |
           set -euo pipefail
+          grep -F "Serão removidos aproximadamente" Tweak.m
+          grep -F "Cache limpo" Tweak.m
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name iQFaceCache.dylib -print -quit)"
@@ -42,8 +44,6 @@ jobs:
           shasum -a 256 artifacts/iQFaceCache.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceCache.dylib
           strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache"
-          strings -a artifacts/iQFaceCache.dylib | grep -F "aproximadamente"
-          strings -a artifacts/iQFaceCache.dylib | grep -F "Cache limpo"
           if strings -a artifacts/iQFaceCache.dylib | grep -F "UILongPressGestureRecognizer"; then
             echo "Unexpected gesture recognizer in iQFaceCache"
             exit 1
