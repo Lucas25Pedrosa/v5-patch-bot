@@ -1,0 +1,9 @@
+Package: com.lucaspedrosa.fbcachediagnostic
+Name: FBCacheDiagnostic
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Read-only Facebook sandbox cache size diagnostic. Generates CSV/TXT reports and never deletes data.
+Maintainer: Lucas Pedrosa
+Author: Lucas Pedrosa
+Section: Tweaks
+Depends: firmware (>= 15.0)
