@@ -36,11 +36,11 @@ jobs:
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name iQFaceToggleProbe.dylib -print -quit)"
+          dylib_path="$(find .theos -type f -name iQFaceToggleProbe.dylib ! -path '*.dSYM/*' -print -quit)"
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQFaceToggleProbe.dylib
           shasum -a 256 artifacts/iQFaceToggleProbe.dylib > artifacts/SHA256SUMS.txt
-          file artifacts/iQFaceToggleProbe.dylib
+          file artifacts/iQFaceToggleProbe.dylib | grep -F "Mach-O 64-bit arm64 dynamically linked shared library"
           strings -a artifacts/iQFaceToggleProbe.dylib | grep -F "IQFSettingsViewController"
           strings -a artifacts/iQFaceToggleProbe.dylib | grep -F "iQFaceToggleProbe.txt"
 
