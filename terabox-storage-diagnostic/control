@@ -1,0 +1,9 @@
+Package: com.lucaspedrosa.teraboxstoragediagnostic
+Name: TeraBoxStorageDiagnostic
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Read-only TeraBox storage diagnostic that maps sandbox usage and writes TXT/CSV reports to Documents. Never deletes TeraBox data.
+Maintainer: Lucas Pedrosa
+Author: Lucas Pedrosa
+Section: Tweaks
+Depends: firmware (>= 15.0)
