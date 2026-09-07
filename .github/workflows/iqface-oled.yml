@@ -44,6 +44,8 @@ jobs:
           grep -F '@"Modo OLED"' Tweak.m
           grep -F '@"Ativado"' Tweak.m
           grep -F '@"Desativado"' Tweak.m
+          grep -F '@"Ativar"' Tweak.m
+          grep -F '@"Desativar"' Tweak.m
           grep -F 'iQFaceOLEDEnabled' Tweak.m
           strings -a artifacts/iQFaceOLED.dylib | grep -F "FBNewsFeedView"
           if strings -a artifacts/iQFaceOLED.dylib | grep -F "UILongPressGestureRecognizer"; then
@@ -54,6 +56,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceOLED-0.1.0-arm64
+          name: iQFaceOLED-0.1.1-arm64
           path: iqface-oled/artifacts/
           if-no-files-found: error
