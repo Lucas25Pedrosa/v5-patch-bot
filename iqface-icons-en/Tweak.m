@@ -115,6 +115,19 @@ static BOOL IQFIconsContainsContributorRow(NSArray *sections) {
     return NO;
 }
 
+static BOOL IQFIconsContainsIPAVaultRow(NSArray *sections) {
+    for (id section in sections) {
+        for (id row in IQFIconsSectionRows(section)) {
+            NSString *title = IQFIconsRowTitle(row);
+            NSString *detail = IQFIconsRowDetail(row);
+            if ([title isEqualToString:@"IPA Vault"] && [detail isEqualToString:@"IPA Souce"]) {
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
 static id IQFIconsCreateNativeValueRow(UIViewController *controller,
                                        NSString *title,
                                        NSString *icon,
@@ -157,6 +170,22 @@ static id IQFIconsCreateContributorRow(UIViewController *controller) {
                                         tapBlock);
 }
 
+static id IQFIconsCreateIPAVaultRow(UIViewController *controller) {
+    void (^tapBlock)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSURL *url = [NSURL URLWithString:@"https://t.me/ipavault"];
+            if (url == nil) return;
+            [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+        });
+    };
+
+    return IQFIconsCreateNativeValueRow(controller,
+                                        @"IPA Vault",
+                                        @"shippingbox.circle",
+                                        @"IPA Souce",
+                                        tapBlock);
+}
+
 static BOOL IQFIconsAppendNativeRow(id section, id row) {
     Class rowClass = NSClassFromString(@"IQFRow");
     NSArray *rows = IQFIconsSectionRows(section);
@@ -187,6 +216,7 @@ static void IQFIconsInstallRows(UIViewController *controller) {
 
     BOOL hasChangeIcon = IQFIconsContainsChangeIconRow(sections);
     BOOL hasContributor = IQFIconsContainsContributorRow(sections);
+    BOOL hasIPAVault = IQFIconsContainsIPAVaultRow(sections);
     BOOL changed = NO;
 
     if (!hasChangeIcon) {
@@ -203,10 +233,14 @@ static void IQFIconsInstallRows(UIViewController *controller) {
         }
     }
 
-    if (!hasContributor) {
-        id creditsSection = IQFIconsFindSection(sections, ^BOOL(NSString *header) {
+    id creditsSection = nil;
+    if (!hasContributor || !hasIPAVault) {
+        creditsSection = IQFIconsFindSection(sections, ^BOOL(NSString *header) {
             return IQFIconsIsCreditsHeader(header);
         });
+    }
+
+    if (!hasContributor) {
         if (creditsSection != nil) {
             id contributorRow = IQFIconsCreateContributorRow(controller);
             if (IQFIconsAppendNativeRow(creditsSection, contributorRow)) {
@@ -219,11 +253,24 @@ static void IQFIconsInstallRows(UIViewController *controller) {
         }
     }
 
+    if (!hasIPAVault) {
+        if (creditsSection != nil) {
+            id ipaVaultRow = IQFIconsCreateIPAVaultRow(controller);
+            if (IQFIconsAppendNativeRow(creditsSection, ipaVaultRow)) {
+                hasIPAVault = YES;
+                changed = YES;
+                NSLog(@"[iQFaceIcons] IPA Vault credit added");
+            }
+        } else {
+            NSLog(@"[iQFaceIcons] credits section not found; leaving IPA Vault credit untouched");
+        }
+    }
+
     if (changed && [controller isKindOfClass:UITableViewController.class]) {
         [((UITableViewController *)controller).tableView reloadData];
     }
 
-    if (hasChangeIcon && hasContributor) {
+    if (hasChangeIcon && hasContributor && hasIPAVault) {
         objc_setAssociatedObject(controller, IQFIconsRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
