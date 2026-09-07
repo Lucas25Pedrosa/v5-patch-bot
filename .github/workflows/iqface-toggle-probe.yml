@@ -50,7 +50,11 @@ jobs:
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQFaceToggleProbe.dylib
           shasum -a 256 artifacts/iQFaceToggleProbe.dylib > artifacts/SHA256SUMS.txt
-          file artifacts/iQFaceToggleProbe.dylib | grep -F "Mach-O 64-bit arm64 dynamically linked shared library"
+          file_info="$(file artifacts/iQFaceToggleProbe.dylib)"
+          echo "$file_info"
+          echo "$file_info" | grep -F "Mach-O 64-bit"
+          echo "$file_info" | grep -F "arm64"
+          echo "$file_info" | grep -F "dynamically linked shared library"
           strings -a artifacts/iQFaceToggleProbe.dylib | grep -F "IQFSettingsViewController"
           strings -a artifacts/iQFaceToggleProbe.dylib | grep -F "iQFaceToggleProbe.txt"
 
