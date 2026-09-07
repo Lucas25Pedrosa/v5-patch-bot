@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := FBCacheDiagnostic
 FBCacheDiagnostic_FILES := FBCacheDiagnostic.m
-FBCacheDiagnostic_FRAMEWORKS := Foundation
+FBCacheDiagnostic_FRAMEWORKS := Foundation UIKit
 FBCacheDiagnostic_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 
 include $(THEOS_MAKE_PATH)/tweak.mk
