@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Theos
         run: |
@@ -36,14 +36,35 @@ jobs:
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name iQFaceIcons.dylib -print -quit)"
+
+          dylib_path=""
+          while IFS= read -r candidate; do
+            if file "$candidate" | grep -q "dynamically linked shared library"; then
+              dylib_path="$candidate"
+              break
+            fi
+          done < <(find .theos -name iQFaceIcons.dylib -print)
+
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQFaceIcons.dylib
           shasum -a 256 artifacts/iQFaceIcons.dylib > artifacts/SHA256SUMS.txt
-          file artifacts/iQFaceIcons.dylib
+
+          file_info="$(file artifacts/iQFaceIcons.dylib)"
+          echo "$file_info"
+          echo "$file_info" | grep -F "Mach-O 64-bit"
+          echo "$file_info" | grep -F "arm64"
+          echo "$file_info" | grep -F "dynamically linked shared library"
+
           strings -a artifacts/iQFaceIcons.dylib | grep -F "Change Icon"
           strings -a artifacts/iQFaceIcons.dylib | grep -F "Close"
           strings -a artifacts/iQFaceIcons.dylib | grep -F "Default"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "Lucas"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "Contributor"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "https://t.me/lucaspedrosa"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "IPA Vault"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "IPA Souce"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "https://t.me/ipavault"
+
           if strings -a artifacts/iQFaceIcons.dylib | grep -F "alternateIconName"; then
             echo "Unexpected alternateIconName reference in final sideload build"
             exit 1
@@ -56,6 +77,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceIcons-1.0.0-English-arm64
+          name: iQFaceIcons-1.0.1-English-Contributors-arm64
           path: iqface-icons-en/artifacts/
           if-no-files-found: error
