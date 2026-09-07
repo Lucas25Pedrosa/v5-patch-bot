@@ -14,41 +14,15 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     "// iQFaceOLED 0.1.1",
-    "// iQFaceOLED 0.1.3",
+    "// iQFaceOLED 0.1.4",
     "version",
 )
 
 replace_once(
-    "#import <math.h>\n",
-    "#import <math.h>\n\nextern void IQFOLEDPresentModePickerFromViewController(UIViewController *presenter);\n",
-    "picker declaration",
+    "static NSString *IQFOLEDStatusText(void) {",
+    "__attribute__((unused)) static NSString *IQFOLEDStatusText(void) {",
+    "legacy status text",
 )
-
-set_enabled_block = '''static void IQFOLEDSetEnabled(BOOL enabled, UIViewController *controller) {
-    if (gIQFOLEDEnabled == enabled) return;
-
-    gIQFOLEDEnabled = enabled;
-    IQFOLEDSaveEnabledPreference(enabled);
-
-    UISelectionFeedbackGenerator *feedback = [UISelectionFeedbackGenerator new];
-    [feedback selectionChanged];
-
-    IQFOLEDRefreshSettingsRow(controller);
-    IQFOLEDRunPass();
-}
-'''
-
-set_enabled_with_api = set_enabled_block + '''
-BOOL IQFOLEDGetEnabled(void) {
-    return gIQFOLEDEnabled;
-}
-
-void IQFOLEDSetEnabledFromPicker(BOOL enabled) {
-    IQFOLEDSetEnabled(enabled, nil);
-}
-'''
-
-replace_once(set_enabled_block, set_enabled_with_api, "picker engine API")
 
 replace_once(
     "static void IQFOLEDPresentControlMenu(UIViewController *controller) {",
@@ -56,19 +30,56 @@ replace_once(
     "legacy alert",
 )
 
-replace_once(
-    "            IQFOLEDPresentControlMenu(presenter);",
-    "            IQFOLEDPresentModePickerFromViewController(presenter);",
-    "row tap",
-)
+old_create_row = '''static id IQFOLEDCreateNativeRow(UIViewController *controller) {
+    SEL selector = NSSelectorFromString(@"valueRowWithTitle:icon:detail:tap:");
+    if (controller == nil || ![controller respondsToSelector:selector]) return nil;
 
-replace_once(
-    '''                   IQFOLEDStatusText(),
-                   [tapBlock copy]);''',
-    '''                   @"",
-                   [tapBlock copy]);''',
-    "static row detail",
-)
+    __weak UIViewController *weakController = controller;
+    void (^tapBlock)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *presenter = weakController;
+            if (presenter == nil) return;
+            IQFOLEDPresentControlMenu(presenter);
+        });
+    };
+
+    typedef id (*IQFOLEDNativeRowBuilder)(id, SEL, id, id, id, id);
+    IQFOLEDNativeRowBuilder builder = (IQFOLEDNativeRowBuilder)(void *)objc_msgSend;
+    return builder(controller,
+                   selector,
+                   @"Modo OLED",
+                   @"circle.lefthalf.filled",
+                   IQFOLEDStatusText(),
+                   [tapBlock copy]);
+}
+'''
+
+new_create_row = '''static id IQFOLEDCreateNativeRow(UIViewController *controller) {
+    SEL selector = NSSelectorFromString(@"rowWithTitle:icon:key:def:onChange:");
+    if (controller == nil || ![controller respondsToSelector:selector]) return nil;
+
+    // The native iQFace row owns the UISwitch and the preference key.  Keep the
+    // callback argument-free so it remains ABI-safe whether iQFace invokes the
+    // block with no explicit argument or supplies the new switch state.
+    void (^onChange)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            IQFOLEDSetEnabled(!gIQFOLEDEnabled, nil);
+        });
+    };
+
+    typedef id (*IQFOLEDNativeToggleBuilder)(id, SEL, id, id, id, BOOL, id);
+    IQFOLEDNativeToggleBuilder builder = (IQFOLEDNativeToggleBuilder)(void *)objc_msgSend;
+    return builder(controller,
+                   selector,
+                   @"Modo OLED",
+                   @"circle.lefthalf.filled",
+                   IQFOLEDPreferenceKey,
+                   gIQFOLEDEnabled,
+                   [onChange copy]);
+}
+'''
+
+replace_once(old_create_row, new_create_row, "native toggle row")
 
 replace_once(
     '''        IQFOLEDRefreshSettingsRow(controller);
@@ -84,4 +95,4 @@ replace_once(
 )
 
 path.write_text(text, encoding="utf-8")
-print("Prepared iQFaceOLED 0.1.3 from validated 0.1.1 base")
+print("Prepared iQFaceOLED 0.1.4 native iQFace toggle from validated 0.1.1 base")
