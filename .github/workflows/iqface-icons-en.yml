@@ -31,6 +31,10 @@ jobs:
         run: |
           brew install ldid
 
+      - name: Correct IPA Source credit
+        run: |
+          python3 prepare_ipa_source.py
+
       - name: Build arm64 dylib
         run: |
           set -euo pipefail
@@ -62,9 +66,13 @@ jobs:
           strings -a artifacts/iQFaceIcons.dylib | grep -F "Contributor"
           strings -a artifacts/iQFaceIcons.dylib | grep -F "https://t.me/lucaspedrosa"
           strings -a artifacts/iQFaceIcons.dylib | grep -F "IPA Vault"
-          strings -a artifacts/iQFaceIcons.dylib | grep -F "IPA Souce"
+          strings -a artifacts/iQFaceIcons.dylib | grep -F "IPA Source"
           strings -a artifacts/iQFaceIcons.dylib | grep -F "https://t.me/ipavault"
 
+          if strings -a artifacts/iQFaceIcons.dylib | grep -F "IPA Souce"; then
+            echo "Unexpected misspelled IPA Souce string in final build"
+            exit 1
+          fi
           if strings -a artifacts/iQFaceIcons.dylib | grep -F "alternateIconName"; then
             echo "Unexpected alternateIconName reference in final sideload build"
             exit 1
@@ -77,6 +85,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceIcons-1.0.1-English-Contributors-arm64
+          name: iQFaceIcons-1.0.2-English-Contributors-arm64
           path: iqface-icons-en/artifacts/
           if-no-files-found: error
