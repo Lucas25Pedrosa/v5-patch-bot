@@ -60,7 +60,7 @@ jobs:
           file artifacts/iQFaceCache.dylib
           strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache"
           strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache automaticamente"
-          strings -a artifacts/iQFaceCache.dylib | grep -F "Beta 2"
+          strings -a artifacts/iQFaceCache.dylib | grep -F "Automatic cleaning"
           if strings -a artifacts/iQFaceCache.dylib | grep -F "UILongPressGestureRecognizer"; then
             echo "Unexpected gesture recognizer in iQFaceCache"
             exit 1
