@@ -9,10 +9,8 @@
 //   Library/Caches/com.facebook.Facebook.MosaicIGImageDiskCache
 // It never touches Documents, Application Support, Cookies, Preferences, or Keychain.
 //
-// Beta automatic-cleaning test intervals:
-//   Diariamente  -> 1 minute
-//   Semanalmente -> 3 minutes
-//   Mensalmente  -> 5 minutes
+// Beta automatic-cleaning test interval:
+//   Any enabled automatic mode -> 1 hour
 //
 // The production build will restore 24 h / 7 d / 30 d and disable automatic alerts.
 
@@ -153,11 +151,13 @@ static UIViewController *FBCCTopViewController(void) {
 
 static NSTimeInterval FBCCIntervalForMode(FBCCAutoMode mode) {
     switch (mode) {
-        case FBCCAutoModeDaily:   return 60.0;
-        case FBCCAutoModeWeekly:  return 180.0;
-        case FBCCAutoModeMonthly: return 300.0;
+        case FBCCAutoModeDaily:
+        case FBCCAutoModeWeekly:
+        case FBCCAutoModeMonthly:
+            return 3600.0;
         case FBCCAutoModeNever:
-        default:                  return 0.0;
+        default:
+            return 0.0;
     }
 }
 
@@ -173,11 +173,13 @@ static NSString *FBCCModeName(FBCCAutoMode mode) {
 
 static NSString *FBCCTestIntervalName(FBCCAutoMode mode) {
     switch (mode) {
-        case FBCCAutoModeDaily:   return @"1 minuto";
-        case FBCCAutoModeWeekly:  return @"3 minutos";
-        case FBCCAutoModeMonthly: return @"5 minutos";
+        case FBCCAutoModeDaily:
+        case FBCCAutoModeWeekly:
+        case FBCCAutoModeMonthly:
+            return @"1 hora";
         case FBCCAutoModeNever:
-        default:                  return @"desativado";
+        default:
+            return @"desativado";
     }
 }
 
@@ -350,7 +352,7 @@ static NSString *FBCCTestIntervalName(FBCCAutoMode mode) {
     if (!vc) return;
 
     FBCCAutoMode selected = [self automaticMode];
-    NSString *message = @"Intervalos reduzidos somente para este beta.\n\nNa versão final: 24 horas, 7 dias e 30 dias.";
+    NSString *message = @"Para facilitar o teste, qualquer opção automática ativa executa a limpeza a cada 1 hora neste beta.\n\nNa versão final: 24 horas, 7 dias e 30 dias.";
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Limpar cache automaticamente"
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
