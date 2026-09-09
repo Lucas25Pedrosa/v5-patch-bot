@@ -36,6 +36,8 @@ jobs:
           set -euo pipefail
           grep -F "Serão removidos aproximadamente" Tweak.m
           grep -F "Cache limpo" Tweak.m
+          grep -F "Limpar cache automaticamente" Tweak.m
+          grep -F "3600.0" Tweak.m
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name iQFaceCache.dylib -print -quit)"
@@ -44,6 +46,7 @@ jobs:
           shasum -a 256 artifacts/iQFaceCache.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceCache.dylib
           strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache"
+          strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache automaticamente"
           if strings -a artifacts/iQFaceCache.dylib | grep -F "UILongPressGestureRecognizer"; then
             echo "Unexpected gesture recognizer in iQFaceCache"
             exit 1
@@ -52,6 +55,7 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceCache-0.1.0-arm64
+          name: iQFaceCache-0.2.0-beta1-arm64
           path: iqface-cache/artifacts/
           if-no-files-found: error
+          retention-days: 3
