@@ -2,14 +2,30 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-// FBCacheCleaner 0.1.0
+// FBCacheCleaner 0.2.0-beta1
 // Conservative cleaner based on FBCacheDiagnostic results from Facebook 577.1.0.
 // It ONLY clears the contents of these validated cache directories:
 //   Library/Caches/cask
 //   Library/Caches/com.facebook.Facebook.MosaicIGImageDiskCache
 // It never touches Documents, Application Support, Cookies, Preferences, or Keychain.
+//
+// Beta automatic-cleaning test intervals:
+//   Diariamente  -> 1 minute
+//   Semanalmente -> 3 minutes
+//   Mensalmente  -> 5 minutes
+//
+// The production build will restore 24 h / 7 d / 30 d and disable automatic alerts.
 
 static const void *kFBCCGestureKey = &kFBCCGestureKey;
+static NSString * const kFBCCAutoModeKey = @"FBCacheCleaner.AutoMode";
+static NSString * const kFBCCLastAutoCleanKey = @"FBCacheCleaner.LastAutoClean";
+
+typedef NS_ENUM(NSInteger, FBCCAutoMode) {
+    FBCCAutoModeNever = 0,
+    FBCCAutoModeDaily = 1,
+    FBCCAutoModeWeekly = 2,
+    FBCCAutoModeMonthly = 3,
+};
 
 static NSString *FBCCHumanBytes(unsigned long long bytes) {
     static NSArray<NSString *> *units;
@@ -75,7 +91,9 @@ static NSUInteger FBCCClearContentsOfDirectory(NSString *path, NSMutableArray<NS
     NSError *listError = nil;
     NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:path error:&listError];
     if (!children) {
-        if (listError) [errors addObject:[NSString stringWithFormat:@"%@ — %@", path.lastPathComponent, listError.localizedDescription]];
+        if (listError) {
+            [errors addObject:[NSString stringWithFormat:@"%@ — %@", path.lastPathComponent, listError.localizedDescription]];
+        }
         return 0;
     }
 
@@ -133,15 +151,76 @@ static UIViewController *FBCCTopViewController(void) {
     return vc;
 }
 
+static NSTimeInterval FBCCIntervalForMode(FBCCAutoMode mode) {
+    switch (mode) {
+        case FBCCAutoModeDaily:   return 60.0;
+        case FBCCAutoModeWeekly:  return 180.0;
+        case FBCCAutoModeMonthly: return 300.0;
+        case FBCCAutoModeNever:
+        default:                  return 0.0;
+    }
+}
+
+static NSString *FBCCModeName(FBCCAutoMode mode) {
+    switch (mode) {
+        case FBCCAutoModeDaily:   return @"Diariamente";
+        case FBCCAutoModeWeekly:  return @"Semanalmente";
+        case FBCCAutoModeMonthly: return @"Mensalmente";
+        case FBCCAutoModeNever:
+        default:                  return @"Nunca";
+    }
+}
+
+static NSString *FBCCTestIntervalName(FBCCAutoMode mode) {
+    switch (mode) {
+        case FBCCAutoModeDaily:   return @"1 minuto";
+        case FBCCAutoModeWeekly:  return @"3 minutos";
+        case FBCCAutoModeMonthly: return @"5 minutos";
+        case FBCCAutoModeNever:
+        default:                  return @"desativado";
+    }
+}
+
 @interface FBCacheCleanerController : NSObject
+@property (nonatomic, strong) NSTimer *autoTimer;
+@property (nonatomic, assign) BOOL cleaningInProgress;
 @end
 
 @implementation FBCacheCleanerController
 
-- (void)showResultWithBefore:(unsigned long long)before
-                       after:(unsigned long long)after
-                     removed:(NSUInteger)removed
-                      errors:(NSArray<NSString *> *)errors {
+- (FBCCAutoMode)automaticMode {
+    NSInteger value = [[NSUserDefaults standardUserDefaults] integerForKey:kFBCCAutoModeKey];
+    if (value < FBCCAutoModeNever || value > FBCCAutoModeMonthly) return FBCCAutoModeNever;
+    return (FBCCAutoMode)value;
+}
+
+- (void)setAutomaticMode:(FBCCAutoMode)mode {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setInteger:mode forKey:kFBCCAutoModeKey];
+
+    if (mode == FBCCAutoModeNever) {
+        [defaults removeObjectForKey:kFBCCLastAutoCleanKey];
+    } else {
+        // Start the beta countdown from the moment the option is selected.
+        [defaults setDouble:[[NSDate date] timeIntervalSince1970] forKey:kFBCCLastAutoCleanKey];
+    }
+
+    [self startAutomaticTimerIfNeeded];
+}
+
+- (NSTimeInterval)lastAutomaticCleaningTime {
+    return [[NSUserDefaults standardUserDefaults] doubleForKey:kFBCCLastAutoCleanKey];
+}
+
+- (void)markAutomaticCleaningNow {
+    [[NSUserDefaults standardUserDefaults] setDouble:[[NSDate date] timeIntervalSince1970]
+                                             forKey:kFBCCLastAutoCleanKey];
+}
+
+- (void)showManualResultWithBefore:(unsigned long long)before
+                             after:(unsigned long long)after
+                           removed:(NSUInteger)removed
+                            errors:(NSArray<NSString *> *)errors {
     unsigned long long freed = before > after ? before - after : 0;
     NSString *message;
     if (errors.count == 0) {
@@ -163,7 +242,36 @@ static UIViewController *FBCCTopViewController(void) {
     });
 }
 
-- (void)performCleaning {
+- (void)showAutomaticBetaResultWithBefore:(unsigned long long)before
+                                     after:(unsigned long long)after
+                                   removed:(NSUInteger)removed
+                                    errors:(NSArray<NSString *> *)errors {
+    unsigned long long freed = before > after ? before - after : 0;
+    NSString *message;
+
+    if (errors.count == 0) {
+        message = [NSString stringWithFormat:@"A limpeza automática foi realizada.\n\nLiberado: %@\nRestante: %@",
+                   FBCCHumanBytes(freed), FBCCHumanBytes(after)];
+    } else {
+        message = [NSString stringWithFormat:@"A limpeza automática foi executada com %lu falha(s).\n\nLiberado: %@\nRestante: %@\nItens removidos: %lu",
+                   (unsigned long)errors.count, FBCCHumanBytes(freed), FBCCHumanBytes(after), (unsigned long)removed];
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *vc = FBCCTopViewController();
+        if (!vc) return;
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Limpeza automática — Beta"
+                                                                       message:message
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [vc presentViewController:alert animated:YES completion:nil];
+    });
+}
+
+- (void)performCleaningAutomatic:(BOOL)automatic {
+    if (self.cleaningInProgress) return;
+    self.cleaningInProgress = YES;
+
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         unsigned long long before = FBCCTotalTargetSize();
         NSMutableArray<NSString *> *errors = [NSMutableArray array];
@@ -174,38 +282,141 @@ static UIViewController *FBCCTopViewController(void) {
         }
 
         unsigned long long after = FBCCTotalTargetSize();
-        NSLog(@"[FBCacheCleaner] before=%llu after=%llu freed=%llu removed=%lu errors=%lu",
-              before, after, (before > after ? before - after : 0), (unsigned long)removed, (unsigned long)errors.count);
-        [self showResultWithBefore:before after:after removed:removed errors:errors];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (automatic) {
+                [self markAutomaticCleaningNow];
+                [self showAutomaticBetaResultWithBefore:before after:after removed:removed errors:errors];
+            } else {
+                [self showManualResultWithBefore:before after:after removed:removed errors:errors];
+            }
+            self.cleaningInProgress = NO;
+        });
     });
+}
+
+- (void)checkAutomaticCleaning {
+    FBCCAutoMode mode = [self automaticMode];
+    NSTimeInterval interval = FBCCIntervalForMode(mode);
+    if (interval <= 0.0 || self.cleaningInProgress) return;
+
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    NSTimeInterval last = [self lastAutomaticCleaningTime];
+
+    if (last <= 0.0) {
+        [self markAutomaticCleaningNow];
+        return;
+    }
+
+    if ((now - last) >= interval) {
+        [self performCleaningAutomatic:YES];
+    }
+}
+
+- (void)automaticTimerFired:(NSTimer *)timer {
+    (void)timer;
+    [self checkAutomaticCleaning];
+}
+
+- (void)startAutomaticTimerIfNeeded {
+    [self.autoTimer invalidate];
+    self.autoTimer = nil;
+
+    if ([self automaticMode] == FBCCAutoModeNever) return;
+
+    NSTimer *timer = [NSTimer timerWithTimeInterval:5.0
+                                             target:self
+                                           selector:@selector(automaticTimerFired:)
+                                           userInfo:nil
+                                            repeats:YES];
+    self.autoTimer = timer;
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+
+    [self checkAutomaticCleaning];
+}
+
+- (NSString *)actionTitleForMode:(FBCCAutoMode)mode selected:(FBCCAutoMode)selected {
+    NSString *base;
+    if (mode == FBCCAutoModeNever) {
+        base = @"Nunca";
+    } else {
+        base = [NSString stringWithFormat:@"%@ — %@ no beta", FBCCModeName(mode), FBCCTestIntervalName(mode)];
+    }
+    return mode == selected ? [NSString stringWithFormat:@"✓ %@", base] : base;
+}
+
+- (void)showAutomaticSettings {
+    UIViewController *vc = FBCCTopViewController();
+    if (!vc) return;
+
+    FBCCAutoMode selected = [self automaticMode];
+    NSString *message = @"Intervalos reduzidos somente para este beta.\n\nNa versão final: 24 horas, 7 dias e 30 dias.";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Limpar cache automaticamente"
+                                                                   message:message
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+
+    __weak typeof(self) weakSelf = self;
+    NSArray<NSNumber *> *modes = @[@(FBCCAutoModeNever), @(FBCCAutoModeDaily), @(FBCCAutoModeWeekly), @(FBCCAutoModeMonthly)];
+    for (NSNumber *number in modes) {
+        FBCCAutoMode mode = (FBCCAutoMode)number.integerValue;
+        NSString *title = [self actionTitleForMode:mode selected:selected];
+        [alert addAction:[UIAlertAction actionWithTitle:title
+                                                     style:UIAlertActionStyleDefault
+                                                   handler:^(__unused UIAlertAction *action) {
+            [weakSelf setAutomaticMode:mode];
+        }]];
+    }
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar" style:UIAlertActionStyleCancel handler:nil]];
+
+    UIPopoverPresentationController *popover = alert.popoverPresentationController;
+    if (popover) {
+        popover.sourceView = vc.view;
+        popover.sourceRect = CGRectMake(CGRectGetMidX(vc.view.bounds), CGRectGetMidY(vc.view.bounds), 1.0, 1.0);
+        popover.permittedArrowDirections = 0;
+    }
+
+    [vc presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)showCleaner {
     unsigned long long cask = FBCCDirectorySize(FBCCTargetPaths()[0]);
     unsigned long long mosaic = FBCCDirectorySize(FBCCTargetPaths()[1]);
     unsigned long long total = cask + mosaic;
+    FBCCAutoMode mode = [self automaticMode];
+
+    NSString *autoText = mode == FBCCAutoModeNever
+        ? @"Nunca"
+        : [NSString stringWithFormat:@"%@ (%@ no beta)", FBCCModeName(mode), FBCCTestIntervalName(mode)];
 
     NSString *message = [NSString stringWithFormat:
                          @"Cache seguro detectado: %@\n\n"
                           "cask: %@\n"
                           "Mosaic Image Cache: %@\n\n"
-                          "Serão apagados SOMENTE os conteúdos dessas duas pastas.\n\n"
-                          "Documents, Application Support, Cookies, Preferences e Keychain permanecem intactos.",
-                         FBCCHumanBytes(total), FBCCHumanBytes(cask), FBCCHumanBytes(mosaic)];
+                          "Limpeza automática: %@\n\n"
+                          "Serão apagados SOMENTE os conteúdos dessas duas pastas.",
+                         FBCCHumanBytes(total), FBCCHumanBytes(cask), FBCCHumanBytes(mosaic), autoText];
 
     UIViewController *vc = FBCCTopViewController();
     if (!vc) return;
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Limpar cache do Facebook"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FBCacheCleaner Beta"
                                                                    message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar" style:UIAlertActionStyleCancel handler:nil]];
+
     __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"Limpar cache"
+    [alert addAction:[UIAlertAction actionWithTitle:@"Limpar cache agora"
                                              style:UIAlertActionStyleDestructive
                                            handler:^(__unused UIAlertAction *action) {
-        [weakSelf performCleaning];
+        [weakSelf performCleaningAutomatic:NO];
     }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Limpeza automática (Beta)"
+                                             style:UIAlertActionStyleDefault
+                                           handler:^(__unused UIAlertAction *action) {
+        [weakSelf showAutomaticSettings];
+    }]];
+
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
@@ -226,8 +437,12 @@ static UIViewController *FBCCTopViewController(void) {
         gesture.cancelsTouchesInView = NO;
         [window addGestureRecognizer:gesture];
         objc_setAssociatedObject(window, kFBCCGestureKey, gesture, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[FBCacheCleaner] 0.1.0 ready — three-finger long press enabled");
     });
+}
+
+- (void)applicationBecameActive {
+    [self attachGestureIfNeeded];
+    [self startAutomaticTimerIfNeeded];
 }
 
 @end
@@ -237,7 +452,7 @@ static FBCacheCleanerController *gFBCCController;
 static void FBCCAppBecameActive(NSNotification *note) {
     (void)note;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [gFBCCController attachGestureIfNeeded];
+        [gFBCCController applicationBecameActive];
     });
 }
 
@@ -254,6 +469,5 @@ static void FBCacheCleanerInit(void) {
                                                       usingBlock:^(NSNotification *note) {
             FBCCAppBecameActive(note);
         }];
-        NSLog(@"[FBCacheCleaner] 0.1.0 loaded");
     }
 }
