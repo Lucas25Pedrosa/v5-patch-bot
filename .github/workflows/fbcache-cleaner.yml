@@ -43,6 +43,7 @@ jobs:
       - name: Upload FBCacheCleaner dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBCacheCleaner-0.1.0-arm64
+          name: FBCacheCleaner-0.2.0-beta1-arm64
           path: fbcache-cleaner/artifacts/
           if-no-files-found: error
+          retention-days: 3
