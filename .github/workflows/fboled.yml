@@ -29,6 +29,19 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
+      - name: Validate avatar fix scope
+        run: |
+          set -euo pipefail
+          grep -F 'FBOLED 0.2.1' FBOLED.m
+          grep -F 'FBOLEDReinforceAvatarClip' FBOLED.m
+          grep -F '_FBMaskedRoundedCornerView' FBOLED.m
+          grep -F 'MRCImageComponentView' FBOLED.m
+          grep -F 'MRCAnimatedImageView' FBOLED.m
+          if grep -E 'MSHook|class_replaceMethod|method_setImplementation|rebind_symbols' FBOLED.m; then
+            echo "Unexpected new hook mechanism found"
+            exit 1
+          fi
+
       - name: Build FBOLED dylib
         run: |
           set -euo pipefail
@@ -38,11 +51,15 @@ jobs:
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/FBOLED.dylib
           file artifacts/FBOLED.dylib
+          otool -L artifacts/FBOLED.dylib | tee artifacts/dependencies.txt
+          strings artifacts/FBOLED.dylib | grep -F 'FBPassthroughView'
+          strings artifacts/FBOLED.dylib | grep -F '_FBMaskedRoundedCornerView'
           shasum -a 256 artifacts/FBOLED.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload FBOLED dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBOLED-0.2.0-arm64
+          name: FBOLED-0.2.1-avatarfix-arm64
           path: fboled/artifacts/
           if-no-files-found: error
+          retention-days: 90
