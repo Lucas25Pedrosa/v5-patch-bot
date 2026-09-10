@@ -14,7 +14,7 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     "// iQFaceOLED 0.1.1",
-    "// iQFaceOLED 0.1.5",
+    "// iQFaceOLED 0.1.6",
     "version",
 )
 
@@ -206,5 +206,57 @@ replace_once(
     "existing row path",
 )
 
+old_insertion = '''    NSMutableArray *updatedRows = [rows mutableCopy];
+    NSUInteger insertionIndex = updatedRows.count;
+
+    for (NSUInteger i = 0; i < updatedRows.count; i++) {
+        NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+        if ([title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"]) {
+            insertionIndex = i + 1;
+            break;
+        }
+    }
+
+    if (insertionIndex == updatedRows.count) {
+        for (NSUInteger i = 0; i < updatedRows.count; i++) {
+            NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+            if ([title isEqualToString:@"Alterar ícone"] || [title isEqualToString:@"Change Icon"]) {
+                insertionIndex = i + 1;
+                break;
+            }
+        }
+    }
+'''
+
+new_insertion = '''    NSMutableArray *updatedRows = [rows mutableCopy];
+    NSUInteger insertionIndex = updatedRows.count;
+
+    // Keep OLED visually separate from the two cache controls. Prefer placing
+    // it immediately after Change Icon / Alterar ícone.
+    for (NSUInteger i = 0; i < updatedRows.count; i++) {
+        NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+        if ([title isEqualToString:@"Alterar ícone"] || [title isEqualToString:@"Change Icon"]) {
+            insertionIndex = i + 1;
+            break;
+        }
+    }
+
+    // Fallback: if the icon row is unavailable, place OLED before the first
+    // cache row rather than between manual and automatic cache controls.
+    if (insertionIndex == updatedRows.count) {
+        for (NSUInteger i = 0; i < updatedRows.count; i++) {
+            NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+            if ([title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"] ||
+                [title isEqualToString:@"Limpar cache automaticamente"] ||
+                [title isEqualToString:@"Clear cache automatically"]) {
+                insertionIndex = i;
+                break;
+            }
+        }
+    }
+'''
+
+replace_once(old_insertion, new_insertion, "OLED settings row placement")
+
 path.write_text(text, encoding="utf-8")
-print("Prepared iQFaceOLED 0.1.5 with native iQFace toggle and validated avatar fix")
+print("Prepared iQFaceOLED 0.1.6 with avatar fix and OLED row after Change Icon")
