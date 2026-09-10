@@ -53,8 +53,9 @@ jobs:
           cp "$dylib_path" artifacts/FBOLED.dylib
           file artifacts/FBOLED.dylib
           otool -L artifacts/FBOLED.dylib | tee artifacts/dependencies.txt
-          strings artifacts/FBOLED.dylib | grep -F 'FBOLEDIsUnmaskedAvatarVariant'
           strings artifacts/FBOLED.dylib | grep -F '_FBMaskedRoundedCornerView'
+          strings artifacts/FBOLED.dylib | grep -F 'MRCImageComponentView'
+          strings artifacts/FBOLED.dylib | grep -F 'MRCAnimatedImageView'
           shasum -a 256 artifacts/FBOLED.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload FBOLED dylib
