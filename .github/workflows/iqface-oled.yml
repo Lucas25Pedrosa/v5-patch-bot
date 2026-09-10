@@ -31,9 +31,25 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Prepare 0.1.6 from validated 0.1.1 base
+      - name: Prepare 0.1.7 from validated 0.1.6
         run: |
+          set -euo pipefail
           python3 prepare_oled.py
+          python3 prepare_separator.py
+
+      - name: Validate separator scope
+        run: |
+          set -euo pipefail
+          grep -F '// iQFaceOLED 0.1.7' Tweak.m
+          grep -F 'FBLineComponentInternalView' Tweak.m
+          grep -F 'iQFaceOLEDFeedSeparatorsEnabled' Tweak.m
+          grep -F '@"Mostrar separadores no feed"' Tweak.m
+          grep -F 'colorWithWhite:1.0 alpha:0.14' Tweak.m
+          grep -F 'IQFOLEDUpdateFeedSeparator' Tweak.m
+          if grep -E 'MSHook|method_exchangeImplementations|method_setImplementation|class_replaceMethod|class_addMethod|rebind_symbols' prepare_separator.py; then
+            echo "Unexpected new hook/interception mechanism in separator preparation"
+            exit 1
+          fi
 
       - name: Build and validate arm64 dylib
         run: |
@@ -59,39 +75,36 @@ jobs:
           echo "$file_info" | grep -F "arm64"
           echo "$file_info" | grep -F "dynamically linked shared library"
 
-          grep -F '// iQFaceOLED 0.1.6' Tweak.m
+          # Existing OLED control and avatar fix must remain intact.
           grep -F 'rowWithTitle:icon:key:def:onChange:' Tweak.m
           grep -F 'IQFOLEDPreferenceKey' Tweak.m
           grep -F 'IQFOLEDSetEnabled(!gIQFOLEDEnabled, nil);' Tweak.m
           grep -F 'iQFaceOLEDEnabled' Tweak.m
-
-          # OLED row placement: after Change Icon, before cache controls.
-          grep -F 'Keep OLED visually separate from the two cache controls' Tweak.m
-          grep -F 'Alterar ícone' Tweak.m
-          grep -F 'Limpar cache automaticamente' Tweak.m
-
-          # Validated avatar fix from FBOLED 0.2.2.
           grep -F 'IQFOLEDIsUnmaskedAvatarVariant' Tweak.m
           grep -F 'IQFOLEDUpdateAvatarClip' Tweak.m
           grep -F '_FBMaskedRoundedCornerView' Tweak.m
           grep -F 'MRCImageComponentView' Tweak.m
           grep -F 'MRCAnimatedImageView' Tweak.m
 
+          # OLED row remains after Change Icon; separator row follows OLED.
+          grep -F 'Keep OLED visually separate from the two cache controls' Tweak.m
+          grep -F 'IQFOLEDCreateSeparatorRow' Tweak.m
+          grep -F 'oledIndex + 1' Tweak.m
+
           strings -a artifacts/iQFaceOLED.dylib | grep -F "FBNewsFeedView"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "Modo OLED"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "rowWithTitle:icon:key:def:onChange:"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDEnabled"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "Mostrar separadores no feed"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDFeedSeparatorsEnabled"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "FBLineComponentInternalView"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "FBPassthroughView"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "_FBMaskedRoundedCornerView"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "MRCImageComponentView"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "MRCAnimatedImageView"
 
           if strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFOLEDModePickerController"; then
-            echo "Unexpected legacy OLED picker in iQFaceOLED 0.1.6"
+            echo "Unexpected legacy OLED picker in iQFaceOLED 0.1.7"
             exit 1
           fi
           if strings -a artifacts/iQFaceOLED.dylib | grep -F "valueRowWithTitle:icon:detail:tap:"; then
-            echo "Unexpected legacy value row in iQFaceOLED 0.1.6"
+            echo "Unexpected legacy value row in iQFaceOLED 0.1.7"
             exit 1
           fi
           if strings -a artifacts/iQFaceOLED.dylib | grep -F "UILongPressGestureRecognizer"; then
@@ -102,6 +115,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceOLED-0.1.6-avatarfix-roworder-arm64
+          name: iQFaceOLED-0.1.7-feed-separator-arm64
           path: iqface-oled/artifacts/
           if-no-files-found: error
