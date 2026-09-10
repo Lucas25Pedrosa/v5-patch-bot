@@ -1,0 +1,68 @@
+name: Build FBOLED Avatar Layer Diagnostic
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "fboled-diagnostic/FBOLEDViewMapper05.m"
+      - ".github/workflows/fboled-avatar-layer-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate hook-free source
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="fboled-diagnostic/FBOLEDViewMapper05.m"
+          if grep -E 'MSHook|method_exchangeImplementations|method_setImplementation|class_replaceMethod|rebind_symbols' "$SRC"; then
+            echo "Hook marker found"
+            exit 1
+          fi
+          grep -F 'FBOLED View Mapper 0.5.0' "$SRC"
+          grep -F 'FBOLED_AvatarLayers.csv' "$SRC"
+
+      - name: Build arm64 dylib
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_PATH="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p artifacts
+          xcrun --sdk iphoneos clang \
+            -target arm64-apple-ios15.0 \
+            -arch arm64 \
+            -dynamiclib \
+            -Os \
+            -fobjc-arc \
+            -fblocks \
+            -isysroot "$SDK_PATH" \
+            -framework Foundation \
+            -framework UIKit \
+            -framework QuartzCore \
+            -install_name "@rpath/FBOLEDViewMapper05.dylib" \
+            -Wl,-dead_strip \
+            fboled-diagnostic/FBOLEDViewMapper05.m \
+            -o artifacts/FBOLEDViewMapper05.dylib
+          chmod 755 artifacts/FBOLEDViewMapper05.dylib
+          file artifacts/FBOLEDViewMapper05.dylib
+          otool -L artifacts/FBOLEDViewMapper05.dylib | tee artifacts/dependencies.txt
+          strings artifacts/FBOLEDViewMapper05.dylib | grep -F 'FBOLED View Mapper 0.5.0'
+          strings artifacts/FBOLEDViewMapper05.dylib | grep -F 'FBOLED_AvatarLayers.csv'
+          shasum -a 256 artifacts/FBOLEDViewMapper05.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload diagnostic dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBOLEDViewMapper-0.5.0-layer-image-arm64
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
