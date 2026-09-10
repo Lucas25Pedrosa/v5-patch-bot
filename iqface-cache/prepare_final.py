@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 path = Path("Tweak.m")
 source = path.read_text(encoding="utf-8")
@@ -113,6 +114,18 @@ for old, new in replacements:
         raise SystemExit(f"Expected exactly one match, found {count}: {old.splitlines()[0]}")
     source = source.replace(old, new, 1)
 
+# The key-window/top-controller helpers existed only to present the beta
+# automatic-cleaning alert. Remove them from the final build so no dead
+# beta-only code remains and the strict Theos build stays warning-free.
+helper_pattern = (
+    r"static UIWindow \*IQFCCacheKeyWindow\(void\) \{.*?\n\}\n\n"
+    r"static UIViewController \*IQFCCacheTopViewController\(void\) \{.*?\n\}\n\n"
+    r"(?=static IQFCCacheAutoMode)"
+)
+source, helper_count = re.subn(helper_pattern, "", source, count=1, flags=re.S)
+if helper_count != 1:
+    raise SystemExit(f"Expected one beta presenter helper block, found {helper_count}")
+
 for forbidden in (
     "0.2.0-beta1",
     "3600.0",
@@ -123,6 +136,8 @@ for forbidden in (
     "one-hour beta countdown",
     "Para facilitar o teste",
     "For easier testing",
+    "IQFCCacheKeyWindow",
+    "IQFCCacheTopViewController",
 ):
     if forbidden in source:
         raise SystemExit(f"Beta behavior still present: {forbidden}")
