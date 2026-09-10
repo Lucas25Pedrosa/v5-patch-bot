@@ -1,0 +1,8 @@
+Package: com.lucas.iqfacefeedseparator
+Name: iQFace Feed Separator
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Optional subtle separators between Facebook feed posts, controlled from iQFace settings.
+Maintainer: Lucas Pedrosa
+Author: Lucas Pedrosa
+Section: Tweaks
