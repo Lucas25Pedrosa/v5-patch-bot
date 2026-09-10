@@ -49,6 +49,7 @@ jobs:
             -framework Foundation \
             -framework UIKit \
             -framework QuartzCore \
+            -framework CoreGraphics \
             -install_name "@rpath/FBOLEDViewMapper05.dylib" \
             -Wl,-dead_strip \
             fboled-diagnostic/FBOLEDViewMapper05Build.m \
