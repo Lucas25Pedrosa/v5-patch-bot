@@ -1,8 +1,8 @@
 Package: com.lucaspedrosa.fboled
 Name: FBOLED
-Version: 0.2.0
+Version: 0.2.1
 Architecture: iphoneos-arm64
-Description: True OLED dark surfaces for Facebook.
+Description: True OLED dark surfaces for Facebook with safe avatar clipping reinforcement.
 Maintainer: Lucas Pedrosa
 Author: Lucas Pedrosa
 Section: Tweaks
