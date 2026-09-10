@@ -4,12 +4,14 @@
 #import <objc/runtime.h>
 #import <math.h>
 
-// FBOLED 0.2.0
-// OLED pass for Facebook 577+ using a safe Objective-C setter exchange.
-// The palette below was measured from FBOLED_ViewMap.csv on Facebook 577.0.0.
+// FBOLED 0.2.2
+// OLED pass for Facebook 577+ using the proven 0.2.0 implementation.
+// 0.2.2 fixes only the unmasked avatar variant discovered by diagnostics.
+// The OLED palette below was measured from FBOLED_ViewMap.csv on Facebook 577.0.0.
 
 static const void *kFBOLEDOriginalViewColorKey = &kFBOLEDOriginalViewColorKey;
 static const void *kFBOLEDOriginalLayerColorKey = &kFBOLEDOriginalLayerColorKey;
+static const void *kFBOLEDAvatarMaskKey = &kFBOLEDAvatarMaskKey;
 
 static NSTimer *gFBOLEDTimer;
 static id gFBOLEDActiveObserver;
@@ -94,7 +96,6 @@ static BOOL FBOLEDIsBlack(uint32_t rgba) {
 }
 
 @end
-
 
 static void FBOLEDInstallInstantSetter(void) {
     static dispatch_once_t onceToken;
@@ -181,8 +182,102 @@ static void FBOLEDResolveMode(NSArray<UIWindow *> *windows) {
     }
 }
 
+// Avatar fix 0.2.2 -----------------------------------------------------------
+// Diagnostics show two Facebook avatar implementations:
+//   A) FBPassthroughView -> _FBMaskedRoundedCornerView -> MRC... (already correct)
+//   B) FBPassthroughView -> MRCImageComponentView + UIImageView (unmasked variant)
+// 0.2.1 incorrectly touched A. 0.2.2 leaves A completely alone and clips only B.
+
+static BOOL FBOLEDHasDirectChildNamed(UIView *view, NSString *className) {
+    if (!view || !className.length) return NO;
+    for (UIView *child in view.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:className]) return YES;
+    }
+    return NO;
+}
+
+static UIView *FBOLEDDirectChildNamed(UIView *view, NSString *className) {
+    if (!view || !className.length) return nil;
+    for (UIView *child in view.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:className]) return child;
+    }
+    return nil;
+}
+
+static BOOL FBOLEDHasDescendantNamed(UIView *view, NSString *className, NSUInteger depth) {
+    if (!view || !className.length || depth > 5) return NO;
+    for (UIView *child in view.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:className]) return YES;
+        if (FBOLEDHasDescendantNamed(child, className, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+static BOOL FBOLEDIsUnmaskedAvatarVariant(UIView *view) {
+    if (!view) return NO;
+    if (![NSStringFromClass(view.class) isEqualToString:@"FBPassthroughView"]) return NO;
+
+    CGRect bounds = view.bounds;
+    CGFloat width = fabs(bounds.size.width);
+    CGFloat height = fabs(bounds.size.height);
+    if (!isfinite(width) || !isfinite(height)) return NO;
+    if (width < 24.0 || height < 24.0 || width > 64.0 || height > 64.0) return NO;
+    if (fabs(width - height) > 2.0) return NO;
+
+    CGFloat minimum = MIN(width, height);
+    CGFloat radius = view.layer.cornerRadius;
+    if (radius < minimum * 0.45 || radius > minimum * 0.55) return NO;
+
+    // Variant A already owns a proper circular masking view. Never touch it.
+    if (FBOLEDHasDirectChildNamed(view, @"_FBMaskedRoundedCornerView")) return NO;
+
+    // Variant B observed in the mapper has these two direct children.
+    UIView *imageComponent = FBOLEDDirectChildNamed(view, @"MRCImageComponentView");
+    UIImageView *directImage = nil;
+    for (UIView *child in view.subviews) {
+        if ([child isKindOfClass:UIImageView.class]) {
+            directImage = (UIImageView *)child;
+            break;
+        }
+    }
+    if (!imageComponent || !directImage || !directImage.image) return NO;
+
+    // Require the MRC image pipeline as an additional guard against unrelated views.
+    if (!FBOLEDHasDescendantNamed(imageComponent, @"MRCAnimatedImageView", 0)) return NO;
+
+    CGFloat imageWidth = fabs(directImage.bounds.size.width);
+    CGFloat imageHeight = fabs(directImage.bounds.size.height);
+    if (fabs(imageWidth - width) > 2.0 || fabs(imageHeight - height) > 2.0) return NO;
+
+    return YES;
+}
+
+static void FBOLEDUpdateAvatarClip(UIView *view) {
+    BOOL changedByFBOLED = [objc_getAssociatedObject(view, kFBOLEDAvatarMaskKey) boolValue];
+    BOOL target = gFBOLEDDarkMode && FBOLEDIsUnmaskedAvatarVariant(view);
+
+    if (target) {
+        if (!view.layer.masksToBounds) {
+            view.layer.masksToBounds = YES;
+            objc_setAssociatedObject(view, kFBOLEDAvatarMaskKey, @YES,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+
+    // Cells are reused by Facebook. Restore only a value that FBOLED itself changed,
+    // preventing the 0.2.1 regression from leaking into the already-correct variant A.
+    if (changedByFBOLED) {
+        view.layer.masksToBounds = NO;
+        objc_setAssociatedObject(view, kFBOLEDAvatarMaskKey, nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
 static void FBOLEDTransformView(UIView *view) {
     if (view.hidden || view.alpha < 0.01) return;
+
+    FBOLEDUpdateAvatarClip(view);
 
     UIColor *original = objc_getAssociatedObject(view, kFBOLEDOriginalViewColorKey);
 
