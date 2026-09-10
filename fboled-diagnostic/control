@@ -1,8 +1,8 @@
 Package: com.fboled.view-mapper
 Name: FBOLED View Mapper
-Version: 0.3.0
+Version: 0.4.0
 Architecture: iphoneos-arm64
-Description: Non-hooking visible color mapper for Facebook. No visual modifications.
+Description: Non-hooking avatar-focused visible view/color mapper for Facebook. No visual modifications.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks

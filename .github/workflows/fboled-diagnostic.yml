@@ -23,6 +23,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Validate hook-free diagnostic source
+        run: |
+          set -euo pipefail
+          if grep -E 'MSHook|method_exchangeImplementations|method_setImplementation|class_replaceMethod|rebind_symbols' FBOLEDViewMapper.m; then
+            echo "❌ Hook marker found in avatar diagnostic"
+            exit 1
+          fi
+          grep -F 'FBOLED View Mapper 0.4.0' FBOLEDViewMapper.m
+          grep -F 'FBOLED_AvatarMap.csv' FBOLEDViewMapper.m
+          echo "✅ Source is hook-free and avatar-focused"
+
       - name: Install Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
@@ -31,7 +42,7 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Build view mapper dylib
+      - name: Build avatar mapper dylib
         run: |
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
@@ -40,11 +51,15 @@ jobs:
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/FBOLEDViewMapper.dylib
           file artifacts/FBOLEDViewMapper.dylib
+          otool -L artifacts/FBOLEDViewMapper.dylib | tee artifacts/dependencies.txt
+          strings artifacts/FBOLEDViewMapper.dylib | grep -F 'FBOLED View Mapper 0.4.0'
+          strings artifacts/FBOLEDViewMapper.dylib | grep -F 'FBOLED_AvatarMap.csv'
           shasum -a 256 artifacts/FBOLEDViewMapper.dylib > artifacts/SHA256SUMS.txt
 
-      - name: Upload view mapper dylib
+      - name: Upload avatar mapper dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBOLEDViewMapper-0.3.0-arm64
+          name: FBOLEDViewMapper-0.4.0-avatar-arm64
           path: fboled-diagnostic/artifacts/
           if-no-files-found: error
+          retention-days: 90
