@@ -4,10 +4,9 @@
 #import <objc/runtime.h>
 #import <math.h>
 
-// FBOLED 0.2.1
-// OLED pass for Facebook 577+ using the proven 0.2.0 implementation.
-// 0.2.1 adds a narrowly-scoped, hook-free avatar clipping reinforcement.
-// The OLED palette below was measured from FBOLED_ViewMap.csv on Facebook 577.0.0.
+// FBOLED 0.2.0
+// OLED pass for Facebook 577+ using a safe Objective-C setter exchange.
+// The palette below was measured from FBOLED_ViewMap.csv on Facebook 577.0.0.
 
 static const void *kFBOLEDOriginalViewColorKey = &kFBOLEDOriginalViewColorKey;
 static const void *kFBOLEDOriginalLayerColorKey = &kFBOLEDOriginalLayerColorKey;
@@ -96,6 +95,7 @@ static BOOL FBOLEDIsBlack(uint32_t rgba) {
 
 @end
 
+
 static void FBOLEDInstallInstantSetter(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -181,78 +181,8 @@ static void FBOLEDResolveMode(NSArray<UIWindow *> *windows) {
     }
 }
 
-// Avatar fix 0.2.1 -----------------------------------------------------------
-// The diagnostic found Facebook profile-photo chains shaped as:
-// FBPassthroughView -> _FBMaskedRoundedCornerView -> MRCImageComponentView
-// -> MRCAnimatedImageView -> UIImageView.
-// The outer FBPassthroughView is already circular (e.g. 32x32, radius 16) but
-// reports masksToBounds=NO. We reinforce clipping only for this exact family.
-// No method hook, swizzle, image replacement, or FDSProfilePhotoRingView change
-// is introduced by this fix.
-
-static BOOL FBOLEDHasDescendantNamed(UIView *view, NSString *target, NSUInteger depth) {
-    if (!view || !target.length || depth > 5) return NO;
-
-    for (UIView *child in view.subviews) {
-        NSString *name = NSStringFromClass(child.class);
-        if ([name isEqualToString:target]) return YES;
-        if (FBOLEDHasDescendantNamed(child, target, depth + 1)) return YES;
-    }
-    return NO;
-}
-
-static BOOL FBOLEDIsAvatarPassthrough(UIView *view) {
-    if (!view) return NO;
-    if (![NSStringFromClass(view.class) isEqualToString:@"FBPassthroughView"]) return NO;
-
-    CGRect bounds = view.bounds;
-    CGFloat width = fabs(bounds.size.width);
-    CGFloat height = fabs(bounds.size.height);
-    if (!isfinite(width) || !isfinite(height)) return NO;
-
-    // Restrict this to ordinary Facebook avatar sizes and near-perfect squares.
-    if (width < 24.0 || height < 24.0 || width > 64.0 || height > 64.0) return NO;
-    if (fabs(width - height) > 2.0) return NO;
-
-    CGFloat minimum = MIN(width, height);
-    CGFloat radius = view.layer.cornerRadius;
-    if (radius < minimum * 0.45 || radius > minimum * 0.55) return NO;
-
-    // Require the exact masked image container observed by the diagnostic.
-    UIView *maskedChild = nil;
-    for (UIView *child in view.subviews) {
-        if ([NSStringFromClass(child.class) isEqualToString:@"_FBMaskedRoundedCornerView"]) {
-            maskedChild = child;
-            break;
-        }
-    }
-    if (!maskedChild) return NO;
-
-    CGFloat childWidth = fabs(maskedChild.bounds.size.width);
-    CGFloat childHeight = fabs(maskedChild.bounds.size.height);
-    if (fabs(childWidth - width) > 2.0 || fabs(childHeight - height) > 2.0) return NO;
-
-    BOOL hasImageComponent = FBOLEDHasDescendantNamed(maskedChild, @"MRCImageComponentView", 0);
-    BOOL hasAnimatedImage = FBOLEDHasDescendantNamed(maskedChild, @"MRCAnimatedImageView", 0);
-    return hasImageComponent || hasAnimatedImage;
-}
-
-static void FBOLEDReinforceAvatarClip(UIView *view) {
-    if (!gFBOLEDDarkMode) return;
-    if (!FBOLEDIsAvatarPassthrough(view)) return;
-
-    // Idempotent: the existing 0.75 s pass can call this repeatedly safely.
-    if (!view.layer.masksToBounds) {
-        view.layer.masksToBounds = YES;
-    }
-}
-
 static void FBOLEDTransformView(UIView *view) {
     if (view.hidden || view.alpha < 0.01) return;
-
-    // Avatar clipping is intentionally independent from the OLED color mapping
-    // below and does not introduce another runtime hook.
-    FBOLEDReinforceAvatarClip(view);
 
     UIColor *original = objc_getAssociatedObject(view, kFBOLEDOriginalViewColorKey);
 
