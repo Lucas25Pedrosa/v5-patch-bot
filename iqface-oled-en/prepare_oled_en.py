@@ -14,8 +14,122 @@ def replace_once(old: str, new: str, label: str) -> None:
 
 replace_once(
     "// iQFaceOLED 0.1.1",
-    "// iQFaceOLED 0.1.4 EN",
+    "// iQFaceOLED 0.1.6 EN",
     "version",
+)
+
+replace_once(
+    "static const void *kIQFOLEDOriginalLayerColorKey = &kIQFOLEDOriginalLayerColorKey;\nstatic const void *kIQFOLEDRowInstalledKey = &kIQFOLEDRowInstalledKey;",
+    "static const void *kIQFOLEDOriginalLayerColorKey = &kIQFOLEDOriginalLayerColorKey;\nstatic const void *kIQFOLEDAvatarMaskKey = &kIQFOLEDAvatarMaskKey;\nstatic const void *kIQFOLEDRowInstalledKey = &kIQFOLEDRowInstalledKey;",
+    "avatar associated key",
+)
+
+avatar_fix = r'''// Avatar fix integrated from validated FBOLED 0.2.2 --------------------------
+// Diagnostics showed two Facebook avatar implementations:
+//   A) FBPassthroughView -> _FBMaskedRoundedCornerView -> MRC... (already correct)
+//   B) FBPassthroughView -> MRCImageComponentView + UIImageView (unmasked variant)
+// Only B is clipped. A is intentionally left untouched.
+
+static BOOL IQFOLEDHasDirectChildNamed(UIView *view, NSString *className) {
+    if (!view || !className.length) return NO;
+    for (UIView *child in view.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:className]) return YES;
+    }
+    return NO;
+}
+
+static UIView *IQFOLEDDirectChildNamed(UIView *view, NSString *className) {
+    if (!view || !className.length) return nil;
+    for (UIView *child in view.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:className]) return child;
+    }
+    return nil;
+}
+
+static BOOL IQFOLEDHasDescendantNamed(UIView *view, NSString *className, NSUInteger depth) {
+    if (!view || !className.length || depth > 5) return NO;
+    for (UIView *child in view.subviews) {
+        if ([NSStringFromClass(child.class) isEqualToString:className]) return YES;
+        if (IQFOLEDHasDescendantNamed(child, className, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+static BOOL IQFOLEDIsUnmaskedAvatarVariant(UIView *view) {
+    if (!view) return NO;
+    if (![NSStringFromClass(view.class) isEqualToString:@"FBPassthroughView"]) return NO;
+
+    CGRect bounds = view.bounds;
+    CGFloat width = fabs(bounds.size.width);
+    CGFloat height = fabs(bounds.size.height);
+    if (!isfinite(width) || !isfinite(height)) return NO;
+    if (width < 24.0 || height < 24.0 || width > 64.0 || height > 64.0) return NO;
+    if (fabs(width - height) > 2.0) return NO;
+
+    CGFloat minimum = MIN(width, height);
+    CGFloat radius = view.layer.cornerRadius;
+    if (radius < minimum * 0.45 || radius > minimum * 0.55) return NO;
+
+    // Variant A already owns its correct circular masking view. Never touch it.
+    if (IQFOLEDHasDirectChildNamed(view, @"_FBMaskedRoundedCornerView")) return NO;
+
+    // Variant B seen in the mapper has these direct children.
+    UIView *imageComponent = IQFOLEDDirectChildNamed(view, @"MRCImageComponentView");
+    UIImageView *directImage = nil;
+    for (UIView *child in view.subviews) {
+        if ([child isKindOfClass:UIImageView.class]) {
+            directImage = (UIImageView *)child;
+            break;
+        }
+    }
+    if (!imageComponent || !directImage || !directImage.image) return NO;
+
+    if (!IQFOLEDHasDescendantNamed(imageComponent, @"MRCAnimatedImageView", 0)) return NO;
+
+    CGFloat imageWidth = fabs(directImage.bounds.size.width);
+    CGFloat imageHeight = fabs(directImage.bounds.size.height);
+    if (fabs(imageWidth - width) > 2.0 || fabs(imageHeight - height) > 2.0) return NO;
+
+    return YES;
+}
+
+static void IQFOLEDUpdateAvatarClip(UIView *view) {
+    BOOL changedByIQFOLED = [objc_getAssociatedObject(view, kIQFOLEDAvatarMaskKey) boolValue];
+    BOOL target = gIQFOLEDEnabled && gIQFOLEDDarkMode && IQFOLEDIsUnmaskedAvatarVariant(view);
+
+    if (target) {
+        if (!view.layer.masksToBounds) {
+            view.layer.masksToBounds = YES;
+            objc_setAssociatedObject(view,
+                                     kIQFOLEDAvatarMaskKey,
+                                     @YES,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+
+    // Facebook reuses cells. Restore only a value changed by iQFaceOLED itself.
+    if (changedByIQFOLED) {
+        view.layer.masksToBounds = NO;
+        objc_setAssociatedObject(view,
+                                 kIQFOLEDAvatarMaskKey,
+                                 nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+'''
+
+replace_once(
+    "static void IQFOLEDTransformView(UIView *view) {",
+    avatar_fix + "static void IQFOLEDTransformView(UIView *view) {",
+    "avatar fix insertion",
+)
+
+replace_once(
+    "static void IQFOLEDTransformView(UIView *view) {\n    if (view.hidden || view.alpha < 0.01) return;\n\n    UIColor *original = objc_getAssociatedObject(view, kIQFOLEDOriginalViewColorKey);",
+    "static void IQFOLEDTransformView(UIView *view) {\n    if (view.hidden || view.alpha < 0.01) return;\n\n    IQFOLEDUpdateAvatarClip(view);\n\n    UIColor *original = objc_getAssociatedObject(view, kIQFOLEDOriginalViewColorKey);",
+    "avatar fix call",
 )
 
 replace_once(
@@ -39,7 +153,6 @@ replace_once(
     '@"OLED mode is enabled." : @"OLED mode is disabled."',
     "legacy alert message",
 )
-
 replace_once('@"Cancelar"', '@"Cancel"', "legacy cancel")
 replace_once('@"Desativar" : @"Ativar"', '@"Disable" : @"Enable"', "legacy action")
 
@@ -71,7 +184,7 @@ new_create_row = '''static id IQFOLEDCreateNativeRow(UIViewController *controlle
     SEL selector = NSSelectorFromString(@"rowWithTitle:icon:key:def:onChange:");
     if (controller == nil || ![controller respondsToSelector:selector]) return nil;
 
-    // Native iQFace row: iQFace owns the UISwitch and the preference key.
+    // Native iQFace row: iQFace owns the UISwitch and preference key.
     void (^onChange)(void) = ^{
         dispatch_async(dispatch_get_main_queue(), ^{
             IQFOLEDSetEnabled(!gIQFOLEDEnabled, nil);
@@ -105,10 +218,62 @@ replace_once(
     "existing row path",
 )
 
+old_insertion = '''    NSMutableArray *updatedRows = [rows mutableCopy];
+    NSUInteger insertionIndex = updatedRows.count;
+
+    for (NSUInteger i = 0; i < updatedRows.count; i++) {
+        NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+        if ([title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"]) {
+            insertionIndex = i + 1;
+            break;
+        }
+    }
+
+    if (insertionIndex == updatedRows.count) {
+        for (NSUInteger i = 0; i < updatedRows.count; i++) {
+            NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+            if ([title isEqualToString:@"Alterar ícone"] || [title isEqualToString:@"Change Icon"]) {
+                insertionIndex = i + 1;
+                break;
+            }
+        }
+    }
+'''
+
+new_insertion = '''    NSMutableArray *updatedRows = [rows mutableCopy];
+    NSUInteger insertionIndex = updatedRows.count;
+
+    // Keep OLED visually separate from both cache controls. Prefer placing it
+    // immediately after Change Icon / Alterar ícone.
+    for (NSUInteger i = 0; i < updatedRows.count; i++) {
+        NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+        if ([title isEqualToString:@"Alterar ícone"] || [title isEqualToString:@"Change Icon"]) {
+            insertionIndex = i + 1;
+            break;
+        }
+    }
+
+    // Fallback: place OLED before the first cache row, never between manual and
+    // automatic cache controls.
+    if (insertionIndex == updatedRows.count) {
+        for (NSUInteger i = 0; i < updatedRows.count; i++) {
+            NSString *title = IQFOLEDRowTitle(updatedRows[i]);
+            if ([title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"] ||
+                [title isEqualToString:@"Limpar cache automaticamente"] ||
+                [title isEqualToString:@"Clear cache automatically"]) {
+                insertionIndex = i;
+                break;
+            }
+        }
+    }
+'''
+
+replace_once(old_insertion, new_insertion, "OLED settings row placement")
+
 text = text.replace('[iQFaceOLED] linha Modo OLED adicionada (%@)', '[iQFaceOLED] OLED Mode row added (%@)')
 text = text.replace('[iQFaceOLED] seção Ferramentas não encontrada; tela mantida intacta', '[iQFaceOLED] Tools section not found; settings left unchanged')
 text = text.replace('[iQFaceOLED] construtor nativo de IQFRow indisponível', '[iQFaceOLED] native IQFRow builder unavailable')
 text = text.replace('[iQFaceOLED] não foi possível adicionar a linha; tela mantida intacta', '[iQFaceOLED] could not add row; settings left unchanged')
 
 path.write_text(text, encoding="utf-8")
-print("Prepared iQFaceOLED 0.1.4 English native iQFace toggle from validated 0.1.1 base")
+print("Prepared iQFaceOLED 0.1.6 English with avatar fix and OLED row after Change Icon")
