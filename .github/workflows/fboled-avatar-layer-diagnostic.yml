@@ -5,6 +5,7 @@ name: Build FBOLED Avatar Layer Diagnostic
   push:
     paths:
       - "fboled-diagnostic/FBOLEDViewMapper05.m"
+      - "fboled-diagnostic/FBOLEDViewMapper05Build.m"
       - ".github/workflows/fboled-avatar-layer-diagnostic.yml"
 
 permissions:
@@ -50,7 +51,7 @@ jobs:
             -framework QuartzCore \
             -install_name "@rpath/FBOLEDViewMapper05.dylib" \
             -Wl,-dead_strip \
-            fboled-diagnostic/FBOLEDViewMapper05.m \
+            fboled-diagnostic/FBOLEDViewMapper05Build.m \
             -o artifacts/FBOLEDViewMapper05.dylib
           chmod 755 artifacts/FBOLEDViewMapper05.dylib
           file artifacts/FBOLEDViewMapper05.dylib
