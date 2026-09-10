@@ -1,0 +1,75 @@
+name: Build iQFace Feed Separator
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-feed-separator/**"
+      - ".github/workflows/iqface-feed-separator.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-feed-separator
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Validate hook-free scope
+        run: |
+          set -euo pipefail
+          grep -F 'iQFace Feed Separator 0.1.0' Tweak.m
+          grep -F 'FBLineComponentInternalView' Tweak.m
+          grep -F 'FBNewsFeedView' Tweak.m
+          grep -F 'iQFaceFeedSeparatorsEnabled' Tweak.m
+          grep -F 'rowWithTitle:icon:key:def:onChange:' Tweak.m
+          grep -F 'colorWithWhite:1.0 alpha:0.14' Tweak.m
+          if grep -E 'MSHook|method_exchangeImplementations|method_setImplementation|class_replaceMethod|class_addMethod|rebind_symbols' Tweak.m; then
+            echo "Unexpected hook/interception mechanism found"
+            exit 1
+          fi
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+
+          dylib_path="$(find .theos -type f -name iQFaceFeedSeparator.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceFeedSeparator.dylib
+
+          file_info="$(file artifacts/iQFaceFeedSeparator.dylib)"
+          echo "$file_info"
+          echo "$file_info" | grep -F 'Mach-O 64-bit'
+          echo "$file_info" | grep -F 'arm64'
+          echo "$file_info" | grep -F 'dynamically linked shared library'
+
+          otool -L artifacts/iQFaceFeedSeparator.dylib | tee artifacts/dependencies.txt
+          strings -a artifacts/iQFaceFeedSeparator.dylib | grep -F 'FBLineComponentInternalView'
+          strings -a artifacts/iQFaceFeedSeparator.dylib | grep -F 'Mostrar separadores no feed'
+          strings -a artifacts/iQFaceFeedSeparator.dylib | grep -F 'iQFaceFeedSeparatorsEnabled'
+          strings -a artifacts/iQFaceFeedSeparator.dylib | grep -F 'rowWithTitle:icon:key:def:onChange:'
+          shasum -a 256 artifacts/iQFaceFeedSeparator.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceFeedSeparator-0.1.0-arm64
+          path: iqface-feed-separator/artifacts/
+          if-no-files-found: error
+          retention-days: 90
