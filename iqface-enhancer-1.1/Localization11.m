@@ -1,33 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <dlfcn.h>
-#import <string.h>
 
-// iQFaceEnhancer 0.3.0 / iQFace 1.1 localization layer.
-// The stable Wordmark/No-Flash activation code is intentionally left unchanged.
-// Primary path: hook iQFace's own IQFLoc function when MSHookFunction is available.
-// Fallback: translate only visible IQFSettingsViewController trees.
+// iQFaceEnhancer 0.3.1 / iQFace 1.1 localization layer.
+// Safety rule: do not hook private iQFace functions. The proven Wordmark/No-Flash
+// activation path remains untouched. Translation is applied only to the visible
+// IQFSettingsViewController hierarchy while Facebook is in the foreground.
 
-__attribute__((visibility("default"))) NSString * const IQFEnhancerLocalizationVersion = @"1.1";
-
-typedef NSString *(*IQFLocFunction)(NSString *key);
-typedef void (*MSHookFunctionType)(void *symbol, void *replacement, void **original);
-
-static IQFLocFunction IQFOriginalLoc11 = NULL;
-static BOOL IQFLocalizationHookInstalled11 = NO;
-static NSInteger IQFLocalizationInstallAttempts11 = 0;
+__attribute__((used, visibility("default"))) NSString * const IQFEnhancerLocalizationVersion = @"1.1-scanner-only";
 static dispatch_source_t IQFLocalizationScanner11 = nil;
-
-static void *IQF11FindSymbol(const char *name) {
-    void *symbol = dlsym(RTLD_DEFAULT, name);
-    if (symbol != NULL) return symbol;
-
-    char underscored[128] = {0};
-    if (strlen(name) + 2 >= sizeof(underscored)) return NULL;
-    underscored[0] = '_';
-    strlcpy(underscored + 1, name, sizeof(underscored) - 1);
-    return dlsym(RTLD_DEFAULT, underscored);
-}
 
 static BOOL IQF11UsePortuguese(void) {
     id forced = [[NSUserDefaults standardUserDefaults] objectForKey:@"IQFEnhancerForcePortuguese"];
@@ -171,34 +151,6 @@ static NSString *IQF11Translate(NSString *text) {
     return IQF11Translations()[text];
 }
 
-static NSString *IQF11LocReplacement(NSString *key) {
-    NSString *translated = IQF11Translate(key);
-    if (translated != nil) return translated;
-    return IQFOriginalLoc11 != NULL ? IQFOriginalLoc11(key) : key;
-}
-
-static BOOL IQF11InstallLocalizationHook(void) {
-    if (IQFLocalizationHookInstalled11) return YES;
-
-    void *loc = IQF11FindSymbol("IQFLoc");
-    MSHookFunctionType hook = (MSHookFunctionType)IQF11FindSymbol("MSHookFunction");
-    if (loc == NULL || hook == NULL) return NO;
-
-    hook(loc, (void *)&IQF11LocReplacement, (void **)&IQFOriginalLoc11);
-    IQFLocalizationHookInstalled11 = IQFOriginalLoc11 != NULL;
-    return IQFLocalizationHookInstalled11;
-}
-
-static void IQF11ScheduleHookInstall(void) {
-    IQFLocalizationInstallAttempts11 += 1;
-    if (IQF11InstallLocalizationHook() || IQFLocalizationInstallAttempts11 >= 80) return;
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        IQF11ScheduleHookInstall();
-    });
-}
-
 static void IQF11TranslateView(UIView *view) {
     if (view == nil) return;
 
@@ -232,7 +184,8 @@ static void IQF11TranslateView(UIView *view) {
         }
     }
 
-    for (UIView *subview in view.subviews) IQF11TranslateView(subview);
+    NSArray<UIView *> *subviews = view.subviews.copy;
+    for (UIView *subview in subviews) IQF11TranslateView(subview);
 }
 
 static void IQF11TranslateSettingsController(UIViewController *controller) {
@@ -255,42 +208,41 @@ static void IQF11TranslateSettingsController(UIViewController *controller) {
         if (presented != nil && presented.isViewLoaded) IQF11TranslateView(presented.view);
     }
 
-    if (controller.presentedViewController != nil) {
-        IQF11TranslateSettingsController(controller.presentedViewController);
-    }
-    for (UIViewController *child in controller.childViewControllers) {
-        IQF11TranslateSettingsController(child);
-    }
+    UIViewController *presented = controller.presentedViewController;
+    if (presented != nil) IQF11TranslateSettingsController(presented);
+
+    NSArray<UIViewController *> *children = controller.childViewControllers.copy;
+    for (UIViewController *child in children) IQF11TranslateSettingsController(child);
 }
 
 static void IQF11ScanSettings(void) {
-    if (!IQF11UsePortuguese() || UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) return;
+    if (!IQF11UsePortuguese()) return;
+    if (UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) return;
 
     if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        NSSet<UIScene *> *scenes = UIApplication.sharedApplication.connectedScenes;
+        for (UIScene *scene in scenes) {
             if (![scene isKindOfClass:UIWindowScene.class]) continue;
-            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                IQF11TranslateSettingsController(window.rootViewController);
-            }
+            NSArray<UIWindow *> *windows = ((UIWindowScene *)scene).windows.copy;
+            for (UIWindow *window in windows) IQF11TranslateSettingsController(window.rootViewController);
         }
     } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        for (UIWindow *window in UIApplication.sharedApplication.windows) {
-            IQF11TranslateSettingsController(window.rootViewController);
-        }
+        NSArray<UIWindow *> *windows = UIApplication.sharedApplication.windows.copy;
+        for (UIWindow *window in windows) IQF11TranslateSettingsController(window.rootViewController);
 #pragma clang diagnostic pop
     }
 }
 
-static void IQF11StartFallbackScanner(void) {
+static void IQF11StartScanner(void) {
     if (IQFLocalizationScanner11 != nil) return;
 
     IQFLocalizationScanner11 = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(IQFLocalizationScanner11,
-                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                              (uint64_t)(0.75 * NSEC_PER_SEC),
-                              (uint64_t)(0.1 * NSEC_PER_SEC));
+                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                              (uint64_t)(1.0 * NSEC_PER_SEC),
+                              (uint64_t)(0.15 * NSEC_PER_SEC));
     dispatch_source_set_event_handler(IQFLocalizationScanner11, ^{
         IQF11ScanSettings();
     });
@@ -305,8 +257,7 @@ static void IQFEnhancerLocalization11Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            IQF11ScheduleHookInstall();
-            IQF11StartFallbackScanner();
+            IQF11StartScanner();
         });
     }
 }
