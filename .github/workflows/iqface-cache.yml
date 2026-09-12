@@ -35,8 +35,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Source-level checks are used for strings with accents because
-          # Objective-C Unicode literals are not guaranteed to appear in strings -a.
+          # Source-level checks are used for Unicode Objective-C literals because
+          # strings -a is not guaranteed to expose their UTF-16 representation.
           grep -F "iQFaceCache 0.2.0" Tweak.m
           grep -F "buttonCellWithTitle:subtitle:icon:action:" Tweak.m
           grep -F "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:" Tweak.m
@@ -45,6 +45,7 @@ jobs:
           grep -F "Semanalmente" Tweak.m
           grep -F "Mensalmente" Tweak.m
           grep -F "Serão removidos aproximadamente" Tweak.m
+          grep -F "✓ Cache limpo" Tweak.m
 
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
 
@@ -82,7 +83,7 @@ jobs:
           require_string "Semanalmente"
           require_string "Mensalmente"
           require_string "Approximately"
-          require_string "Cache limpo"
+          require_string "Cache cleared"
           require_string "com.facebook.Facebook.MosaicIGImageDiskCache"
 
           forbid_string "valueRowWithTitle:icon:detail:tap:"
