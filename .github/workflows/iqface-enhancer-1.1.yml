@@ -47,7 +47,6 @@ jobs:
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
-          # EXACT historical changes from Wordmark Direct Beta.
           old = "static void IQFOpenSettings(void) {"
           assert old in s
           s = s.replace(old, "void IQFOpenSettings(void) {", 1)
@@ -55,20 +54,18 @@ jobs:
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
           replacement = '''static void IQFAttachLongPress(UIView *view) {
               (void)view;
+              (void)IQFLongPressDuration;
           }'''
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          # IMPORTANT: no extra UIView/addSubview hook is inserted here.
+          # No extra UIView/addSubview hook is inserted here.
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
-          # Same activation module used by the old working build.
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
-
-          # iQFace 1.1 addition only: safe visual localization, no IQFLoc hook.
           cp iqface-enhancer-1.1/Localization11.m "$WORK/Localization11.m"
 
           cat > "$WORK/Makefile" <<'EOF'
@@ -114,7 +111,6 @@ jobs:
             echo "ABSENT AS EXPECTED: $value"
           }
 
-          # Exact legacy activation markers.
           require_string "IQFPresentSettings"
           require_string "FBNavigationBar"
           require_string "IQFWordmarkTarget"
@@ -123,7 +119,6 @@ jobs:
           forbid_string "IQFWordmarkTarget11"
           forbid_string "IQFPresentLauncherMenu"
 
-          # iQFace 1.1 scanner-only translation markers.
           require_string "1.1-scanner-only"
           require_string "IQFSettingsViewController"
           require_string "Abrir links no Safari"
