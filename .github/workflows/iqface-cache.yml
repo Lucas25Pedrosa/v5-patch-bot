@@ -46,6 +46,7 @@ jobs:
           grep -F "Mensalmente" Tweak.m
           grep -F "Serão removidos aproximadamente" Tweak.m
           grep -F "✓ Cache limpo" Tweak.m
+          grep -F "✓ Cache cleared" Tweak.m
 
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
 
@@ -83,7 +84,6 @@ jobs:
           require_string "Semanalmente"
           require_string "Mensalmente"
           require_string "Approximately"
-          require_string "Cache cleared"
           require_string "com.facebook.Facebook.MosaicIGImageDiskCache"
 
           forbid_string "valueRowWithTitle:icon:detail:tap:"
