@@ -131,7 +131,8 @@ jobs:
             echo "INFO: long-press metadata stripped"
           fi
 
-          require_string "IQFLoc"
+          # 0.3.1 must contain only the visual settings translation layer.
+          require_string "1.1-scanner-only"
           require_string "IQFSettingsViewController"
           require_string "Abrir links no Safari"
           require_string "Modo fantasma nos stories"
@@ -140,6 +141,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceEnhancer-0.3.0-iQFace-1.1-arm64
+          name: iQFaceEnhancer-0.3.1-iQFace-1.1-scanner-only-arm64
           path: ${{ runner.temp }}/iqface-enhancer-11/artifacts/
           if-no-files-found: error
