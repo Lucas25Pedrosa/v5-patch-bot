@@ -225,7 +225,7 @@ static void IQF11TranslateView(UIView *view) {
         if (translated != nil) textView.text = translated;
     } else if ([view isKindOfClass:UISegmentedControl.class]) {
         UISegmentedControl *control = (UISegmentedControl *)view;
-        for (NSInteger index = 0; index < control.numberOfSegments; index++) {
+        for (NSUInteger index = 0; index < control.numberOfSegments; index++) {
             NSString *title = [control titleForSegmentAtIndex:index];
             NSString *translated = IQF11Translate(title);
             if (translated != nil) [control setTitle:translated forSegmentAtIndex:index];
