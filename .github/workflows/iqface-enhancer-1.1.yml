@@ -34,7 +34,6 @@ jobs:
           WORK="$RUNNER_TEMP/iqface-enhancer-11"
           mkdir -p "$WORK"
 
-          # Exact stable Tweak.m used by the old working enhancer.
           curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -46,13 +45,9 @@ jobs:
           import re, sys
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
-
-          # Preserve the proven direct opener used by the old Wordmark module.
           old = "static void IQFOpenSettings(void) {"
           assert old in s
           s = s.replace(old, "void IQFOpenSettings(void) {", 1)
-
-          # Long-press stays disabled exactly as in the working Wordmark Direct build.
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
           replacement = '''static void IQFAttachLongPress(UIView *view) {
               (void)view;
@@ -60,69 +55,55 @@ jobs:
           }'''
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
-
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
-          # Exact historical Wordmark activation. Do not modify this module.
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
-
-          # Keep the 1.1 button hider which is already validated on-device.
           cp iqface-enhancer-1.1/HideButton11.m "$WORK/HideButton11.m"
 
-          # Restore the ORIGINAL Core PT-BR translation engine from the known-good build.
           curl -fsSL \
             "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/2b764e9afb118063d74260f51d1a65527f2e7845/iqface-enhancer-core-ptbr/Translation.m" \
             > "$WORK/Translation.m"
 
-          # Change ONLY the dictionary/marker for iQFace 1.1. The translation engine,
-          # hooks and timing below remain byte-for-byte from the historical source.
           python3 - "$WORK/Translation.m" <<'PY'
           import sys
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
           marker = '__attribute__((used, visibility("default"))) NSString * const IQFEnhancerTranslationVersion = @"1.1-core-ptbr";\n\n'
-          needle = '#include <string.h>\n\n'
+          needle = '#import <string.h>\n\n'
           assert needle in s
           s = s.replace(needle, needle + marker, 1)
 
-          # Keep the compact wording style used by the original PT-BR build.
           s = s.replace('@"Follow system": @"Seguir idioma do sistema",',
                         '@"Follow system": @"Seguir sistema",')
           s = s.replace('@"Join Telegram channel": @"Entrar no canal do Telegram",',
                         '@"Join Telegram channel": @"Canal do Telegram",')
 
-          # Append only the new/changed iQFace 1.1 strings.
           old_last = '@"iQFace Settings": @"Ajustes do iQFace"\n'
           assert old_last in s
           additions = '''@"iQFace Settings": @"Ajustes do iQFace",\n            @"General": @"Geral",\n            @"Stories": @"Stories",\n            @"Reels": @"Reels",\n            @"FEATURES": @"RECURSOS",\n            @"Appearance": @"Aparência",\n            @"APPEARANCE": @"APARÊNCIA",\n            @"DEV": @"DEV",\n            @"ABOUT": @"SOBRE",\n            @"Open links in Safari": @"Abrir no Safari",\n            @"Block in-stream video ads": @"Bloquear anúncios em vídeos",\n            @"Hide suggested posts": @"Ocultar posts sugeridos",\n            @"Hide stories": @"Ocultar stories",\n            @"Ghost mode in stories": @"Modo fantasma",\n            @"Watch stories locally (grey ring)": @"Assistir localmente",\n            @"Auto-advance": @"Avanço automático",\n            @"Hide Reels screen elements": @"Ocultar elementos",\n            @"Show Reels screen elements": @"Mostrar elementos",\n            @"Separate buttons": @"Botões separados",\n            @"Reels controls": @"Controles do Reels",\n            @"Button layout": @"Layout dos botões",\n            @"One iQ button": @"Um botão iQ",\n            @"Hold for Reels menu": @"Segure para menu",\n            @"Reels overlay": @"Sobreposição do Reels",\n            @"Hide action rail": @"Ocultar ações",\n            @"Hide Likes": @"Ocultar curtidas",\n            @"Hide Comments": @"Ocultar comentários",\n            @"Hide Share": @"Ocultar compartilhamento",\n            @"Hide creator information": @"Ocultar criador",\n            @"Hide description": @"Ocultar descrição",\n            @"Hide video buttons": @"Ocultar botões do vídeo",\n            @"Show video buttons": @"Mostrar botões do vídeo",\n            @"Auto-advance on": @"Avanço automático ativado",\n            @"Auto-advance off": @"Avanço automático desativado",\n            @"Save photo": @"Salvar foto",\n            @"Save full-resolution photo": @"Salvar foto original"\n'''
           s = s.replace(old_last, additions, 1)
 
-          # Sanity checks: original engine remains intact.
           assert 'MSHookMessageEx' in s
           assert '@selector(viewDidLayoutSubviews)' in s
           assert '@selector(viewDidAppear:)' in s
           assert 'IQFScheduleTranslationPasses' in s
-
           open(p, "w", encoding="utf-8").write(s)
           PY
 
           cat > "$WORK/Makefile" <<'EOF'
           ARCHS = arm64
           TARGET = iphone:clang:latest:14.0
-
           include $(THEOS)/makefiles/common.mk
-
           LIBRARY_NAME = iQFaceEnhancer
           iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m Translation.m HideButton11.m
           iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
           iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
           iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
           iQFaceEnhancer_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
-
           include $(THEOS_MAKE_PATH)/library.mk
           EOF
 
@@ -132,7 +113,6 @@ jobs:
           WORK="$RUNNER_TEMP/iqface-enhancer-11"
           cd "$WORK"
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
-
           dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
           test -n "$dylib_path"
           mkdir -p artifacts
@@ -146,14 +126,12 @@ jobs:
             grep -Fq "$value" artifacts/strings.txt || { echo "MISSING REQUIRED: $value"; exit 1; }
             echo "FOUND: $value"
           }
-
           forbid_string() {
             local value="$1"
             ! grep -Fq "$value" artifacts/strings.txt || { echo "UNEXPECTED: $value"; exit 1; }
             echo "ABSENT AS EXPECTED: $value"
           }
 
-          # Proven activation path must remain unchanged.
           require_string "IQFPresentSettings"
           require_string "FBNavigationBar"
           require_string "IQFWordmarkTarget"
@@ -162,22 +140,16 @@ jobs:
           forbid_string "IQFWordmarkTarget11"
           forbid_string "IQFPresentLauncherMenu"
 
-          # Exact original Core PT-BR mechanism.
           require_string "MSHookMessageEx"
           require_string "viewDidLayoutSubviews"
           require_string "viewDidAppear:"
           require_string "1.1-core-ptbr"
-
-          # 1.1 button hiding stays enabled.
           require_string "1.1-hide-button"
-
-          # New concise 1.1 translations.
           require_string "Abrir no Safari"
           require_string "Modo fantasma"
           require_string "RECURSOS"
           require_string "Seguir sistema"
 
-          # The experimental delayed translation engines must be gone.
           forbid_string "1.1-scanner-only"
           forbid_string "1.1-early-layout"
           forbid_string "viewWillAppear:"
