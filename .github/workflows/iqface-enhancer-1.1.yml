@@ -5,6 +5,7 @@ name: Build iQFaceEnhancer 1.1
   push:
     paths:
       - "iqface-enhancer-1.1/**"
+      - "iqface-enhancer-wordmark-beta/WordmarkActivation.m"
       - ".github/workflows/iqface-enhancer-1.1.yml"
 
 permissions:
@@ -25,7 +26,7 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Prepare stable No-Flash source
+      - name: Prepare exact legacy Wordmark source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -33,6 +34,7 @@ jobs:
           WORK="$RUNNER_TEMP/iqface-enhancer-11"
           mkdir -p "$WORK"
 
+          # Same stable Tweak.m blob used by the old working Wordmark Direct build.
           curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -45,26 +47,28 @@ jobs:
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
+          # EXACT historical changes from Wordmark Direct Beta.
           old = "static void IQFOpenSettings(void) {"
           assert old in s
           s = s.replace(old, "void IQFOpenSettings(void) {", 1)
 
           pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
-          replacement = "static void IQFAttachLongPress(UIView *view) {\n    (void)view;\n    (void)IQFGestureAssociationKey;\n    (void)IQFLongPressDuration;\n}"
+          replacement = '''static void IQFAttachLongPress(UIView *view) {
+              (void)view;
+          }'''
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          needle = "        if (!IQFSafeModeEnabled()) {\n            IQFInstallNavigationItemHooks();\n            IQFInstallTabBarHooks();\n        }\n"
-          assert needle in s
-          guard = "        IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);\n\n"
-          s = s.replace(needle, guard + needle, 1)
-
+          # IMPORTANT: no extra UIView/addSubview hook is inserted here.
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
           open(p, "w", encoding="utf-8").write(s)
           PY
 
-          cp iqface-enhancer-1.1/WordmarkActivation11.m "$WORK/WordmarkActivation11.m"
+          # Same activation module used by the old working build.
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
+
+          # iQFace 1.1 addition only: safe visual localization, no IQFLoc hook.
           cp iqface-enhancer-1.1/Localization11.m "$WORK/Localization11.m"
 
           cat > "$WORK/Makefile" <<'EOF'
@@ -74,7 +78,7 @@ jobs:
           include $(THEOS)/makefiles/common.mk
 
           LIBRARY_NAME = iQFaceEnhancer
-          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation11.m Localization11.m
+          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m Localization11.m
           iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
           iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
           iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
@@ -100,45 +104,34 @@ jobs:
 
           require_string() {
             local value="$1"
-            if grep -Fq "$value" artifacts/strings.txt; then
-              echo "FOUND: $value"
-            else
-              echo "MISSING REQUIRED: $value"
-              exit 1
-            fi
+            grep -Fq "$value" artifacts/strings.txt || { echo "MISSING REQUIRED: $value"; exit 1; }
+            echo "FOUND: $value"
           }
 
           forbid_string() {
             local value="$1"
-            if grep -Fq "$value" artifacts/strings.txt; then
-              echo "UNEXPECTED: $value"
-              exit 1
-            else
-              echo "ABSENT AS EXPECTED: $value"
-            fi
+            ! grep -Fq "$value" artifacts/strings.txt || { echo "UNEXPECTED: $value"; exit 1; }
+            echo "ABSENT AS EXPECTED: $value"
           }
 
+          # Exact legacy activation markers.
           require_string "IQFPresentSettings"
           require_string "FBNavigationBar"
-          require_string "IQFWordmarkTarget11"
+          require_string "IQFWordmarkTarget"
           require_string "handleTap:"
+          require_string "layoutSubviews"
+          forbid_string "IQFWordmarkTarget11"
           forbid_string "IQFPresentLauncherMenu"
 
-          if grep -Fq "UILongPressGestureRecognizer" artifacts/strings.txt; then
-            echo "INFO: inert long-press metadata retained by linker"
-          else
-            echo "INFO: long-press metadata stripped"
-          fi
-
+          # iQFace 1.1 scanner-only translation markers.
           require_string "1.1-scanner-only"
           require_string "IQFSettingsViewController"
           require_string "Abrir links no Safari"
           require_string "Modo fantasma nos stories"
-          require_string "Ocultar elementos da tela de Reels"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceEnhancer-0.3.2-iQFace-1.1-wordmark-scanner-arm64
+          name: iQFaceEnhancer-0.3.3-iQFace-1.1-legacy-wordmark-arm64
           path: ${{ runner.temp }}/iqface-enhancer-11/artifacts/
           if-no-files-found: error
