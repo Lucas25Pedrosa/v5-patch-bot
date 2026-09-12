@@ -381,8 +381,8 @@ static UIViewController *IQFCCacheTopViewControllerFrom(UIViewController *contro
             next = ((UINavigationController *)current).visibleViewController;
         } else if ([current isKindOfClass:UITabBarController.class]) {
             next = ((UITabBarController *)current).selectedViewController;
-        } else if (current.children.count == 1) {
-            next = current.children.firstObject;
+        } else if (current.childViewControllers.count == 1) {
+            next = current.childViewControllers.firstObject;
         }
 
         if (next == nil || next == current) {
