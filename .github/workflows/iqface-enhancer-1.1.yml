@@ -59,7 +59,7 @@ jobs:
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          # No extra UIView/addSubview hook is inserted here.
+          # Keep the proven direct Wordmark activation unchanged.
           assert 'IQFFindSymbol("IQFPresentSettings")' in s
           assert 'IQFPresentLauncherMenu' not in s
           open(p, "w", encoding="utf-8").write(s)
@@ -67,6 +67,8 @@ jobs:
 
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
           cp iqface-enhancer-1.1/Localization11.m "$WORK/Localization11.m"
+          cp iqface-enhancer-1.1/Localization11Early.m "$WORK/Localization11Early.m"
+          cp iqface-enhancer-1.1/HideButton11.m "$WORK/HideButton11.m"
 
           cat > "$WORK/Makefile" <<'EOF'
           ARCHS = arm64
@@ -75,7 +77,7 @@ jobs:
           include $(THEOS)/makefiles/common.mk
 
           LIBRARY_NAME = iQFaceEnhancer
-          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m Localization11.m
+          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m Localization11.m Localization11Early.m HideButton11.m
           iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
           iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
           iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
@@ -111,6 +113,7 @@ jobs:
             echo "ABSENT AS EXPECTED: $value"
           }
 
+          # Exact legacy activation markers.
           require_string "IQFPresentSettings"
           require_string "FBNavigationBar"
           require_string "IQFWordmarkTarget"
@@ -119,14 +122,19 @@ jobs:
           forbid_string "IQFWordmarkTarget11"
           forbid_string "IQFPresentLauncherMenu"
 
+          # Translation/hide markers for 0.3.4.
           require_string "1.1-scanner-only"
+          require_string "1.1-early-layout"
+          require_string "1.1-hide-button"
           require_string "IQFSettingsViewController"
+          require_string "viewWillAppear:"
           require_string "Abrir links no Safari"
           require_string "Modo fantasma nos stories"
+          require_string "Voltar"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceEnhancer-0.3.3-iQFace-1.1-legacy-wordmark-arm64
+          name: iQFaceEnhancer-0.3.4-iQFace-1.1-early-layout-arm64
           path: ${{ runner.temp }}/iqface-enhancer-11/artifacts/
           if-no-files-found: error
