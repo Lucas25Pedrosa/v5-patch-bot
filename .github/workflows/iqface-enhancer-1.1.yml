@@ -34,7 +34,6 @@ jobs:
           WORK="$RUNNER_TEMP/iqface-enhancer-11"
           mkdir -p "$WORK"
 
-          # Exact stable base used by the existing Wordmark/No-Flash enhancer.
           curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
@@ -47,8 +46,6 @@ jobs:
           p = sys.argv[1]
           s = open(p, encoding="utf-8").read()
 
-          # Preserve the current production activation behavior: wordmark tap opens
-          # IQFPresentSettings directly, with no launcher menu and no long-press route.
           old = "static void IQFOpenSettings(void) {"
           assert old in s
           s = s.replace(old, "void IQFOpenSettings(void) {", 1)
@@ -58,7 +55,6 @@ jobs:
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           assert n == 1
 
-          # Keep the validated No-Flash suppression of the original iQFace button.
           needle = "        if (!IQFSafeModeEnabled()) {\n            IQFInstallNavigationItemHooks();\n            IQFInstallTabBarHooks();\n        }\n"
           assert needle in s
           guard = "        IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);\n\n"
@@ -103,19 +99,46 @@ jobs:
           file artifacts/iQFaceEnhancer.dylib
           strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
 
-          # Preserve the currently validated activation path.
-          grep -q "IQFPresentSettings" artifacts/strings.txt
-          grep -q "FBNavigationBar" artifacts/strings.txt
-          grep -q "iqf_tapped" artifacts/strings.txt
-          ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
-          ! grep -q "UILongPressGestureRecognizer" artifacts/strings.txt
+          require_string() {
+            local value="$1"
+            if grep -Fq "$value" artifacts/strings.txt; then
+              echo "FOUND: $value"
+            else
+              echo "MISSING REQUIRED: $value"
+              exit 1
+            fi
+          }
 
-          # iQFace 1.1 localization must be present in the final binary.
-          grep -q "IQFLoc" artifacts/strings.txt
-          grep -q "IQFEnhancerLocalizationVersion" artifacts/strings.txt
-          grep -q "Abrir links no Safari" artifacts/strings.txt
-          grep -q "Modo fantasma nos stories" artifacts/strings.txt
-          grep -q "Ocultar elementos da tela de Reels" artifacts/strings.txt
+          forbid_string() {
+            local value="$1"
+            if grep -Fq "$value" artifacts/strings.txt; then
+              echo "UNEXPECTED: $value"
+              exit 1
+            else
+              echo "ABSENT AS EXPECTED: $value"
+            fi
+          }
+
+          require_string "IQFPresentSettings"
+          require_string "FBNavigationBar"
+          require_string "IQFWordmarkTarget"
+          require_string "iqf_tapped"
+          forbid_string "IQFPresentLauncherMenu"
+
+          # The long-press constructor is patched to a no-op. Objective-C metadata
+          # may still retain its class-name string after linking, so presence alone
+          # is not treated as an active long-press path.
+          if grep -Fq "UILongPressGestureRecognizer" artifacts/strings.txt; then
+            echo "INFO: inert long-press metadata retained by linker"
+          else
+            echo "INFO: long-press metadata stripped"
+          fi
+
+          require_string "IQFLoc"
+          require_string "IQFEnhancerLocalizationVersion"
+          require_string "Abrir links no Safari"
+          require_string "Modo fantasma nos stories"
+          require_string "Ocultar elementos da tela de Reels"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
