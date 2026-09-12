@@ -1,8 +1,8 @@
 Package: com.lucas.iqfaceenhancer
 Name: iQFace Enhancer
-Version: 0.3.0
+Version: 0.2.1
 Architecture: iphoneos-arm
-Description: Build segura para iQFace 1.1, com launcher preservado e tradução pt-BR atualizada.
+Description: Build segura para ocultar o botão do iQFace e abrir os ajustes pela tab bar.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
