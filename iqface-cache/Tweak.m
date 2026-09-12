@@ -3,15 +3,19 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// iQFaceCache 0.1.0
-// Standalone add-on. Does not modify iQFace, iQFaceEnhancer or iQFaceIcons.
-// Adds one native IQFRow to the Tools section of IQFSettingsViewController.
-// Cleaning is restricted to the two cache directories validated on Facebook 577.1.0.
+// iQFaceCache 0.2.0
+// iQFace 1.1-only settings integration using IQFSetting.
+// No IQFRow/IQFSection compatibility layer is kept.
+// Manual cleaning keeps confirmation/result UI; automatic cleaning is silent.
 
-static void (*IQFCCacheOriginalViewDidAppear)(UIViewController *, SEL, BOOL) = NULL;
+static NSString *const IQFCCacheAutoFrequencyKey = @"iQFaceCacheAutoFrequency";
+static NSString *const IQFCCacheLastAutomaticRunKey = @"iQFaceCacheLastAutomaticRun";
+
+static void (*IQFCCacheOriginalViewWillAppear)(UIViewController *, SEL, BOOL) = NULL;
 static BOOL IQFCCacheHookInstalled = NO;
 static NSInteger IQFCCacheHookAttempts = 0;
-static const void *IQFCCacheRowInstalledKey = &IQFCCacheRowInstalledKey;
+static BOOL IQFCCacheAutomaticRunInProgress = NO;
+static id IQFCCacheActiveObserver = nil;
 
 static BOOL IQFCCacheUsesPortuguese(void) {
     NSString *language = NSLocale.preferredLanguages.firstObject.lowercaseString;
@@ -36,68 +40,7 @@ static BOOL IQFCCacheClassImplementsSelector(Class cls, SEL selector) {
     return found;
 }
 
-static BOOL IQFCCacheIsToolsHeader(NSString *header) {
-    if (![header isKindOfClass:NSString.class]) {
-        return NO;
-    }
-    NSString *normalized = header.lowercaseString;
-    return [normalized isEqualToString:@"tools"] ||
-           [normalized isEqualToString:@"ferramentas"] ||
-           [normalized isEqualToString:@"herramientas"];
-}
-
-static NSString *IQFCCacheRowTitle(id row) {
-    NSString *title = nil;
-    @try {
-        title = [row valueForKey:@"title"];
-    } @catch (__unused NSException *exception) {
-        title = nil;
-    }
-    return [title isKindOfClass:NSString.class] ? title : nil;
-}
-
-static BOOL IQFCCacheIsOwnRowTitle(NSString *title) {
-    return [title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"];
-}
-
-static BOOL IQFCCacheIsIconRowTitle(NSString *title) {
-    return [title isEqualToString:@"Alterar ícone"] || [title isEqualToString:@"Change Icon"];
-}
-
-static BOOL IQFCCacheAlreadyContainsRow(NSArray *sections) {
-    for (id section in sections) {
-        NSArray *rows = nil;
-        @try {
-            rows = [section valueForKey:@"rows"];
-        } @catch (__unused NSException *exception) {
-            rows = nil;
-        }
-        if (![rows isKindOfClass:NSArray.class]) {
-            continue;
-        }
-        for (id row in rows) {
-            if (IQFCCacheIsOwnRowTitle(IQFCCacheRowTitle(row))) {
-                return YES;
-            }
-        }
-    }
-    return NO;
-}
-
-static id IQFCCacheFindToolsSection(NSArray *sections) {
-    for (id section in sections) {
-        NSString *header = nil;
-        @try {
-            header = [section valueForKey:@"header"];
-        } @catch (__unused NSException *exception) {
-            header = nil;
-        }
-        if (IQFCCacheIsToolsHeader(header)) {
-            return section;
-        }
-    }
-    return nil;
-}
+#pragma mark - Cache paths and cleaning
 
 static NSArray<NSString *> *IQFCCacheTargetPaths(void) {
     NSString *cacheRoot = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches"];
@@ -108,6 +51,10 @@ static NSArray<NSString *> *IQFCCacheTargetPaths(void) {
 }
 
 static BOOL IQFCCacheIsAllowedTargetPath(NSString *path) {
+    if (![path isKindOfClass:NSString.class] || path.length == 0) {
+        return NO;
+    }
+
     NSString *cacheRoot = [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches"] stringByStandardizingPath];
     NSString *standardPath = [path stringByStandardizingPath];
     NSString *expectedPrefix = [cacheRoot stringByAppendingString:@"/"];
@@ -170,7 +117,9 @@ static NSString *IQFCCacheHumanBytes(unsigned long long bytes) {
 
 static NSUInteger IQFCCacheClearContentsOfDirectory(NSString *path, NSMutableArray<NSString *> *errors) {
     if (!IQFCCacheIsAllowedTargetPath(path)) {
-        [errors addObject:@"Blocked non-whitelisted path"];
+        if (errors != nil) {
+            [errors addObject:@"Blocked non-whitelisted path"];
+        }
         return 0;
     }
 
@@ -183,7 +132,7 @@ static NSUInteger IQFCCacheClearContentsOfDirectory(NSString *path, NSMutableArr
     NSError *listError = nil;
     NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:path error:&listError];
     if (![children isKindOfClass:NSArray.class]) {
-        if (listError != nil) {
+        if (errors != nil && listError != nil) {
             [errors addObject:listError.localizedDescription ?: @"List error"];
         }
         return 0;
@@ -195,12 +144,44 @@ static NSUInteger IQFCCacheClearContentsOfDirectory(NSString *path, NSMutableArr
         NSError *removeError = nil;
         if ([fm removeItemAtPath:childPath error:&removeError]) {
             removed += 1;
-        } else if (removeError != nil) {
+        } else if (errors != nil && removeError != nil) {
             [errors addObject:removeError.localizedDescription ?: @"Remove error"];
         }
     }
     return removed;
 }
+
+#pragma mark - iQFace prefs bridge
+
+static Class IQFCCachePrefsClass(void) {
+    return NSClassFromString(@"IQFPrefs");
+}
+
+static NSInteger IQFCCachePreferenceInteger(NSString *key, NSInteger defaultValue) {
+    Class prefs = IQFCCachePrefsClass();
+    SEL selector = NSSelectorFromString(@"integerForKey:defaultValue:");
+    if (prefs == Nil || ![prefs respondsToSelector:selector]) {
+        return defaultValue;
+    }
+
+    typedef NSInteger (*IQFCCacheIntegerGetter)(id, SEL, id, NSInteger);
+    IQFCCacheIntegerGetter getter = (IQFCCacheIntegerGetter)(void *)objc_msgSend;
+    return getter(prefs, selector, key, defaultValue);
+}
+
+static void IQFCCacheSetPreferenceInteger(NSInteger value, NSString *key) {
+    Class prefs = IQFCCachePrefsClass();
+    SEL selector = NSSelectorFromString(@"setInteger:forKey:");
+    if (prefs == Nil || ![prefs respondsToSelector:selector]) {
+        return;
+    }
+
+    typedef void (*IQFCCacheIntegerSetter)(id, SEL, NSInteger, id);
+    IQFCCacheIntegerSetter setter = (IQFCCacheIntegerSetter)(void *)objc_msgSend;
+    setter(prefs, selector, value, key);
+}
+
+#pragma mark - Manual cleaning UI
 
 static void IQFCCachePresentResult(UIViewController *controller,
                                    unsigned long long freed,
@@ -224,21 +205,18 @@ static void IQFCCachePresentResult(UIViewController *controller,
     [controller presentViewController:alert animated:YES completion:nil];
 }
 
-static void IQFCCachePerformCleaning(UIViewController *controller) {
+static void IQFCCachePerformManualCleaning(UIViewController *controller) {
     __weak UIViewController *weakController = controller;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         unsigned long long before = IQFCCacheTotalSize();
         NSMutableArray<NSString *> *errors = [NSMutableArray array];
-        NSUInteger removed = 0;
 
         for (NSString *path in IQFCCacheTargetPaths()) {
-            removed += IQFCCacheClearContentsOfDirectory(path, errors);
+            IQFCCacheClearContentsOfDirectory(path, errors);
         }
 
         unsigned long long after = IQFCCacheTotalSize();
         unsigned long long freed = before > after ? before - after : 0;
-        NSLog(@"[iQFaceCache] before=%llu after=%llu freed=%llu removed=%lu errors=%lu",
-              before, after, freed, (unsigned long)removed, (unsigned long)errors.count);
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.20 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -275,21 +253,143 @@ static void IQFCCachePresentConfirmation(UIViewController *controller) {
                                             handler:^(__unused UIAlertAction *action) {
         UIViewController *presenter = weakController;
         if (presenter != nil) {
-            IQFCCachePerformCleaning(presenter);
+            IQFCCachePerformManualCleaning(presenter);
         }
     }]];
 
     [controller presentViewController:alert animated:YES completion:nil];
 }
 
-static id IQFCCacheCreateNativeRow(UIViewController *controller) {
-    SEL selector = NSSelectorFromString(@"valueRowWithTitle:icon:detail:tap:");
-    if (controller == nil || ![controller respondsToSelector:selector]) {
+#pragma mark - Silent automatic cleaning
+
+static NSDate *IQFCCacheNextAutomaticDate(NSDate *lastRun, NSInteger frequency) {
+    if (lastRun == nil || frequency <= 0) {
+        return nil;
+    }
+
+    NSDateComponents *components = [NSDateComponents new];
+    switch (frequency) {
+        case 1:
+            components.day = 1;
+            break;
+        case 2:
+            components.day = 7;
+            break;
+        case 3:
+            components.month = 1;
+            break;
+        default:
+            return nil;
+    }
+
+    return [[NSCalendar currentCalendar] dateByAddingComponents:components
+                                                         toDate:lastRun
+                                                        options:0];
+}
+
+static void IQFCCacheMaybeRunAutomaticCleaning(void) {
+    if (IQFCCacheAutomaticRunInProgress || IQFCCachePrefsClass() == Nil) {
+        return;
+    }
+
+    NSInteger frequency = IQFCCachePreferenceInteger(IQFCCacheAutoFrequencyKey, 0);
+    if (frequency < 1 || frequency > 3) {
+        return;
+    }
+
+    NSInteger lastTimestamp = IQFCCachePreferenceInteger(IQFCCacheLastAutomaticRunKey, 0);
+    NSDate *now = [NSDate date];
+    BOOL shouldRun = lastTimestamp <= 0;
+
+    if (!shouldRun) {
+        NSDate *lastRun = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)lastTimestamp];
+        NSDate *nextRun = IQFCCacheNextAutomaticDate(lastRun, frequency);
+        shouldRun = nextRun == nil || [now compare:nextRun] != NSOrderedAscending;
+    }
+
+    if (!shouldRun) {
+        return;
+    }
+
+    IQFCCacheAutomaticRunInProgress = YES;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        for (NSString *path in IQFCCacheTargetPaths()) {
+            IQFCCacheClearContentsOfDirectory(path, nil);
+        }
+
+        NSInteger completedAt = (NSInteger)[NSDate date].timeIntervalSince1970;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            IQFCCacheSetPreferenceInteger(completedAt, IQFCCacheLastAutomaticRunKey);
+            IQFCCacheAutomaticRunInProgress = NO;
+        });
+    });
+}
+
+static void IQFCCacheStartAutomaticScheduler(void) {
+    if (IQFCCacheActiveObserver != nil) {
+        return;
+    }
+
+    IQFCCacheActiveObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidBecomeActiveNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(__unused NSNotification *note) {
+        IQFCCacheMaybeRunAutomaticCleaning();
+    }];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQFCCacheMaybeRunAutomaticCleaning();
+    });
+}
+
+#pragma mark - iQFace 1.1 settings integration
+
+static NSString *IQFCCacheSettingTitle(id setting) {
+    if (setting == nil) {
+        return nil;
+    }
+
+    SEL selector = NSSelectorFromString(@"title");
+    if (![setting respondsToSelector:selector]) {
+        return nil;
+    }
+
+    typedef id (*IQFCCacheObjectGetter)(id, SEL);
+    IQFCCacheObjectGetter getter = (IQFCCacheObjectGetter)(void *)objc_msgSend;
+    id value = getter(setting, selector);
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+static BOOL IQFCCacheIsManualTitle(NSString *title) {
+    return [title isEqualToString:@"Limpar cache"] || [title isEqualToString:@"Clear cache"];
+}
+
+static BOOL IQFCCacheIsAutomaticTitle(NSString *title) {
+    return [title isEqualToString:@"Limpar cache automaticamente"] ||
+           [title isEqualToString:@"Clear cache automatically"];
+}
+
+static BOOL IQFCCacheIsToolsHeader(NSString *header) {
+    if (![header isKindOfClass:NSString.class]) {
+        return NO;
+    }
+    NSString *normalized = header.lowercaseString;
+    return [normalized isEqualToString:@"tools"] ||
+           [normalized isEqualToString:@"ferramentas"] ||
+           [normalized isEqualToString:@"herramientas"];
+}
+
+static id IQFCCacheCreateManualSetting(UIViewController *controller) {
+    Class settingClass = NSClassFromString(@"IQFSetting");
+    SEL selector = NSSelectorFromString(@"buttonCellWithTitle:subtitle:icon:action:");
+    if (settingClass == Nil || ![settingClass respondsToSelector:selector]) {
         return nil;
     }
 
     __weak UIViewController *weakController = controller;
-    void (^tapBlock)(void) = ^{
+    void (^action)(void) = ^{
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *presenter = weakController;
             if (presenter == nil || presenter.presentedViewController != nil) {
@@ -299,87 +399,176 @@ static id IQFCCacheCreateNativeRow(UIViewController *controller) {
         });
     };
 
-    typedef id (*IQFCCacheNativeRowBuilder)(id, SEL, id, id, id, id);
-    IQFCCacheNativeRowBuilder builder = (IQFCCacheNativeRowBuilder)(void *)objc_msgSend;
-    return builder(controller,
+    typedef id (*IQFCCacheButtonFactory)(id, SEL, id, id, id, id);
+    IQFCCacheButtonFactory factory = (IQFCCacheButtonFactory)(void *)objc_msgSend;
+    return factory(settingClass,
                    selector,
                    IQFCCacheText(@"Limpar cache", @"Clear cache"),
+                   nil,
                    @"trash",
-                   @"",
-                   [tapBlock copy]);
+                   [action copy]);
 }
 
-static void IQFCCacheInstallRow(UIViewController *controller) {
-    if (controller == nil || objc_getAssociatedObject(controller, IQFCCacheRowInstalledKey) != nil) {
+static id IQFCCacheCreateAutomaticSetting(void) {
+    Class settingClass = NSClassFromString(@"IQFSetting");
+    SEL selector = NSSelectorFromString(@"optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:");
+    if (settingClass == Nil || ![settingClass respondsToSelector:selector]) {
+        return nil;
+    }
+
+    NSArray<NSString *> *options = IQFCCacheUsesPortuguese()
+        ? @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"]
+        : @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];
+
+    typedef id (*IQFCCacheOptionsFactory)(id, SEL, id, id, id, id, NSInteger, id);
+    IQFCCacheOptionsFactory factory = (IQFCCacheOptionsFactory)(void *)objc_msgSend;
+    return factory(settingClass,
+                   selector,
+                   IQFCCacheText(@"Limpar cache automaticamente", @"Clear cache automatically"),
+                   nil,
+                   @"clock.arrow.circlepath",
+                   IQFCCacheAutoFrequencyKey,
+                   0,
+                   options);
+}
+
+static NSArray *IQFCCacheControllerSections(UIViewController *controller) {
+    SEL selector = NSSelectorFromString(@"sections");
+    if (controller == nil || ![controller respondsToSelector:selector]) {
+        return nil;
+    }
+
+    typedef id (*IQFCCacheObjectGetter)(id, SEL);
+    IQFCCacheObjectGetter getter = (IQFCCacheObjectGetter)(void *)objc_msgSend;
+    id value = getter(controller, selector);
+    return [value isKindOfClass:NSArray.class] ? value : nil;
+}
+
+static void IQFCCacheSetControllerSections(UIViewController *controller, NSArray *sections) {
+    SEL selector = NSSelectorFromString(@"setSections:");
+    if (controller == nil || sections == nil || ![controller respondsToSelector:selector]) {
         return;
     }
 
-    NSArray *sections = nil;
-    @try {
-        sections = [controller valueForKey:@"sections"];
-    } @catch (__unused NSException *exception) {
-        sections = nil;
+    typedef void (*IQFCCacheObjectSetter)(id, SEL, id);
+    IQFCCacheObjectSetter setter = (IQFCCacheObjectSetter)(void *)objc_msgSend;
+    setter(controller, selector, sections);
+}
+
+static BOOL IQFCCacheIsRootPanel(UIViewController *controller) {
+    SEL selector = NSSelectorFromString(@"panelRoot");
+    if (controller != nil && [controller respondsToSelector:selector]) {
+        typedef BOOL (*IQFCCacheBoolGetter)(id, SEL);
+        IQFCCacheBoolGetter getter = (IQFCCacheBoolGetter)(void *)objc_msgSend;
+        return getter(controller, selector);
     }
 
-    if (![sections isKindOfClass:NSArray.class] || sections.count == 0) {
+    NSString *title = controller.title ?: controller.navigationItem.title;
+    return [title isEqualToString:@"iQFace"];
+}
+
+static void IQFCCacheEnsureSettings(UIViewController *controller) {
+    if (controller == nil || !IQFCCacheIsRootPanel(controller)) {
         return;
     }
 
-    if (IQFCCacheAlreadyContainsRow(sections)) {
-        objc_setAssociatedObject(controller, IQFCCacheRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSArray *sections = IQFCCacheControllerSections(controller);
+    if (sections.count == 0) {
         return;
     }
 
-    id toolsSection = IQFCCacheFindToolsSection(sections);
-    if (toolsSection == nil) {
-        NSLog(@"[iQFaceCache] seção Ferramentas não encontrada; tela mantida intacta");
-        return;
-    }
+    NSInteger toolsIndex = NSNotFound;
+    BOOL hasManual = NO;
+    BOOL hasAutomatic = NO;
 
-    NSArray *rows = nil;
-    @try {
-        rows = [toolsSection valueForKey:@"rows"];
-    } @catch (__unused NSException *exception) {
-        rows = nil;
-    }
-    if (![rows isKindOfClass:NSArray.class]) {
-        return;
-    }
+    for (NSUInteger sectionIndex = 0; sectionIndex < sections.count; sectionIndex++) {
+        id rawSection = sections[sectionIndex];
+        if (![rawSection isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
 
-    id nativeRow = IQFCCacheCreateNativeRow(controller);
-    Class rowClass = NSClassFromString(@"IQFRow");
-    if (nativeRow == nil || rowClass == Nil || ![nativeRow isKindOfClass:rowClass]) {
-        NSLog(@"[iQFaceCache] construtor nativo de IQFRow indisponível");
-        return;
-    }
-
-    NSMutableArray *updatedRows = [rows mutableCopy];
-    NSUInteger insertionIndex = updatedRows.count;
-    for (NSUInteger i = 0; i < updatedRows.count; i++) {
-        if (IQFCCacheIsIconRowTitle(IQFCCacheRowTitle(updatedRows[i]))) {
-            insertionIndex = i + 1;
+        NSDictionary *section = (NSDictionary *)rawSection;
+        NSString *header = [section[@"header"] isKindOfClass:NSString.class] ? section[@"header"] : nil;
+        if (IQFCCacheIsToolsHeader(header)) {
+            toolsIndex = (NSInteger)sectionIndex;
+            NSArray *rows = [section[@"rows"] isKindOfClass:NSArray.class] ? section[@"rows"] : @[];
+            for (id row in rows) {
+                NSString *title = IQFCCacheSettingTitle(row);
+                hasManual = hasManual || IQFCCacheIsManualTitle(title);
+                hasAutomatic = hasAutomatic || IQFCCacheIsAutomaticTitle(title);
+            }
             break;
         }
     }
-    [updatedRows insertObject:nativeRow atIndex:MIN(insertionIndex, updatedRows.count)];
 
-    @try {
-        [toolsSection setValue:[updatedRows copy] forKey:@"rows"];
-        if ([controller isKindOfClass:UITableViewController.class]) {
-            [((UITableViewController *)controller).tableView reloadData];
+    if (toolsIndex != NSNotFound && hasManual && hasAutomatic) {
+        return;
+    }
+
+    id manualSetting = hasManual ? nil : IQFCCacheCreateManualSetting(controller);
+    id automaticSetting = hasAutomatic ? nil : IQFCCacheCreateAutomaticSetting();
+    if ((!hasManual && manualSetting == nil) || (!hasAutomatic && automaticSetting == nil)) {
+        return;
+    }
+
+    NSMutableArray *updatedSections = [sections mutableCopy];
+
+    if (toolsIndex != NSNotFound) {
+        NSDictionary *existingSection = updatedSections[(NSUInteger)toolsIndex];
+        NSMutableDictionary *updatedSection = [existingSection mutableCopy];
+        NSArray *existingRows = [existingSection[@"rows"] isKindOfClass:NSArray.class]
+            ? existingSection[@"rows"]
+            : @[];
+        NSMutableArray *updatedRows = [existingRows mutableCopy];
+        if (manualSetting != nil) {
+            [updatedRows addObject:manualSetting];
         }
-        objc_setAssociatedObject(controller, IQFCCacheRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[iQFaceCache] linha Limpar cache adicionada");
-    } @catch (__unused NSException *exception) {
-        NSLog(@"[iQFaceCache] não foi possível adicionar a linha; tela mantida intacta");
+        if (automaticSetting != nil) {
+            [updatedRows addObject:automaticSetting];
+        }
+        updatedSection[@"rows"] = [updatedRows copy];
+        updatedSections[(NSUInteger)toolsIndex] = [updatedSection copy];
+    } else {
+        NSMutableArray *rows = [NSMutableArray array];
+        if (manualSetting != nil) {
+            [rows addObject:manualSetting];
+        }
+        if (automaticSetting != nil) {
+            [rows addObject:automaticSetting];
+        }
+
+        NSDictionary *toolsSection = @{
+            @"header": IQFCCacheText(@"FERRAMENTAS", @"TOOLS"),
+            @"rows": [rows copy]
+        };
+
+        NSUInteger insertionIndex = updatedSections.count;
+        for (NSUInteger i = 0; i < updatedSections.count; i++) {
+            id rawSection = updatedSections[i];
+            if (![rawSection isKindOfClass:NSDictionary.class]) {
+                continue;
+            }
+            NSString *header = [rawSection[@"header"] isKindOfClass:NSString.class] ? rawSection[@"header"] : nil;
+            if ([header caseInsensitiveCompare:@"DEV"] == NSOrderedSame ||
+                [header caseInsensitiveCompare:@"ABOUT"] == NSOrderedSame) {
+                insertionIndex = i;
+                break;
+            }
+        }
+        [updatedSections insertObject:toolsSection atIndex:MIN(insertionIndex, updatedSections.count)];
+    }
+
+    IQFCCacheSetControllerSections(controller, [updatedSections copy]);
+    if ([controller isKindOfClass:UITableViewController.class]) {
+        [((UITableViewController *)controller).tableView reloadData];
     }
 }
 
-static void IQFCCacheViewDidAppear(UIViewController *self, SEL command, BOOL animated) {
-    if (IQFCCacheOriginalViewDidAppear != NULL) {
-        IQFCCacheOriginalViewDidAppear(self, command, animated);
+static void IQFCCacheViewWillAppear(UIViewController *self, SEL command, BOOL animated) {
+    if (IQFCCacheOriginalViewWillAppear != NULL) {
+        IQFCCacheOriginalViewWillAppear(self, command, animated);
     }
-    IQFCCacheInstallRow(self);
+    IQFCCacheEnsureSettings(self);
 }
 
 static void IQFCCacheTryInstallHook(void) {
@@ -389,19 +578,17 @@ static void IQFCCacheTryInstallHook(void) {
 
     IQFCCacheHookAttempts += 1;
     Class target = NSClassFromString(@"IQFSettingsViewController");
-    if (target != Nil) {
-        SEL selector = @selector(viewDidAppear:);
-        Method inheritedOrOwn = class_getInstanceMethod(target, selector);
-        if (inheritedOrOwn != NULL) {
-            IQFCCacheOriginalViewDidAppear = (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(inheritedOrOwn);
-            const char *types = method_getTypeEncoding(inheritedOrOwn);
+    SEL selector = @selector(viewWillAppear:);
+    Method inheritedOrOwn = target != Nil ? class_getInstanceMethod(target, selector) : NULL;
+    if (inheritedOrOwn != NULL) {
+        IQFCCacheOriginalViewWillAppear = (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(inheritedOrOwn);
+        const char *types = method_getTypeEncoding(inheritedOrOwn);
 
-            if (IQFCCacheClassImplementsSelector(target, selector)) {
-                method_setImplementation(inheritedOrOwn, (IMP)&IQFCCacheViewDidAppear);
-                IQFCCacheHookInstalled = YES;
-            } else if (class_addMethod(target, selector, (IMP)&IQFCCacheViewDidAppear, types)) {
-                IQFCCacheHookInstalled = YES;
-            }
+        if (IQFCCacheClassImplementsSelector(target, selector)) {
+            method_setImplementation(inheritedOrOwn, (IMP)&IQFCCacheViewWillAppear);
+            IQFCCacheHookInstalled = YES;
+        } else if (class_addMethod(target, selector, (IMP)&IQFCCacheViewWillAppear, types)) {
+            IQFCCacheHookInstalled = YES;
         }
     }
 
@@ -424,6 +611,7 @@ static void IQFCCacheInitialize(void) {
 
         dispatch_async(dispatch_get_main_queue(), ^{
             IQFCCacheTryInstallHook();
+            IQFCCacheStartAutomaticScheduler();
         });
     }
 }
