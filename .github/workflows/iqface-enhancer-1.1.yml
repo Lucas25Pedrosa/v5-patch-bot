@@ -1,0 +1,125 @@
+name: Build iQFaceEnhancer 1.1
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-enhancer-1.1/**"
+      - "iqface-enhancer-wordmark-beta/WordmarkActivation.m"
+      - ".github/workflows/iqface-enhancer-1.1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Prepare stable Wordmark No-Flash source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-enhancer-11"
+          mkdir -p "$WORK"
+
+          # Exact stable base used by the existing Wordmark/No-Flash enhancer.
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$WORK/Tweak.m"
+
+          python3 - "$WORK/Tweak.m" <<'PY'
+          import re, sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+
+          # Preserve the current production activation behavior: wordmark tap opens
+          # IQFPresentSettings directly, with no launcher menu and no long-press route.
+          old = "static void IQFOpenSettings(void) {"
+          assert old in s
+          s = s.replace(old, "void IQFOpenSettings(void) {", 1)
+
+          pattern = r"static void IQFAttachLongPress\(UIView \*view\) \{.*?\n\}"
+          replacement = "static void IQFAttachLongPress(UIView *view) {\n    (void)view;\n    (void)IQFGestureAssociationKey;\n    (void)IQFLongPressDuration;\n}"
+          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          assert n == 1
+
+          # Keep the validated No-Flash suppression of the original iQFace button.
+          needle = "        if (!IQFSafeModeEnabled()) {\n            IQFInstallNavigationItemHooks();\n            IQFInstallTabBarHooks();\n        }\n"
+          assert needle in s
+          guard = "        IQFReplaceMethod(UIView.class, @selector(addSubview:), (IMP)&IQFAddSubview, (IMP *)&IQFOriginalAddSubview);\n\n"
+          s = s.replace(needle, guard + needle, 1)
+
+          assert 'IQFFindSymbol("IQFPresentSettings")' in s
+          assert 'IQFPresentLauncherMenu' not in s
+          open(p, "w", encoding="utf-8").write(s)
+          PY
+
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
+          cp iqface-enhancer-1.1/Localization11.m "$WORK/Localization11.m"
+
+          cat > "$WORK/Makefile" <<'EOF'
+          ARCHS = arm64
+          TARGET = iphone:clang:latest:14.0
+
+          include $(THEOS)/makefiles/common.mk
+
+          LIBRARY_NAME = iQFaceEnhancer
+          iQFaceEnhancer_FILES = Tweak.m WordmarkActivation.m Localization11.m
+          iQFaceEnhancer_FRAMEWORKS = Foundation UIKit QuartzCore
+          iQFaceEnhancer_CFLAGS = -fobjc-arc -Wall -Wextra
+          iQFaceEnhancer_LDFLAGS = -Wl,-install_name,@rpath/iQFaceEnhancer.dylib
+          iQFaceEnhancer_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
+
+          include $(THEOS_MAKE_PATH)/library.mk
+          EOF
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/iqface-enhancer-11"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
+          dylib_path="$(find .theos -type f -name iQFaceEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          mkdir -p artifacts
+          cp "$dylib_path" artifacts/iQFaceEnhancer.dylib
+          shasum -a 256 artifacts/iQFaceEnhancer.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceEnhancer.dylib
+          strings -a artifacts/iQFaceEnhancer.dylib > artifacts/strings.txt || true
+
+          # Preserve the currently validated activation path.
+          grep -q "IQFPresentSettings" artifacts/strings.txt
+          grep -q "FBNavigationBar" artifacts/strings.txt
+          grep -q "iqf_tapped" artifacts/strings.txt
+          ! grep -q "IQFPresentLauncherMenu" artifacts/strings.txt
+          ! grep -q "UILongPressGestureRecognizer" artifacts/strings.txt
+
+          # iQFace 1.1 localization must be present in the final binary.
+          grep -q "IQFLoc" artifacts/strings.txt
+          grep -q "IQFEnhancerLocalizationVersion" artifacts/strings.txt
+          grep -q "Abrir links no Safari" artifacts/strings.txt
+          grep -q "Modo fantasma nos stories" artifacts/strings.txt
+          grep -q "Ocultar elementos da tela de Reels" artifacts/strings.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceEnhancer-0.3.0-iQFace-1.1-arm64
+          path: ${{ runner.temp }}/iqface-enhancer-11/artifacts/
+          if-no-files-found: error
