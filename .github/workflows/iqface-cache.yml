@@ -35,9 +35,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Source-level checks are used for Unicode Objective-C literals because
-          # strings -a is not guaranteed to expose their UTF-16 representation.
-          grep -F "iQFaceCache 0.2.0" Tweak.m
+          grep -F "iQFaceCache 0.2.1" Tweak.m
+          grep -F 'NSClassFromString(@"IQFTweakSettings")' Tweak.m
+          grep -F "class_getClassMethod" Tweak.m
           grep -F "buttonCellWithTitle:subtitle:icon:action:" Tweak.m
           grep -F "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:" Tweak.m
           grep -F "Limpar cache automaticamente" Tweak.m
@@ -46,7 +46,15 @@ jobs:
           grep -F "Mensalmente" Tweak.m
           grep -F "Serão removidos aproximadamente" Tweak.m
           grep -F "✓ Cache limpo" Tweak.m
-          grep -F "✓ Cache cleared" Tweak.m
+
+          if grep -Fq "viewWillAppear:" Tweak.m; then
+            echo "Unexpected view lifecycle settings hook"
+            exit 1
+          fi
+          if grep -Fq "setSections:" Tweak.m; then
+            echo "Unexpected runtime setSections mutation"
+            exit 1
+          fi
 
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
 
@@ -70,6 +78,7 @@ jobs:
             echo "ABSENT AS EXPECTED: $value"
           }
 
+          require_string "IQFTweakSettings"
           require_string "IQFSetting"
           require_string "buttonCellWithTitle:subtitle:icon:action:"
           require_string "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:"
@@ -87,11 +96,13 @@ jobs:
           require_string "com.facebook.Facebook.MosaicIGImageDiskCache"
 
           forbid_string "valueRowWithTitle:icon:detail:tap:"
+          forbid_string "setSections:"
+          forbid_string "viewWillAppear:"
           forbid_string "UILongPressGestureRecognizer"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceCache-0.2.0-iQFace-1.1-arm64
+          name: iQFaceCache-0.2.1-iQFace-1.1-arm64
           path: iqface-cache/artifacts/
           if-no-files-found: error
