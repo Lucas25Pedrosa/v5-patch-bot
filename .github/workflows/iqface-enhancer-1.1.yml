@@ -125,9 +125,6 @@ jobs:
           require_string "iqf_tapped"
           forbid_string "IQFPresentLauncherMenu"
 
-          # The long-press constructor is patched to a no-op. Objective-C metadata
-          # may still retain its class-name string after linking, so presence alone
-          # is not treated as an active long-press path.
           if grep -Fq "UILongPressGestureRecognizer" artifacts/strings.txt; then
             echo "INFO: inert long-press metadata retained by linker"
           else
@@ -135,7 +132,7 @@ jobs:
           fi
 
           require_string "IQFLoc"
-          require_string "IQFEnhancerLocalizationVersion"
+          require_string "IQFSettingsViewController"
           require_string "Abrir links no Safari"
           require_string "Modo fantasma nos stories"
           require_string "Ocultar elementos da tela de Reels"
