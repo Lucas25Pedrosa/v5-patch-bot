@@ -1,0 +1,52 @@
+name: Build iQFace Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-probe/**"
+      - ".github/workflows/iqface-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceProbe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceProbe.dylib
+          shasum -a 256 artifacts/iQFaceProbe.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceProbe.dylib
+          strings -a artifacts/iQFaceProbe.dylib | grep -F "iQFaceProbe 1.0"
+          strings -a artifacts/iQFaceProbe.dylib | grep -F "IQFSetting"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceProbe-1.0-arm64
+          path: iqface-probe/artifacts/
+          if-no-files-found: error
