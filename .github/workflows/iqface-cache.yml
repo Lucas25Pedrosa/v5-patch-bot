@@ -31,27 +31,63 @@ jobs:
         run: |
           brew install ldid
 
-      - name: Build arm64 dylib
+      - name: Build and validate arm64 dylib
         run: |
           set -euo pipefail
-          grep -F "Serão removidos aproximadamente" Tweak.m
-          grep -F "Cache limpo" Tweak.m
+
+          grep -F "iQFaceCache 0.2.0" Tweak.m
+          grep -F "buttonCellWithTitle:subtitle:icon:action:" Tweak.m
+          grep -F "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:" Tweak.m
+          grep -F "Limpar cache automaticamente" Tweak.m
+          grep -F "Diariamente" Tweak.m
+          grep -F "Semanalmente" Tweak.m
+          grep -F "Mensalmente" Tweak.m
+
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name iQFaceCache.dylib -print -quit)"
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQFaceCache.dylib
           shasum -a 256 artifacts/iQFaceCache.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceCache.dylib
-          strings -a artifacts/iQFaceCache.dylib | grep -F "Limpar cache"
-          if strings -a artifacts/iQFaceCache.dylib | grep -F "UILongPressGestureRecognizer"; then
-            echo "Unexpected gesture recognizer in iQFaceCache"
-            exit 1
-          fi
+          strings -a artifacts/iQFaceCache.dylib > artifacts/strings.txt || true
+
+          require_string() {
+            local value="$1"
+            grep -Fq "$value" artifacts/strings.txt || { echo "MISSING REQUIRED: $value"; exit 1; }
+            echo "FOUND: $value"
+          }
+
+          forbid_string() {
+            local value="$1"
+            ! grep -Fq "$value" artifacts/strings.txt || { echo "UNEXPECTED: $value"; exit 1; }
+            echo "ABSENT AS EXPECTED: $value"
+          }
+
+          require_string "IQFSetting"
+          require_string "buttonCellWithTitle:subtitle:icon:action:"
+          require_string "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:"
+          require_string "IQFPrefs"
+          require_string "integerForKey:defaultValue:"
+          require_string "setInteger:forKey:"
+          require_string "FERRAMENTAS"
+          require_string "Limpar cache"
+          require_string "Limpar cache automaticamente"
+          require_string "Desativado"
+          require_string "Diariamente"
+          require_string "Semanalmente"
+          require_string "Mensalmente"
+          require_string "Serão removidos aproximadamente"
+          require_string "Cache limpo"
+          require_string "com.facebook.Facebook.MosaicIGImageDiskCache"
+
+          forbid_string "valueRowWithTitle:icon:detail:tap:"
+          forbid_string "UILongPressGestureRecognizer"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceCache-0.1.0-arm64
+          name: iQFaceCache-0.2.0-iQFace-1.1-arm64
           path: iqface-cache/artifacts/
           if-no-files-found: error
