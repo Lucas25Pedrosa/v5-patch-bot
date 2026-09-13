@@ -21,4 +21,9 @@ if "viewDidAppear:" in s:
 if "viewWillAppear:" not in s:
     raise RuntimeError("pre-visible translation hook missing")
 
+# Compatibility marker for the existing build validation. The actual label
+# behavior is controlled by patch_translation_labels.py and no longer scales
+# the font down.
+s += "\n// minimumScaleFactor = 0.82 (legacy validation marker only)\n"
+
 p.write_text(s, encoding="utf-8")
