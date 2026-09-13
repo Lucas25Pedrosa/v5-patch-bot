@@ -26,16 +26,20 @@ jobs:
         run: |
           python3 <<'PY'
           from pathlib import Path
+          import re
 
           p = Path("Tweak.m")
           s = p.read_text()
           s = s.replace("// iQFaceCache 0.2.1", "// iQFaceCache 0.2.2-test", 1)
 
-          old = '''    NSArray<NSString *> *options = IQFCCacheUsesPortuguese()
-              ? @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"]
-              : @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];'''
+          pattern = re.compile(
+              r'\s*NSArray<NSString \*> \*options = IQFCCacheUsesPortuguese\(\)\s*'
+              r'\?\s*@\[@"Desativado",\s*@"Diariamente",\s*@"Semanalmente",\s*@"Mensalmente"\]\s*'
+              r':\s*@\[@"Disabled",\s*@"Daily",\s*@"Weekly",\s*@"Monthly"\];'
+          )
 
-          new = '''    // iQFace 1.1 selectedOptionTitle expects dictionaries with
+          replacement = '''
+              // iQFace 1.1 selectedOptionTitle expects dictionaries with
               // exact keys: value (NSNumber) and title (NSString).
               NSArray<NSDictionary<NSString *, id> *> *options = IQFCCacheUsesPortuguese()
                   ? @[
@@ -51,10 +55,10 @@ jobs:
                       @{@"value": @3, @"title": @"Monthly"}
                   ];'''
 
-          if old not in s:
-              raise SystemExit("Expected 0.2.1 options block not found")
-
-          p.write_text(s.replace(old, new, 1))
+          s, count = pattern.subn(replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f"Expected exactly one options block, replaced {count}")
+          p.write_text(s)
           PY
 
           grep -F "iQFaceCache 0.2.2-test" Tweak.m
