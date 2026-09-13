@@ -1,1 +1,1 @@
-relayout validation update
+legacy PT-BR rebuild trigger
