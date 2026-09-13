@@ -29,6 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          python3 nexus/patch_presentation_v2.py nexus/NexusSettings.m
           cp nexus/prepare_makefile_v2.py nexus/prepare_makefile.py
           python3 - <<'PY'
           from pathlib import Path
