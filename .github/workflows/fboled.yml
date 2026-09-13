@@ -29,15 +29,22 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Validate targeted avatar fix
+      - name: Prepare FBOLED 0.2.3 test
         run: |
           set -euo pipefail
-          grep -F 'FBOLED 0.2.2' FBOLED.m
+          python3 prepare_023.py
+
+      - name: Validate targeted avatar fixes
+        run: |
+          set -euo pipefail
+          grep -F 'FBOLED 0.2.3 TEST' FBOLED.m
           grep -F 'FBOLEDIsUnmaskedAvatarVariant' FBOLED.m
+          grep -F 'FBOLEDIsCompositeCommunityAvatarVariant' FBOLED.m
+          grep -F 'FDSTouchStateComponentView' FBOLED.m
           grep -F '_FBMaskedRoundedCornerView' FBOLED.m
           grep -F 'MRCImageComponentView' FBOLED.m
           grep -F 'MRCAnimatedImageView' FBOLED.m
-          grep -F 'UIImageView' FBOLED.m
+          grep -F 'FBOLEDIsUnmaskedAvatarVariant(view) ||' FBOLED.m
           if grep -E 'MSHook|class_replaceMethod|method_setImplementation|rebind_symbols' FBOLED.m; then
             echo "Unexpected new hook mechanism found"
             exit 1
@@ -51,17 +58,21 @@ jobs:
           dylib_path="$(find .theos -type f -name FBOLED.dylib -print -quit)"
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/FBOLED.dylib
-          file artifacts/FBOLED.dylib
+          file artifacts/FBOLED.dylib | tee artifacts/file.txt
           otool -L artifacts/FBOLED.dylib | tee artifacts/dependencies.txt
-          strings artifacts/FBOLED.dylib | grep -F '_FBMaskedRoundedCornerView'
-          strings artifacts/FBOLED.dylib | grep -F 'MRCImageComponentView'
-          strings artifacts/FBOLED.dylib | grep -F 'MRCAnimatedImageView'
+          strings artifacts/FBOLED.dylib > artifacts/strings.txt
+          grep -F 'Mach-O 64-bit' artifacts/file.txt
+          grep -F 'arm64' artifacts/file.txt
+          grep -F '_FBMaskedRoundedCornerView' artifacts/strings.txt
+          grep -F 'MRCImageComponentView' artifacts/strings.txt
+          grep -F 'MRCAnimatedImageView' artifacts/strings.txt
+          grep -F 'FDSTouchStateComponentView' artifacts/strings.txt
           shasum -a 256 artifacts/FBOLED.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload FBOLED dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBOLED-0.2.2-avatarfix-arm64
+          name: FBOLED-0.2.3-community-avatar-test-arm64
           path: fboled/artifacts/
           if-no-files-found: error
           retention-days: 90
