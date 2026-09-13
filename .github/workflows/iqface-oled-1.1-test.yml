@@ -1,4 +1,4 @@
-name: Build iQFace OLED 0.2.2 for iQFace 1.1
+name: Build iQFace OLED 0.2.3 for iQFace 1.1
 
 "on":
   workflow_dispatch:
@@ -43,7 +43,7 @@ jobs:
           set -euo pipefail
           python3 adapt_iqface11.py
 
-      - name: Patch 0.2.2 prefs bridge and icons
+      - name: Patch 0.2.3 prefs bridge and switch icons
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -60,7 +60,7 @@ jobs:
               s = s.replace(old, new, 1)
 
           rep("// iQFaceOLED 0.2.1 — iQFace 1.1",
-              "// iQFaceOLED 0.2.2 — iQFace 1.1",
+              "// iQFaceOLED 0.2.3 — iQFace 1.1",
               "version")
 
           rep('''static BOOL IQFOLEDLoadEnabledPreference(void) {
@@ -119,21 +119,142 @@ jobs:
                   }
               }
               return setting;
-          }''', "switch icon assignment")
+          }''', "switch icon property")
 
           rep('''IQFOLEDCreateNativeSwitch(@"Modo OLED",
                                                                          IQFOLEDPreferenceKey,
                                                                          YES)''', '''IQFOLEDCreateNativeSwitch(@"Modo OLED",
                                                                          @"circle.lefthalf.filled",
                                                                          IQFOLEDPreferenceKey,
-                                                                         YES)''', "OLED icon")
+                                                                         YES)''', "OLED icon argument")
 
           rep('''IQFOLEDCreateNativeSwitch(@"Separadores no feed",
                                                                                     IQFOLEDSeparatorsPreferenceKey,
                                                                                     NO)''', '''IQFOLEDCreateNativeSwitch(@"Separadores no feed",
                                                                                     @"line.3.horizontal",
                                                                                     IQFOLEDSeparatorsPreferenceKey,
-                                                                                    NO)''', "separator icon")
+                                                                                    NO)''', "separator icon argument")
+
+          marker = '''__attribute__((constructor))
+          static void IQFOLEDInitialize(void) {'''
+          if marker not in s:
+              raise SystemExit("constructor marker not found")
+
+          icon_hook = r'''static UITableViewCell *(*IQFOLEDOriginalCellForRow)(id, SEL, UITableView *, NSIndexPath *) = NULL;
+          static BOOL gIQFOLEDCellIconHookInstalled = NO;
+          static NSInteger gIQFOLEDCellIconHookAttempts = 0;
+
+          static UIImage *IQFOLEDRenderedToolIcon(NSString *symbolName) {
+              if (symbolName.length == 0) return nil;
+              if (@available(iOS 13.0, *)) {
+                  CGSize size = CGSizeMake(34.0, 34.0);
+                  UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+                  format.opaque = NO;
+                  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
+                  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+                      (void)context;
+                      CGRect backgroundRect = CGRectMake(0.0, 0.0, size.width, size.height);
+                      [[UIColor colorWithWhite:0.48 alpha:1.0] setFill];
+                      [[UIBezierPath bezierPathWithRoundedRect:backgroundRect cornerRadius:8.0] fill];
+
+                      UIImageSymbolConfiguration *configuration =
+                          [UIImageSymbolConfiguration configurationWithPointSize:17.0
+                                                                         weight:UIImageSymbolWeightSemibold];
+                      UIImage *symbol = [[UIImage systemImageNamed:symbolName]
+                          imageByApplyingSymbolConfiguration:configuration];
+                      symbol = [symbol imageWithTintColor:UIColor.whiteColor
+                                            renderingMode:UIImageRenderingModeAlwaysOriginal];
+                      if (symbol == nil) return;
+
+                      CGSize symbolSize = symbol.size;
+                      CGFloat maxSide = 19.0;
+                      CGFloat scale = MIN(maxSide / MAX(symbolSize.width, 1.0),
+                                          maxSide / MAX(symbolSize.height, 1.0));
+                      CGSize drawSize = CGSizeMake(symbolSize.width * scale, symbolSize.height * scale);
+                      CGRect drawRect = CGRectMake((size.width - drawSize.width) * 0.5,
+                                                   (size.height - drawSize.height) * 0.5,
+                                                   drawSize.width,
+                                                   drawSize.height);
+                      [symbol drawInRect:drawRect];
+                  }];
+              }
+              return nil;
+          }
+
+          static UIImage *IQFOLEDIconForSettingsTitle(NSString *title) {
+              static UIImage *oledIcon = nil;
+              static UIImage *separatorIcon = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  oledIcon = IQFOLEDRenderedToolIcon(@"circle.lefthalf.filled");
+                  separatorIcon = IQFOLEDRenderedToolIcon(@"line.3.horizontal");
+              });
+
+              if ([title isEqualToString:@"Modo OLED"] || [title isEqualToString:@"OLED Mode"]) {
+                  return oledIcon;
+              }
+              if ([title isEqualToString:@"Separadores no feed"] || [title isEqualToString:@"Feed separators"]) {
+                  return separatorIcon;
+              }
+              return nil;
+          }
+
+          static UITableViewCell *IQFOLEDCellForRow(id self,
+                                                    SEL command,
+                                                    UITableView *tableView,
+                                                    NSIndexPath *indexPath) {
+              UITableViewCell *cell = IQFOLEDOriginalCellForRow != NULL
+                  ? IQFOLEDOriginalCellForRow(self, command, tableView, indexPath)
+                  : nil;
+              if (cell == nil || indexPath == nil) return cell;
+
+              SEL settingSelector = NSSelectorFromString(@"settingForIndexPath:");
+              if (![self respondsToSelector:settingSelector]) return cell;
+
+              typedef id (*SettingGetter)(id, SEL, id);
+              id setting = ((SettingGetter)(void *)objc_msgSend)(self, settingSelector, indexPath);
+              NSString *title = IQFOLEDSettingTitle(setting);
+              UIImage *icon = IQFOLEDIconForSettingsTitle(title);
+              if (icon != nil) {
+                  cell.imageView.image = icon;
+                  cell.imageView.contentMode = UIViewContentModeCenter;
+                  [cell setNeedsLayout];
+              }
+              return cell;
+          }
+
+          static void IQFOLEDTryInstallCellIconHook(void) {
+              if (gIQFOLEDCellIconHookInstalled) return;
+
+              gIQFOLEDCellIconHookAttempts += 1;
+              Class target = NSClassFromString(@"IQFSettingsViewController");
+              SEL selector = NSSelectorFromString(@"tableView:cellForRowAtIndexPath:");
+              Method method = target != Nil ? class_getInstanceMethod(target, selector) : NULL;
+              if (method != NULL) {
+                  IQFOLEDOriginalCellForRow =
+                      (UITableViewCell *(*)(id, SEL, UITableView *, NSIndexPath *))method_getImplementation(method);
+                  method_setImplementation(method, (IMP)&IQFOLEDCellForRow);
+                  gIQFOLEDCellIconHookInstalled = YES;
+              }
+
+              if (!gIQFOLEDCellIconHookInstalled && gIQFOLEDCellIconHookAttempts < 120) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                                 dispatch_get_main_queue(), ^{
+                      IQFOLEDTryInstallCellIconHook();
+                  });
+              }
+          }
+
+          '''
+
+          s = s.replace(marker, icon_hook + marker, 1)
+
+          target_call = "        IQFOLEDTryInstallSettingsHook();"
+          if target_call not in s:
+              raise SystemExit("settings hook install call not found")
+          s = s.replace(target_call,
+                        target_call + "\n        IQFOLEDTryInstallCellIconHook();",
+                        1)
 
           p.write_text(s, encoding="utf-8")
           PY
@@ -141,10 +262,12 @@ jobs:
       - name: Validate source migration
         run: |
           set -euo pipefail
-          grep -F '// iQFaceOLED 0.2.2 — iQFace 1.1' Tweak.m
+          grep -F '// iQFaceOLED 0.2.3 — iQFace 1.1' Tweak.m
           grep -F 'switchCellWithTitle:subtitle:defaultsKey:defaultOn:' Tweak.m
           grep -F 'IQFPrefs' Tweak.m
           grep -F 'boolForKey:defaultValue:' Tweak.m
+          grep -F 'IQFOLEDCellForRow' Tweak.m
+          grep -F 'tableView:cellForRowAtIndexPath:' Tweak.m
           grep -F '@"circle.lefthalf.filled"' Tweak.m
           grep -F '@"line.3.horizontal"' Tweak.m
           grep -F 'IQFOLEDUpdateFeedSeparator' Tweak.m
@@ -187,6 +310,7 @@ jobs:
           strings -a artifacts/iQFaceOLED.dylib | grep -F "switchCellWithTitle:subtitle:defaultsKey:defaultOn:"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFPrefs"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "boolForKey:defaultValue:"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "tableView:cellForRowAtIndexPath:"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "circle.lefthalf.filled"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "line.3.horizontal"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDEnabled"
@@ -202,6 +326,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceOLED-0.2.2-iQFace-1.1-arm64
+          name: iQFaceOLED-0.2.3-iQFace-1.1-arm64
           path: iqface-oled/artifacts/
           if-no-files-found: error
