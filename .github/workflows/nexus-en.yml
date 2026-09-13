@@ -46,10 +46,10 @@ jobs:
           sed -i '' '/if (IQF11ContainsIQF(item.title) ||/,/    }/d' "$WORK/HideButton11.m"
           sed -i '' 's/if (IQF11ContainsIQF(action)) return YES;/if ([action isEqualToString:@"iqf_tapped"]) return YES;/' "$WORK/HideButton11.m"
           sed -i '' 's/if (IQF11ContainsIQF(actionName)) return YES;/if ([actionName isEqualToString:@"iqf_tapped"]) return YES;/' "$WORK/HideButton11.m"
+          sed -i '' '/static BOOL IQF11ContainsIQF(NSString \*value) {/,/^}/d' "$WORK/HideButton11.m"
           grep -F 'iqfDismiss' "$WORK/HideButton11.m"
           grep -F 'iqf_tapped' "$WORK/HideButton11.m"
-          ! grep -F 'IQF11ContainsIQF(control.accessibilityLabel)' "$WORK/HideButton11.m"
-          ! grep -F 'IQF11ContainsIQF(item.title)' "$WORK/HideButton11.m"
+          ! grep -F 'IQF11ContainsIQF' "$WORK/HideButton11.m"
 
       - name: Prepare English modules
         run: |
