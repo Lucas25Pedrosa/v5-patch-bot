@@ -1,10 +1,14 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+#import <dlfcn.h>
+#import <string.h>
+#import <stdlib.h>
 
-// iQTeleEnhancer / iQTele 1.3 localization overlay.
-// Reuses the proven translation table from Translation.m but disables its
-// private IQTSettingsViewController hooks. Translation is applied by a
-// scanner restricted to visible iQTele controllers, following the iQFace 1.1 model.
+// iQTeleEnhancer / iQTele 1.3 localization layer.
+// Keeps the proven activation path untouched. The legacy localization map is reused,
+// but its old constructor is disabled. Translation is applied from the iQTele
+// controllers' final layout/appearance callbacks, matching the Nexus/iQFace fix.
 
 // Neutralize the legacy constructor and rename its text resolver while including
 // the existing file. The legacy translation table remains available in this TU.
@@ -14,14 +18,23 @@
 #undef IQTTranslatedText
 #undef constructor
 
-__attribute__((used, visibility("default"))) NSString * const IQTEnhancerLocalizationVersion13 = @"1.3-scanner-only";
-static dispatch_source_t IQT13LocalizationScanner = nil;
+__attribute__((used, visibility("default"))) NSString * const IQTEnhancerLocalizationVersion13 = @"1.3-layout-final";
 
 static NSDictionary<NSString *, NSString *> *IQT13ExtraTranslations(void) {
     static NSDictionary<NSString *, NSString *> *translations;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         translations = @{
+            // Compact labels for fixed-width iQTele settings cells.
+            @"Back": @"Voltar",
+            @"Ghost mode and deleted messages": @"Modo fantasma",
+            @"Ghost mode in messages": @"Modo fantasma",
+            @"Keep deleted messages": @"Manter excluídas",
+            @"Activity indicators": @"Atividade",
+            @"Send as round video": @"Enviar vídeo circular",
+            @"Hide ads in channels": @"Ocultar anúncios",
+            @"Experimental feature": @"Experimental",
+            @"Eye button in chats": @"Botão de olho",
             @"Scan this code from a device that is already logged in": @"Escaneie este código em um dispositivo que já esteja conectado",
             @"Open Telegram on a device that is already logged in": @"Abra o Telegram em um dispositivo que já esteja conectado",
             @"QR login is unavailable on this build": @"O login por QR não está disponível nesta versão",
@@ -55,7 +68,6 @@ static NSDictionary<NSString *, NSString *> *IQT13ExtraTranslations(void) {
             @"Ghost mode is on for this chat": @"Modo fantasma ativado neste chat",
             @"Ghost mode is off for this chat": @"Modo fantasma desativado neste chat",
             @"Marked as read": @"Marcado como lido",
-            @"Eye button in chats": @"Botão de olho nas conversas",
             @"Toggle": @"Alternar",
             @"One tap": @"Um toque",
             @"Always on\nthe eye reveals once": @"Sempre ativo\no olho revela uma vez",
@@ -155,30 +167,48 @@ static void IQT13TranslateNavigationItem(UINavigationItem *item) {
     for (UIBarButtonItem *barItem in item.rightBarButtonItems) IQT13TranslateBarButtonItem(barItem);
 }
 
-static void IQT13TranslateLabel(UILabel *label) {
-    if (label == nil) return;
+static BOOL IQT13TranslateLabel(UILabel *label) {
+    if (label == nil) return NO;
     NSString *source = label.text;
     NSString *translated = IQT13TranslatedText(source);
-    if (translated == nil || [translated isEqualToString:source]) return;
+    if (translated == nil || [translated isEqualToString:source]) return NO;
+
     NSAttributedString *attributed = label.attributedText;
     if (attributed.length == source.length && attributed.length > 0) {
-        NSMutableAttributedString *replacement = [attributed mutableCopy];
-        [replacement replaceCharactersInRange:NSMakeRange(0, replacement.length) withString:translated];
-        label.attributedText = replacement;
+        NSDictionary<NSAttributedStringKey, id> *attributes =
+            [attributed attributesAtIndex:0 effectiveRange:NULL];
+        label.attributedText = [[NSAttributedString alloc] initWithString:translated
+                                                               attributes:attributes];
     } else {
         label.text = translated;
     }
+
+    [label invalidateIntrinsicContentSize];
+    [label setNeedsLayout];
+    [label.superview setNeedsLayout];
+    return YES;
 }
 
-static void IQT13TranslateButton(UIButton *button) {
-    if (button == nil) return;
-    UIControlState states[] = { UIControlStateNormal, UIControlStateHighlighted, UIControlStateSelected, UIControlStateDisabled };
+static BOOL IQT13TranslateButton(UIButton *button) {
+    if (button == nil) return NO;
+    BOOL changed = NO;
+
+    UIControlState states[] = {
+        UIControlStateNormal,
+        UIControlStateHighlighted,
+        UIControlStateSelected,
+        UIControlStateDisabled
+    };
     for (NSUInteger index = 0; index < sizeof(states) / sizeof(states[0]); index++) {
         UIControlState state = states[index];
         NSString *source = [button titleForState:state];
         NSString *translated = IQT13TranslatedText(source);
-        if (translated != nil && ![translated isEqualToString:source]) [button setTitle:translated forState:state];
+        if (translated != nil && ![translated isEqualToString:source]) {
+            [button setTitle:translated forState:state];
+            changed = YES;
+        }
     }
+
     if (@available(iOS 15.0, *)) {
         UIButtonConfiguration *configuration = button.configuration;
         NSString *source = configuration.title;
@@ -187,108 +217,352 @@ static void IQT13TranslateButton(UIButton *button) {
             UIButtonConfiguration *copy = [configuration copy];
             copy.title = translated;
             button.configuration = copy;
+            changed = YES;
         }
     }
+
+    if (changed) {
+        [button invalidateIntrinsicContentSize];
+        [button setNeedsLayout];
+        [button.superview setNeedsLayout];
+    }
+    return changed;
 }
 
-static void IQT13TranslateViewTree(UIView *view) {
-    if (view == nil) return;
+static BOOL IQT13TranslateViewTree(UIView *view) {
+    if (view == nil) return NO;
+    BOOL changed = NO;
+
     if ([view isKindOfClass:UILabel.class]) {
-        IQT13TranslateLabel((UILabel *)view);
+        changed |= IQT13TranslateLabel((UILabel *)view);
     } else if ([view isKindOfClass:UIButton.class]) {
-        IQT13TranslateButton((UIButton *)view);
+        changed |= IQT13TranslateButton((UIButton *)view);
     } else if ([view isKindOfClass:UITextField.class]) {
         UITextField *field = (UITextField *)view;
         NSString *translated = IQT13TranslatedText(field.text);
-        if (translated != nil) field.text = translated;
+        if (translated != nil && ![translated isEqualToString:field.text]) {
+            field.text = translated;
+            changed = YES;
+        }
         translated = IQT13TranslatedText(field.placeholder);
-        if (translated != nil) field.placeholder = translated;
+        if (translated != nil && ![translated isEqualToString:field.placeholder]) {
+            field.placeholder = translated;
+            changed = YES;
+        }
     } else if ([view isKindOfClass:UITextView.class]) {
         UITextView *textView = (UITextView *)view;
         NSString *translated = IQT13TranslatedText(textView.text);
-        if (translated != nil) textView.text = translated;
+        if (translated != nil && ![translated isEqualToString:textView.text]) {
+            textView.text = translated;
+            changed = YES;
+        }
     } else if ([view isKindOfClass:UISegmentedControl.class]) {
         UISegmentedControl *segmented = (UISegmentedControl *)view;
         for (NSInteger index = 0; index < segmented.numberOfSegments; index++) {
             NSString *source = [segmented titleForSegmentAtIndex:index];
             NSString *translated = IQT13TranslatedText(source);
-            if (translated != nil) [segmented setTitle:translated forSegmentAtIndex:index];
+            if (translated != nil && ![translated isEqualToString:source]) {
+                [segmented setTitle:translated forSegmentAtIndex:index];
+                changed = YES;
+            }
         }
     } else if ([view isKindOfClass:UISearchBar.class]) {
         UISearchBar *searchBar = (UISearchBar *)view;
         NSString *translated = IQT13TranslatedText(searchBar.placeholder);
-        if (translated != nil) searchBar.placeholder = translated;
+        if (translated != nil && ![translated isEqualToString:searchBar.placeholder]) {
+            searchBar.placeholder = translated;
+            changed = YES;
+        }
         translated = IQT13TranslatedText(searchBar.prompt);
-        if (translated != nil) searchBar.prompt = translated;
-    }
-    for (UIView *subview in view.subviews.copy) IQT13TranslateViewTree(subview);
-}
-
-static BOOL IQT13ClassBelongsToIQTele(Class cls) {
-    NSString *name = cls != Nil ? NSStringFromClass(cls) : @"";
-    return [name hasPrefix:@"IQT"];
-}
-
-static BOOL IQT13NavigationContainsIQTele(UINavigationController *navigation) {
-    for (UIViewController *controller in navigation.viewControllers.copy) {
-        if (IQT13ClassBelongsToIQTele(controller.class)) return YES;
-    }
-    return NO;
-}
-
-static BOOL IQT13BeginsContext(UIViewController *controller) {
-    if (controller == nil) return NO;
-    if (IQT13ClassBelongsToIQTele(controller.class)) return YES;
-    if ([controller isKindOfClass:UINavigationController.class]) return IQT13NavigationContainsIQTele((UINavigationController *)controller);
-    return NO;
-}
-
-static void IQT13TranslateControllerTree(UIViewController *controller, BOOL inheritedContext) {
-    if (controller == nil) return;
-    BOOL context = inheritedContext || IQT13BeginsContext(controller);
-    if (context) {
-        NSString *translated = IQT13TranslatedText(controller.title);
-        if (translated != nil) controller.title = translated;
-        IQT13TranslateNavigationItem(controller.navigationItem);
-        for (UIBarButtonItem *item in controller.toolbarItems) IQT13TranslateBarButtonItem(item);
-        if (controller.isViewLoaded) IQT13TranslateViewTree(controller.view);
-        if ([controller isKindOfClass:UINavigationController.class]) {
-            UINavigationController *navigation = (UINavigationController *)controller;
-            IQT13TranslateNavigationItem(navigation.visibleViewController.navigationItem);
-            if (navigation.isViewLoaded && navigation.navigationBar != nil) IQT13TranslateViewTree(navigation.navigationBar);
-            if (navigation.isViewLoaded && navigation.toolbar != nil) IQT13TranslateViewTree(navigation.toolbar);
+        if (translated != nil && ![translated isEqualToString:searchBar.prompt]) {
+            searchBar.prompt = translated;
+            changed = YES;
         }
     }
-    for (UIViewController *child in controller.childViewControllers.copy) IQT13TranslateControllerTree(child, context);
-    if (controller.presentedViewController != nil) IQT13TranslateControllerTree(controller.presentedViewController, context);
+
+    for (UIView *subview in view.subviews.copy) {
+        if (IQT13TranslateViewTree(subview)) changed = YES;
+    }
+    return changed;
 }
 
-static void IQT13ScanVisibleUI(void) {
-    if (!IQTShouldUsePortuguese() || UIApplication.sharedApplication.applicationState == UIApplicationStateBackground) return;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if (![scene isKindOfClass:UIWindowScene.class]) continue;
-            for (UIWindow *window in ((UIWindowScene *)scene).windows.copy) {
-                if (!window.hidden && window.alpha > 0.01) IQT13TranslateControllerTree(window.rootViewController, NO);
+typedef void (*IQT13MSHookMessageExFunction)(Class cls, SEL selector, IMP replacement, IMP *original);
+
+static NSMutableDictionary<NSString *, NSValue *> *IQT13LayoutOriginals(void) {
+    static NSMutableDictionary<NSString *, NSValue *> *map;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ map = [NSMutableDictionary dictionary]; });
+    return map;
+}
+
+static NSMutableDictionary<NSString *, NSValue *> *IQT13AppearOriginals(void) {
+    static NSMutableDictionary<NSString *, NSValue *> *map;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ map = [NSMutableDictionary dictionary]; });
+    return map;
+}
+
+static BOOL IQT13HooksInstalled = NO;
+
+static void *IQT13FindSymbol(const char *name) {
+    void *symbol = dlsym(RTLD_DEFAULT, name);
+    if (symbol != NULL) return symbol;
+
+    char underscored[128] = {0};
+    if (strlen(name) + 2 < sizeof(underscored)) {
+        underscored[0] = '_';
+        strlcpy(underscored + 1, name, sizeof(underscored) - 1);
+        symbol = dlsym(RTLD_DEFAULT, underscored);
+    }
+    return symbol;
+}
+
+static IMP IQT13OriginalForObject(id object, NSMutableDictionary<NSString *, NSValue *> *map) {
+    if (object == nil || map == nil) return NULL;
+    Class cls = [object class];
+    while (cls != Nil) {
+        NSValue *value = map[NSStringFromClass(cls)];
+        if (value != nil) return [value pointerValue];
+        cls = class_getSuperclass(cls);
+    }
+    return NULL;
+}
+
+static void IQT13TranslateBackButton(UIViewController *controller) {
+    UINavigationController *navigation = controller.navigationController;
+    if (navigation == nil) return;
+
+    NSUInteger index = [navigation.viewControllers indexOfObjectIdenticalTo:controller];
+    if (index != NSNotFound && index > 0) {
+        UIViewController *previous = navigation.viewControllers[index - 1];
+        previous.navigationItem.backButtonTitle = @"Voltar";
+    }
+
+    IQT13TranslateNavigationItem(controller.navigationItem);
+
+    if (navigation.isViewLoaded) {
+        IQT13TranslateViewTree(navigation.navigationBar);
+        [navigation.navigationBar setNeedsLayout];
+    }
+}
+
+static BOOL IQT13TranslateController(UIViewController *controller) {
+    if (controller == nil) return NO;
+    BOOL changed = NO;
+
+    NSString *translated = IQT13TranslatedText(controller.title);
+    if (translated != nil && ![translated isEqualToString:controller.title]) {
+        controller.title = translated;
+        changed = YES;
+    }
+
+    NSString *navTitle = controller.navigationItem.title;
+    translated = IQT13TranslatedText(navTitle);
+    if (translated != nil && ![translated isEqualToString:navTitle]) {
+        controller.navigationItem.title = translated;
+        changed = YES;
+    }
+
+    IQT13TranslateNavigationItem(controller.navigationItem);
+    for (UIBarButtonItem *item in controller.toolbarItems) IQT13TranslateBarButtonItem(item);
+    IQT13TranslateBackButton(controller);
+
+    if (controller.isViewLoaded) {
+        if (IQT13TranslateViewTree(controller.view)) changed = YES;
+    }
+
+    for (UIViewController *child in controller.childViewControllers.copy) {
+        NSString *className = NSStringFromClass(child.class);
+        if ([className hasPrefix:@"IQT"] && IQT13TranslateController(child)) changed = YES;
+    }
+
+    UIViewController *presented = controller.presentedViewController;
+    if (presented != nil) {
+        NSString *className = NSStringFromClass(presented.class);
+        if ([className hasPrefix:@"IQT"] ||
+            [presented isKindOfClass:UINavigationController.class]) {
+            if (IQT13TranslateController(presented)) changed = YES;
+        }
+    }
+
+    return changed;
+}
+
+static void IQT13RelayoutControllerSoon(UIViewController *controller) {
+    if (controller == nil) return;
+    __weak UIViewController *weakController = controller;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController *strongController = weakController;
+        if (strongController == nil || !strongController.isViewLoaded) return;
+
+        IQT13TranslateController(strongController);
+        [strongController.view setNeedsLayout];
+        [strongController.view layoutIfNeeded];
+
+        UINavigationController *navigation = strongController.navigationController;
+        if (navigation != nil && navigation.isViewLoaded) {
+            IQT13TranslateViewTree(navigation.navigationBar);
+            [navigation.navigationBar setNeedsLayout];
+            [navigation.navigationBar layoutIfNeeded];
+        }
+    });
+}
+
+static void IQT13ScheduleFinalPasses(UIViewController *controller) {
+    if (controller == nil) return;
+    const NSTimeInterval delays[] = {0.03, 0.12, 0.35, 0.75};
+    __weak UIViewController *weakController = controller;
+    for (NSUInteger index = 0; index < sizeof(delays) / sizeof(delays[0]); index++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(delays[index] * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *strongController = weakController;
+            if (strongController == nil || !strongController.isViewLoaded ||
+                strongController.view.window == nil) return;
+            IQT13TranslateController(strongController);
+            [strongController.view setNeedsLayout];
+            [strongController.view layoutIfNeeded];
+
+            UINavigationController *navigation = strongController.navigationController;
+            if (navigation != nil && navigation.isViewLoaded) {
+                IQT13TranslateViewTree(navigation.navigationBar);
+                [navigation.navigationBar setNeedsLayout];
+                [navigation.navigationBar layoutIfNeeded];
+            }
+        });
+    }
+}
+
+static void IQT13ViewDidLayoutSubviews(id self, SEL command) {
+    IMP original = IQT13OriginalForObject(self, IQT13LayoutOriginals());
+    if (original != NULL) {
+        ((void (*)(id, SEL))original)(self, command);
+    }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+    UIViewController *controller = (UIViewController *)self;
+    IQT13TranslateController(controller);
+    IQT13RelayoutControllerSoon(controller);
+}
+
+static void IQT13ViewDidAppear(id self, SEL command, BOOL animated) {
+    IMP original = IQT13OriginalForObject(self, IQT13AppearOriginals());
+    if (original != NULL) {
+        ((void (*)(id, SEL, BOOL))original)(self, command, animated);
+    }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+    UIViewController *controller = (UIViewController *)self;
+    IQT13TranslateController(controller);
+    IQT13ScheduleFinalPasses(controller);
+}
+
+static BOOL IQT13IsViewControllerClass(Class cls) {
+    if (cls == Nil) return NO;
+    Class current = cls;
+    Class base = UIViewController.class;
+    while (current != Nil) {
+        if (current == base) return YES;
+        current = class_getSuperclass(current);
+    }
+    return NO;
+}
+
+static BOOL IQT13ShouldHookClass(Class cls) {
+    if (!IQT13IsViewControllerClass(cls)) return NO;
+    NSString *name = NSStringFromClass(cls);
+    if (![name hasPrefix:@"IQT"]) return NO;
+
+    static NSSet<NSString *> *allowed;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        allowed = [NSSet setWithArray:@[
+            @"IQTSettingsViewController",
+            @"IQTTranslateLanguagePicker",
+            @"IQTCallRecordingsViewController",
+            @"IQTDeletionLogViewController",
+            @"IQTDeletedArchiveViewController",
+            @"IQTDeletedPeopleViewController",
+            @"IQTEditHistoryViewController",
+            @"IQTVoiceTrimViewController",
+            @"IQTYTSearchViewController"
+        ]];
+    });
+    return [allowed containsObject:name];
+}
+
+static BOOL IQT13HasHookTargetSuperclass(Class cls) {
+    Class parent = class_getSuperclass(cls);
+    while (parent != Nil && parent != UIViewController.class) {
+        if (IQT13ShouldHookClass(parent)) return YES;
+        parent = class_getSuperclass(parent);
+    }
+    return NO;
+}
+
+static BOOL IQT13InstallHooks(void) {
+    if (IQT13HooksInstalled) return YES;
+
+    IQT13MSHookMessageExFunction hook =
+        (IQT13MSHookMessageExFunction)IQT13FindSymbol("MSHookMessageEx");
+    if (hook == NULL) return NO;
+
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return NO;
+
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    if (classes == NULL) return NO;
+    count = objc_getClassList(classes, count);
+
+    NSUInteger hookedCount = 0;
+    for (int index = 0; index < count; index++) {
+        Class cls = classes[index];
+        if (!IQT13ShouldHookClass(cls)) continue;
+        if (IQT13HasHookTargetSuperclass(cls)) continue;
+
+        NSString *className = NSStringFromClass(cls);
+
+        Method layoutMethod = class_getInstanceMethod(cls, @selector(viewDidLayoutSubviews));
+        if (layoutMethod != NULL && IQT13LayoutOriginals()[className] == nil) {
+            IMP original = NULL;
+            hook(cls,
+                 @selector(viewDidLayoutSubviews),
+                 (IMP)&IQT13ViewDidLayoutSubviews,
+                 &original);
+            if (original != NULL) {
+                IQT13LayoutOriginals()[className] = [NSValue valueWithPointer:original];
+                hookedCount += 1;
             }
         }
-    } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        for (UIWindow *window in UIApplication.sharedApplication.windows.copy) {
-            if (!window.hidden && window.alpha > 0.01) IQT13TranslateControllerTree(window.rootViewController, NO);
+
+        Method appearMethod = class_getInstanceMethod(cls, @selector(viewDidAppear:));
+        if (appearMethod != NULL && IQT13AppearOriginals()[className] == nil) {
+            IMP original = NULL;
+            hook(cls,
+                 @selector(viewDidAppear:),
+                 (IMP)&IQT13ViewDidAppear,
+                 &original);
+            if (original != NULL) {
+                IQT13AppearOriginals()[className] = [NSValue valueWithPointer:original];
+                hookedCount += 1;
+            }
         }
-#pragma clang diagnostic pop
     }
+
+    free(classes);
+
+    IQT13HooksInstalled =
+        IQT13LayoutOriginals()[@"IQTSettingsViewController"] != nil &&
+        IQT13AppearOriginals()[@"IQTSettingsViewController"] != nil;
+    return IQT13HooksInstalled || hookedCount > 0;
 }
 
-static void IQT13StartScanner(void) {
-    if (IQT13LocalizationScanner != nil) return;
-    IQT13LocalizationScanner = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-    dispatch_source_set_timer(IQT13LocalizationScanner, dispatch_time(DISPATCH_TIME_NOW, 0),
-                              (uint64_t)(0.20 * NSEC_PER_SEC), (uint64_t)(0.04 * NSEC_PER_SEC));
-    dispatch_source_set_event_handler(IQT13LocalizationScanner, ^{ IQT13ScanVisibleUI(); });
-    dispatch_resume(IQT13LocalizationScanner);
+static void IQT13RetryInstall(NSUInteger attempt) {
+    if (IQT13InstallHooks() || attempt >= 60) return;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.20 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        IQT13RetryInstall(attempt + 1);
+    });
 }
 
 __attribute__((constructor))
@@ -296,8 +570,14 @@ static void IQT13TranslationInit(void) {
     @autoreleasepool {
         NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
         NSString *executable = NSBundle.mainBundle.executablePath.lastPathComponent ?: @"";
-        if (![bundleIdentifier isEqualToString:@"ph.telegra.Telegraph"] && ![executable isEqualToString:@"Telegram"]) return;
+        if (![bundleIdentifier isEqualToString:@"ph.telegra.Telegraph"] &&
+            ![executable isEqualToString:@"Telegram"]) {
+            return;
+        }
         if (!IQTShouldUsePortuguese()) return;
-        dispatch_async(dispatch_get_main_queue(), ^{ IQT13StartScanner(); });
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            IQT13RetryInstall(0);
+        });
     }
 }
