@@ -41,6 +41,9 @@ jobs:
           python3 nexus-en/prepare_enhancer.py "$WORK/EnhancerTweak.m"
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
           cp iqface-enhancer-1.1/HideButton11.m "$WORK/HideButton11.m"
+          python3 nexus-en/patch_hidebutton.py "$WORK/HideButton11.m"
+          grep -F 'iqfDismiss' "$WORK/HideButton11.m"
+          grep -F 'IQF11IsProtectedIQFaceAction' "$WORK/HideButton11.m"
 
       - name: Prepare English modules
         run: |
@@ -78,14 +81,16 @@ jobs:
           grep -F 'Nexus Developer' nexus-en/artifacts/strings.txt
           grep -F 'IPA Vault' nexus-en/artifacts/strings.txt
           grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
+          grep -F 'iqfDismiss' nexus-en/artifacts/strings.txt
           python3 - <<'PY'
           from pathlib import Path
           data = Path('nexus-en/artifacts/Nexus.dylib').read_bytes()
-          text = 'IPA Source • Exclusive Nexus Distributor'
+          text = 'IPA Source • Nexus Distributor'
           if text.encode('utf-16le') not in data and text.encode('utf-16be') not in data:
               raise SystemExit('Missing Unicode IPA Vault subtitle in Nexus.dylib')
           print('FOUND Unicode IPA Vault subtitle')
           PY
+          if grep -F 'Exclusive Nexus Distributor' nexus-en/artifacts/strings.txt; then exit 1; fi
           if grep -F '1.1-core-ptbr' nexus-en/artifacts/strings.txt; then exit 1; fi
           if grep -F 'Desenvolvedor do Nexus' nexus-en/artifacts/strings.txt; then exit 1; fi
 
