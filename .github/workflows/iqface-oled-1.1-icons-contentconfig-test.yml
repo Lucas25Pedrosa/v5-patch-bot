@@ -1,0 +1,275 @@
+name: Build iQFace OLED 0.2.4 icons for iQFace 1.1
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-oled/**"
+      - ".github/workflows/iqface-oled-1.1-icons-contentconfig-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-oled
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Prepare validated engine and iQFace 1.1 bridge
+        run: |
+          set -euo pipefail
+          python3 prepare_oled.py
+          python3 prepare_separator.py
+          python3 finalize_020.py
+          python3 adapt_iqface11.py
+
+      - name: Patch 0.2.4 prefs bridge and content-configuration icons
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("Tweak.m")
+          s = p.read_text(encoding="utf-8")
+
+          def rep(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {n}")
+              s = s.replace(old, new, 1)
+
+          rep("// iQFaceOLED 0.2.1 — iQFace 1.1",
+              "// iQFaceOLED 0.2.4 — iQFace 1.1",
+              "version")
+
+          rep('''static BOOL IQFOLEDLoadEnabledPreference(void) {
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDPreferenceKey] == nil) {
+                  return YES;
+              }
+              return [defaults boolForKey:IQFOLEDPreferenceKey];
+          }
+          ''', '''static BOOL IQFOLEDLoadEnabledPreference(void) {
+              Class prefs = NSClassFromString(@"IQFPrefs");
+              SEL selector = NSSelectorFromString(@"boolForKey:defaultValue:");
+              if (prefs != Nil && [prefs respondsToSelector:selector]) {
+                  typedef BOOL (*Getter)(id, SEL, id, BOOL);
+                  return ((Getter)(void *)objc_msgSend)(prefs, selector, IQFOLEDPreferenceKey, YES);
+              }
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDPreferenceKey] == nil) return YES;
+              return [defaults boolForKey:IQFOLEDPreferenceKey];
+          }
+          ''', "OLED pref reader")
+
+          rep('''static BOOL IQFOLEDLoadSeparatorsPreference(void) {
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDSeparatorsPreferenceKey] == nil) return NO;
+              return [defaults boolForKey:IQFOLEDSeparatorsPreferenceKey];
+          }
+          ''', '''static BOOL IQFOLEDLoadSeparatorsPreference(void) {
+              Class prefs = NSClassFromString(@"IQFPrefs");
+              SEL selector = NSSelectorFromString(@"boolForKey:defaultValue:");
+              if (prefs != Nil && [prefs respondsToSelector:selector]) {
+                  typedef BOOL (*Getter)(id, SEL, id, BOOL);
+                  return ((Getter)(void *)objc_msgSend)(prefs, selector, IQFOLEDSeparatorsPreferenceKey, NO);
+              }
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDSeparatorsPreferenceKey] == nil) return NO;
+              return [defaults boolForKey:IQFOLEDSeparatorsPreferenceKey];
+          }
+          ''', "separator pref reader")
+
+          declaration_point = "static NSArray *IQFOLEDTweakSections(id self, SEL command) {"
+          if declaration_point not in s:
+              raise SystemExit("tweak sections declaration not found")
+          s = s.replace(declaration_point,
+                        "static void IQFOLEDTryInstallCellIconHook(void);\n\n" + declaration_point,
+                        1)
+
+          rep('''    return IQFOLEDSectionsWithControls(sections);
+          }''', '''    IQFOLEDTryInstallCellIconHook();
+              return IQFOLEDSectionsWithControls(sections);
+          }''', "install cell icon hook")
+
+          marker = '''__attribute__((constructor))
+          static void IQFOLEDInitialize(void) {'''
+          if marker not in s:
+              raise SystemExit("constructor marker not found")
+
+          hook = r'''static UITableViewCell *(*IQFOLEDOriginalCellForRow)(id, SEL, UITableView *, NSIndexPath *) = NULL;
+          static BOOL gIQFOLEDCellIconHookInstalled = NO;
+          static NSInteger gIQFOLEDCellIconHookAttempts = 0;
+
+          static UIImage *IQFOLEDRenderedToolIcon(NSString *symbolName) {
+              if (symbolName.length == 0) return nil;
+              if (@available(iOS 13.0, *)) {
+                  CGSize size = CGSizeMake(30.0, 30.0);
+                  UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+                  format.opaque = NO;
+                  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
+                  return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+                      (void)context;
+                      CGRect rect = CGRectMake(0.0, 0.0, size.width, size.height);
+                      [[UIColor colorWithWhite:0.52 alpha:1.0] setFill];
+                      [[UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:7.0] fill];
+
+                      UIImageSymbolConfiguration *configuration =
+                          [UIImageSymbolConfiguration configurationWithPointSize:15.5
+                                                                         weight:UIImageSymbolWeightSemibold];
+                      UIImage *symbol = [[UIImage systemImageNamed:symbolName]
+                          imageByApplyingSymbolConfiguration:configuration];
+                      if (symbol == nil) return;
+                      symbol = [symbol imageWithTintColor:UIColor.whiteColor
+                                            renderingMode:UIImageRenderingModeAlwaysOriginal];
+
+                      CGSize symbolSize = symbol.size;
+                      CGFloat maxSide = 17.0;
+                      CGFloat scale = MIN(maxSide / MAX(symbolSize.width, 1.0),
+                                          maxSide / MAX(symbolSize.height, 1.0));
+                      CGSize drawSize = CGSizeMake(symbolSize.width * scale, symbolSize.height * scale);
+                      CGRect drawRect = CGRectMake((size.width - drawSize.width) * 0.5,
+                                                   (size.height - drawSize.height) * 0.5,
+                                                   drawSize.width,
+                                                   drawSize.height);
+                      [symbol drawInRect:drawRect];
+                  }];
+              }
+              return nil;
+          }
+
+          static UIImage *IQFOLEDIconForSettingsTitle(NSString *title) {
+              static UIImage *oledIcon = nil;
+              static UIImage *separatorIcon = nil;
+              static dispatch_once_t onceToken;
+              dispatch_once(&onceToken, ^{
+                  oledIcon = IQFOLEDRenderedToolIcon(@"circle.lefthalf.filled");
+                  separatorIcon = IQFOLEDRenderedToolIcon(@"line.3.horizontal");
+              });
+              if ([title isEqualToString:@"Modo OLED"] || [title isEqualToString:@"OLED Mode"]) return oledIcon;
+              if ([title isEqualToString:@"Separadores no feed"] || [title isEqualToString:@"Feed separators"]) return separatorIcon;
+              return nil;
+          }
+
+          static void IQFOLEDApplyIconToCell(UITableViewCell *cell, UIImage *icon) {
+              if (cell == nil || icon == nil) return;
+
+              BOOL applied = NO;
+              if (@available(iOS 14.0, *)) {
+                  @try {
+                      id configuration = [cell valueForKey:@"contentConfiguration"];
+                      if (configuration != nil) {
+                          id updated = [configuration copy];
+                          if ([updated respondsToSelector:NSSelectorFromString(@"setImage:")]) {
+                              [updated setValue:icon forKey:@"image"];
+                              [cell setValue:updated forKey:@"contentConfiguration"];
+                              applied = YES;
+                          }
+                      }
+                  } @catch (__unused NSException *exception) {
+                  }
+              }
+
+              if (!applied) {
+                  cell.imageView.image = icon;
+                  cell.imageView.contentMode = UIViewContentModeCenter;
+              }
+              [cell setNeedsUpdateConfiguration];
+              [cell setNeedsLayout];
+          }
+
+          static UITableViewCell *IQFOLEDCellForRow(id self,
+                                                    SEL command,
+                                                    UITableView *tableView,
+                                                    NSIndexPath *indexPath) {
+              UITableViewCell *cell = IQFOLEDOriginalCellForRow != NULL
+                  ? IQFOLEDOriginalCellForRow(self, command, tableView, indexPath)
+                  : nil;
+              if (cell == nil || indexPath == nil) return cell;
+
+              SEL settingSelector = NSSelectorFromString(@"settingForIndexPath:");
+              if (![self respondsToSelector:settingSelector]) return cell;
+              typedef id (*SettingGetter)(id, SEL, id);
+              id setting = ((SettingGetter)(void *)objc_msgSend)(self, settingSelector, indexPath);
+              UIImage *icon = IQFOLEDIconForSettingsTitle(IQFOLEDSettingTitle(setting));
+              if (icon != nil) IQFOLEDApplyIconToCell(cell, icon);
+              return cell;
+          }
+
+          static void IQFOLEDTryInstallCellIconHook(void) {
+              if (gIQFOLEDCellIconHookInstalled) return;
+              gIQFOLEDCellIconHookAttempts += 1;
+              Class target = NSClassFromString(@"IQFSettingsViewController");
+              SEL selector = NSSelectorFromString(@"tableView:cellForRowAtIndexPath:");
+              Method method = target != Nil ? class_getInstanceMethod(target, selector) : NULL;
+              if (method != NULL) {
+                  IQFOLEDOriginalCellForRow =
+                      (UITableViewCell *(*)(id, SEL, UITableView *, NSIndexPath *))method_getImplementation(method);
+                  method_setImplementation(method, (IMP)&IQFOLEDCellForRow);
+                  gIQFOLEDCellIconHookInstalled = YES;
+              }
+              if (!gIQFOLEDCellIconHookInstalled && gIQFOLEDCellIconHookAttempts < 120) {
+                  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                                 dispatch_get_main_queue(), ^{ IQFOLEDTryInstallCellIconHook(); });
+              }
+          }
+
+          '''
+
+          s = s.replace(marker, hook + marker, 1)
+          p.write_text(s, encoding="utf-8")
+          PY
+
+      - name: Validate source migration
+        run: |
+          set -euo pipefail
+          grep -F '// iQFaceOLED 0.2.4 — iQFace 1.1' Tweak.m
+          grep -F 'IQFPrefs' Tweak.m
+          grep -F 'contentConfiguration' Tweak.m
+          grep -F 'setImage:' Tweak.m
+          grep -F 'tableView:cellForRowAtIndexPath:' Tweak.m
+          grep -F 'circle.lefthalf.filled' Tweak.m
+          grep -F 'line.3.horizontal' Tweak.m
+          grep -F 'IQFOLEDUpdateFeedSeparator' Tweak.m
+          grep -F 'IQFOLEDUpdateAvatarClip' Tweak.m
+          if grep -F 'IQFRow' Tweak.m; then exit 1; fi
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -name iQFaceOLED.dylib -print | head -n 1)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceOLED.dylib
+          shasum -a 256 artifacts/iQFaceOLED.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceOLED.dylib | grep -F "Mach-O 64-bit"
+          file artifacts/iQFaceOLED.dylib | grep -F "arm64"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFPrefs"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "contentConfiguration"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "setImage:"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "circle.lefthalf.filled"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "line.3.horizontal"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDFeedSeparatorsEnabled"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceOLED-0.2.4-iQFace-1.1-arm64
+          path: iqface-oled/artifacts/
+          if-no-files-found: error
