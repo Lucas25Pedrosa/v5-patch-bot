@@ -50,6 +50,18 @@ jobs:
           python3 nexus-en/prepare_icons.py iqface-icons-en/Tweak.m "$WORK/IconsTweak.m"
           cp iqface-icons-en/IconPicker.m "$WORK/IconsPicker.m"
 
+      - name: Download validated English OLED source
+        uses: actions/download-artifact@v4
+        with:
+          name: iQFaceOLED-en-0.2.5-iQFace-1.1-arm64
+          repository: ${{ github.repository }}
+          run-id: 34735836621
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/nexus-en-oled
+
+      - name: Assemble Nexus English sources
+        run: python3 nexus-en/assemble.py "$RUNNER_TEMP/nexus-en-build" "$RUNNER_TEMP/nexus-en-oled/Tweak.m"
+
       - name: Upload prepared sources
         uses: actions/upload-artifact@v4
         with:
