@@ -1,0 +1,72 @@
+name: Build FBOLED 0.2.3 Test
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "fboled/**"
+      - ".github/workflows/fboled-0.2.3-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: fboled
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Prepare FBOLED 0.2.3 test
+        run: |
+          set -euo pipefail
+          python3 prepare_023.py
+          grep -F 'FBOLED 0.2.3 TEST' FBOLED.m
+          grep -F 'FBOLEDIsUnmaskedAvatarVariant' FBOLED.m
+          grep -F 'FBOLEDIsCompositeCommunityAvatarVariant' FBOLED.m
+          grep -F 'FDSTouchStateComponentView' FBOLED.m
+          grep -F '_FBMaskedRoundedCornerView' FBOLED.m
+          grep -F 'MRCImageComponentView' FBOLED.m
+          grep -F 'MRCAnimatedImageView' FBOLED.m
+          if grep -E 'MSHook|class_replaceMethod|method_setImplementation|rebind_symbols' FBOLED.m; then
+            echo "Unexpected new hook mechanism found"
+            exit 1
+          fi
+
+      - name: Build FBOLED 0.2.3 test dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name FBOLED.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/FBOLED-0.2.3-Test.dylib
+          file artifacts/FBOLED-0.2.3-Test.dylib | tee artifacts/file.txt
+          otool -L artifacts/FBOLED-0.2.3-Test.dylib | tee artifacts/dependencies.txt
+          strings artifacts/FBOLED-0.2.3-Test.dylib | grep -F 'FBOLEDIsCompositeCommunityAvatarVariant' || true
+          strings artifacts/FBOLED-0.2.3-Test.dylib | grep -F '_FBMaskedRoundedCornerView'
+          strings artifacts/FBOLED-0.2.3-Test.dylib | grep -F 'MRCImageComponentView'
+          strings artifacts/FBOLED-0.2.3-Test.dylib | grep -F 'MRCAnimatedImageView'
+          shasum -a 256 artifacts/FBOLED-0.2.3-Test.dylib > artifacts/SHA256SUMS.txt
+          grep -F 'Mach-O 64-bit' artifacts/file.txt
+          grep -F 'arm64' artifacts/file.txt
+
+      - name: Upload FBOLED 0.2.3 test dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBOLED-0.2.3-community-avatar-test-arm64
+          path: fboled/artifacts/
+          if-no-files-found: error
+          retention-days: 90
