@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 // iQFaceToggleProbe 0.2.0
 // Passive ABI/call-flow probe for iQFace 1.1 settings.
