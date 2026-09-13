@@ -29,6 +29,7 @@ curl -fsSL \
   > "$WORK/Translation.m"
 
 python3 "$ROOT/nexus/prepare_enhancer.py" "$WORK/EnhancerTweak.m" "$WORK/Translation.m"
+python3 "$ROOT/nexus/patch_translation_labels.py" "$WORK/Translation.m"
 cp "$ROOT/iqface-enhancer-wordmark-beta/WordmarkActivation.m" "$WORK/WordmarkActivation.m"
 cp "$ROOT/iqface-enhancer-1.1/HideButton11.m" "$WORK/HideButton11.m"
 python3 "$ROOT/nexus-en/patch_hidebutton.py" "$WORK/HideButton11.m"
@@ -76,6 +77,7 @@ grep -F 'containsObject:@"iqf_tapped"' "$WORK/EnhancerTweak.m"
 grep -F '@"iqfDismiss"' "$WORK/HideButton11.m"
 grep -F 'iqf_tapped' "$WORK/HideButton11.m"
 ! grep -F 'IQF11ContainsIQF' "$WORK/HideButton11.m"
+grep -F 'minimumScaleFactor = 0.82' "$WORK/Translation.m"
 
 # Compile the single Nexus library.
 cd "$WORK"
