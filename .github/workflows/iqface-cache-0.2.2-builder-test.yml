@@ -1,0 +1,220 @@
+name: Build iQFace Cache 0.2.2 Builder Test
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/iqface-cache-0.2.2-builder-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Prepare iQFace 1.1 builder-wrapper test
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path("Tweak.m")
+          s = p.read_text()
+
+          s = s.replace("// iQFaceCache 0.2.1", "// iQFaceCache 0.2.2-builder-test", 1)
+          s = s.replace(
+              "// iQFace 1.1-only settings integration using IQFSetting + IQFTweakSettings.\n"
+              "// Injects settings into +[IQFTweakSettings sections] before the controller is built.",
+              "// iQFace 1.1-only settings integration using IQFSetting + the root sectionsBuilder.\n"
+              "// Wraps -[IQFSettingsViewController initWithTitle:sectionsBuilder:] only for title iQFace.",
+              1,
+          )
+
+          old_decl = "static NSArray *(*IQFCCacheOriginalTweakSections)(id, SEL) = NULL;"
+          new_decl = "static id (*IQFCCacheOriginalInitWithBuilder)(id, SEL, id, id) = NULL;"
+          if old_decl not in s:
+              raise SystemExit("old hook declaration not found")
+          s = s.replace(old_decl, new_decl, 1)
+
+          option_pattern = re.compile(
+              r'\s*NSArray<NSString \*> \*options = IQFCCacheUsesPortuguese\(\)\s*'
+              r'\?\s*@\[@"Desativado",\s*@"Diariamente",\s*@"Semanalmente",\s*@"Mensalmente"\]\s*'
+              r':\s*@\[@"Disabled",\s*@"Daily",\s*@"Weekly",\s*@"Monthly"\];'
+          )
+          option_replacement = '''
+              // iQFace 1.1 selectedOptionTitle expects dictionaries containing
+              // a numeric value and its visible title.
+              NSArray<NSDictionary<NSString *, id> *> *options = IQFCCacheUsesPortuguese()
+                  ? @[
+                      @{@"value": @0, @"title": @"Desativado"},
+                      @{@"value": @1, @"title": @"Diariamente"},
+                      @{@"value": @2, @"title": @"Semanalmente"},
+                      @{@"value": @3, @"title": @"Mensalmente"}
+                  ]
+                  : @[
+                      @{@"value": @0, @"title": @"Disabled"},
+                      @{@"value": @1, @"title": @"Daily"},
+                      @{@"value": @2, @"title": @"Weekly"},
+                      @{@"value": @3, @"title": @"Monthly"}
+                  ];'''
+          s, option_count = option_pattern.subn(option_replacement, s, count=1)
+          if option_count != 1:
+              raise SystemExit(f"expected one options block, replaced {option_count}")
+
+          start = s.find("static NSArray *IQFCCacheTweakSections")
+          end = s.find("__attribute__((constructor))", start)
+          if start < 0 or end < 0:
+              raise SystemExit("old IQFTweakSettings hook block not found")
+
+          builder_hook = r'''typedef NSArray * _Nullable (^IQFCCacheSectionsBuilder)(void);
+
+static id IQFCCacheInitWithTitleSectionsBuilder(id self, SEL command, id title, id builder) {
+    if (IQFCCacheOriginalInitWithBuilder == NULL) {
+        return nil;
+    }
+
+    BOOL isRootSettings = [title isKindOfClass:NSString.class] &&
+                          [(NSString *)title isEqualToString:@"iQFace"];
+    if (!isRootSettings || builder == nil) {
+        return IQFCCacheOriginalInitWithBuilder(self, command, title, builder);
+    }
+
+    // ABI verified on iQFace 1.1: the sectionsBuilder is invoked as block(void)
+    // and returns the NSArray consumed by initWithTitle:sections:.
+    IQFCCacheSectionsBuilder originalBuilder = [builder copy];
+    IQFCCacheSectionsBuilder wrappedBuilder = [^NSArray *{
+        NSArray *nativeSections = originalBuilder != nil ? originalBuilder() : nil;
+        return IQFCCacheSectionsWithControls(nativeSections);
+    } copy];
+
+    return IQFCCacheOriginalInitWithBuilder(self, command, title, wrappedBuilder);
+}
+
+static void IQFCCacheTryInstallHook(void) {
+    if (IQFCCacheHookInstalled) {
+        return;
+    }
+
+    IQFCCacheHookAttempts += 1;
+
+    Class target = NSClassFromString(@"IQFSettingsViewController");
+    SEL selector = NSSelectorFromString(@"initWithTitle:sectionsBuilder:");
+    Method method = target != Nil ? class_getInstanceMethod(target, selector) : NULL;
+
+    if (method != NULL) {
+        const char *types = method_getTypeEncoding(method);
+        if (types != NULL && strcmp(types, "@32@0:8@16@?24") == 0) {
+            IQFCCacheOriginalInitWithBuilder = (id (*)(id, SEL, id, id))method_getImplementation(method);
+            method_setImplementation(method, (IMP)&IQFCCacheInitWithTitleSectionsBuilder);
+            IQFCCacheHookInstalled = YES;
+        }
+    }
+
+    if (!IQFCCacheHookInstalled && IQFCCacheHookAttempts < 120) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            IQFCCacheTryInstallHook();
+        });
+    }
+}
+
+'''
+          s = s[:start] + builder_hook + s[end:]
+
+          required = [
+              "iQFaceCache 0.2.2-builder-test",
+              'NSClassFromString(@"IQFSettingsViewController")',
+              'initWithTitle:sectionsBuilder:',
+              "IQFCCacheSectionsBuilder",
+              "IQFCCacheSectionsWithControls(nativeSections)",
+              'strcmp(types, "@32@0:8@16@?24")',
+              'NSDictionary<NSString *, id>',
+              '@"value"',
+              '@"title"',
+          ]
+          for marker in required:
+              if marker not in s:
+                  raise SystemExit(f"missing patched marker: {marker}")
+
+          forbidden = [
+              "IQFCCacheOriginalTweakSections",
+              "IQFCCacheTweakSections",
+              'NSClassFromString(@"IQFTweakSettings")',
+              "class_getClassMethod",
+          ]
+          for marker in forbidden:
+              if marker in s:
+                  raise SystemExit(f"old integration still present: {marker}")
+
+          p.write_text(s)
+          PY
+
+          grep -F "iQFaceCache 0.2.2-builder-test" Tweak.m
+          grep -F 'NSClassFromString(@"IQFSettingsViewController")' Tweak.m
+          grep -F 'initWithTitle:sectionsBuilder:' Tweak.m
+          grep -F 'strcmp(types, "@32@0:8@16@?24")' Tweak.m
+          grep -F 'NSDictionary<NSString *, id>' Tweak.m
+          if grep -Fq 'NSClassFromString(@"IQFTweakSettings")' Tweak.m; then
+            echo "Old IQFTweakSettings hook survived patch"
+            exit 1
+          fi
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceCache.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceCache.dylib
+          shasum -a 256 artifacts/iQFaceCache.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceCache.dylib > artifacts/file.txt
+          strings -a artifacts/iQFaceCache.dylib > artifacts/strings.txt || true
+
+          grep -Fq "IQFSettingsViewController" artifacts/strings.txt
+          grep -Fq "initWithTitle:sectionsBuilder:" artifacts/strings.txt
+          grep -Fq "IQFSetting" artifacts/strings.txt
+          grep -Fq "buttonCellWithTitle:subtitle:icon:action:" artifacts/strings.txt
+          grep -Fq "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:" artifacts/strings.txt
+          grep -Fq "iQFaceCacheAutoFrequency" artifacts/strings.txt
+          grep -Fq "FERRAMENTAS" artifacts/strings.txt
+          grep -Fq "Limpar cache automaticamente" artifacts/strings.txt
+
+          if grep -Fq "IQFTweakSettings" artifacts/strings.txt; then
+            echo "Unexpected legacy IQFTweakSettings integration"
+            exit 1
+          fi
+          if grep -Fq "viewWillAppear:" artifacts/strings.txt; then
+            echo "Unexpected view lifecycle hook"
+            exit 1
+          fi
+          if grep -Fq "setSections:" artifacts/strings.txt; then
+            echo "Unexpected setSections mutation"
+            exit 1
+          fi
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceCache-0.2.2-builder-iQFace-1.1-arm64
+          path: iqface-cache/artifacts/
+          if-no-files-found: error
