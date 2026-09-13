@@ -1,0 +1,51 @@
+name: Build NexusProbe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nexus-probe/**"
+      - ".github/workflows/nexus-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build NexusProbe
+        run: |
+          cd nexus-probe
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          DYLIB_PATH="$(find .theos -type f -name NexusProbe.dylib -print -quit)"
+          test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" artifacts/NexusProbe.dylib
+          shasum -a 256 artifacts/NexusProbe.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/NexusProbe.dylib > artifacts/file.txt
+          otool -D artifacts/NexusProbe.dylib > artifacts/install-name.txt
+          strings -a artifacts/NexusProbe.dylib > artifacts/strings.txt || true
+          grep -F 'Mach-O 64-bit' artifacts/file.txt
+          grep -F 'arm64' artifacts/file.txt
+          grep -F '@rpath/NexusProbe.dylib' artifacts/install-name.txt
+          grep -F 'NexusProbe 1.0' artifacts/strings.txt
+          grep -F 'UIApplicationDidBecomeActive' artifacts/strings.txt
+
+      - name: Upload NexusProbe
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusProbe-1.0-arm64
+          path: nexus-probe/artifacts/
+          if-no-files-found: error
