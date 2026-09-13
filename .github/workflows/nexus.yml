@@ -30,6 +30,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp nexus/prepare_makefile_v2.py nexus/prepare_makefile.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("nexus/build.sh")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace("grep -F 'Alterar ícone' \"$ARTIFACTS/strings.txt\"\n", "")
+          p.write_text(s, encoding="utf-8")
+          PY
           bash nexus/build.sh
 
       - name: Upload Nexus
