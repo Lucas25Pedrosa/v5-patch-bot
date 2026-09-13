@@ -37,7 +37,9 @@ jobs:
           s = p.read_text(encoding="utf-8")
           s = s.replace("grep -F 'Alterar ícone' \"$ARTIFACTS/strings.txt\"\n", "")
           needle = 'python3 "$ROOT/nexus/prepare_enhancer.py" "$WORK/EnhancerTweak.m" "$WORK/Translation.m"\n'
-          replacement = needle + 'python3 "$ROOT/nexus/patch_translation_timing.py" "$WORK/Translation.m"\n'
+          sync = 'python3 "$ROOT/nexus/sync_translation_11.py" "$WORK/Translation.m" "$ROOT/iqface-enhancer-1.1/Localization11.m"\n'
+          timing = 'python3 "$ROOT/nexus/patch_translation_timing.py" "$WORK/Translation.m"\n'
+          replacement = needle + sync + timing
           if needle not in s:
               raise RuntimeError("prepare_enhancer invocation not found")
           s = s.replace(needle, replacement, 1)
