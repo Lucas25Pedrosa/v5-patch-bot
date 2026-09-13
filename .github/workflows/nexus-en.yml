@@ -77,9 +77,15 @@ jobs:
           grep -F 'Clear cache' nexus-en/artifacts/strings.txt
           grep -F 'Nexus Developer' nexus-en/artifacts/strings.txt
           grep -F 'IPA Vault' nexus-en/artifacts/strings.txt
-          grep -F 'IPA Source' nexus-en/artifacts/strings.txt
-          grep -F 'Exclusive Nexus Distributor' nexus-en/artifacts/strings.txt
           grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          data = Path('nexus-en/artifacts/Nexus.dylib').read_bytes()
+          text = 'IPA Source • Exclusive Nexus Distributor'
+          if text.encode('utf-16le') not in data and text.encode('utf-16be') not in data:
+              raise SystemExit('Missing Unicode IPA Vault subtitle in Nexus.dylib')
+          print('FOUND Unicode IPA Vault subtitle')
+          PY
           if grep -F '1.1-core-ptbr' nexus-en/artifacts/strings.txt; then exit 1; fi
           if grep -F 'Desenvolvedor do Nexus' nexus-en/artifacts/strings.txt; then exit 1; fi
 
