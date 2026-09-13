@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Test adapter for the iQFace 1.1 settings API. Production 0.2.0 engine stays untouched.
 path = Path("Tweak.m")
 text = path.read_text(encoding="utf-8")
 
