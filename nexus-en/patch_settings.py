@@ -5,7 +5,7 @@ p = Path(sys.argv[1])
 s = p.read_text(encoding="utf-8")
 
 s = s.replace('NexusVersion = @"1.0"', 'NexusVersion = @"1.0.1"', 1)
-s = s.replace('@"Nexus v1.0"', '@"Nexus v1.0.1"')
+s = s.replace('setValue:@"v1.0" forKey:@"valueText"', 'setValue:@"v1.0.1" forKey:@"valueText"', 1)
 s = s.replace('@"Desenvolvedor do Nexus"', '@"Nexus Developer"')
 
 extern_marker = 'extern id NexusIconsCreateSetting(void);\n'
@@ -57,7 +57,7 @@ s = s.replace(call,
               1)
 
 assert 'NexusVersion = @"1.0.1"' in s
-assert '@"Nexus v1.0.1"' in s
+assert 'setValue:@"v1.0.1" forKey:@"valueText"' in s
 assert '@"Nexus Developer"' in s
 assert 'NexusIconsCreateIPAVaultSetting' in s
 p.write_text(s, encoding="utf-8")
