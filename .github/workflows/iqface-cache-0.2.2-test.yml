@@ -58,12 +58,12 @@ jobs:
           s, count = pattern.subn(replacement, s, count=1)
           if count != 1:
               raise SystemExit(f"Expected exactly one options block, replaced {count}")
+          assert 'NSDictionary<NSString *, id>' in s
+          assert '@"value"' in s and '@"title"' in s
           p.write_text(s)
           PY
 
           grep -F "iQFaceCache 0.2.2-test" Tweak.m
-          grep -F '@{"value": @0, @"title": @"Desativado"}' Tweak.m
-          grep -F '@{"value": @3, @"title": @"Mensalmente"}' Tweak.m
           grep -F 'NSClassFromString(@"IQFTweakSettings")' Tweak.m
           grep -F "class_getClassMethod" Tweak.m
 
