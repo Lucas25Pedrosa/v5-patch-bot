@@ -41,12 +41,12 @@ jobs:
           cp "$dylib_path" artifacts/iQFaceProbe.dylib
           shasum -a 256 artifacts/iQFaceProbe.dylib > artifacts/SHA256SUMS.txt
           file artifacts/iQFaceProbe.dylib
-          strings -a artifacts/iQFaceProbe.dylib | grep -F "iQFaceProbe 1.0"
-          strings -a artifacts/iQFaceProbe.dylib | grep -F "IQFSetting"
+          strings -a artifacts/iQFaceProbe.dylib | grep -F "iQFaceProbe 1.1"
+          strings -a artifacts/iQFaceProbe.dylib | grep -F "IMAGE AVATAR CANDIDATE"
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceProbe-1.0-arm64
+          name: iQFaceProbe-1.1-arm64
           path: iqface-probe/artifacts/
           if-no-files-found: error
