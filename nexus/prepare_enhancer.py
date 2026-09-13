@@ -18,8 +18,23 @@ replacement = '''static void IQFAttachLongPress(UIView *view) {
 }'''
 s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
 assert n == 1
+
+# Nexus PT-BR: block the original iQFace settings launcher before its first
+# rendered frame. The navigation/addSubview hook uses the Enhancer's exact
+# matcher (UIButton + accessibilityLabel "iQFace" + action "iqf_tapped").
+# Keep the broader tab-bar hooks disabled; the scanner remains fallback only.
+old_hooks = '''        if (!IQFSafeModeEnabled()) {
+            IQFInstallNavigationItemHooks();
+            IQFInstallTabBarHooks();
+        }'''
+new_hooks = '''        IQFInstallNavigationItemHooks();'''
+assert old_hooks in s
+s = s.replace(old_hooks, new_hooks, 1)
+
 assert 'IQFFindSymbol("IQFPresentSettings")' in s
 assert 'IQFPresentLauncherMenu' not in s
+assert 'IQFInstallNavigationItemHooks();' in s
+assert 'IQFInstallTabBarHooks();' not in s
 tweak.write_text(s, encoding="utf-8")
 
 s = translation.read_text(encoding="utf-8")

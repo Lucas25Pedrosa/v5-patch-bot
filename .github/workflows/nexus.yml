@@ -1,4 +1,4 @@
-name: Build Nexus 1.0 PT-BR
+name: Build Nexus 1.0.1 PT-BR
 
 "on":
   workflow_dispatch:
@@ -43,6 +43,6 @@ jobs:
       - name: Upload Nexus
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-1.0-PTBR-iQFace-1.1-arm64
+          name: Nexus-1.0.1-PTBR-iQFace-1.1-arm64
           path: nexus/artifacts/
           if-no-files-found: error

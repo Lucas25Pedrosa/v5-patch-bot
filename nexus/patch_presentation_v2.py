@@ -4,6 +4,7 @@ import sys
 p = Path(sys.argv[1])
 s = p.read_text(encoding="utf-8")
 
+s = s.replace('NexusVersion = @"1.0"', 'NexusVersion = @"1.0.1"', 1)
 s = s.replace('@"paperplane.fill"', '@"hammer.fill"', 1)
 
 old_about = '''static id NexusCreateAboutVersion(void) {
@@ -12,7 +13,7 @@ old_about = '''static id NexusCreateAboutVersion(void) {
 new_about = '''static id NexusCreateAboutVersion(void) {
     id setting = NexusCreateStaticSetting(@"Nexus", nil, @"point.3.connected.trianglepath.dotted");
     if (setting == nil) return nil;
-    @try { [setting setValue:@"v1.0" forKey:@"valueText"]; }
+    @try { [setting setValue:@"v1.0.1" forKey:@"valueText"]; }
     @catch (__unused NSException *exception) {}
     return setting;
 }'''
@@ -79,8 +80,9 @@ if old_dev not in s:
     raise SystemExit("developer ordering marker not found")
 s = s.replace(old_dev, new_dev, 1)
 
+assert 'NexusVersion = @"1.0.1"' in s
 assert '@"hammer.fill"' in s
-assert 'setValue:@"v1.0" forKey:@"valueText"' in s
+assert 'setValue:@"v1.0.1" forKey:@"valueText"' in s
 assert '[normalized isEqualToString:@"iqface"]' in s
 assert '[title isEqualToString:@"iQTweak"]' in s
 p.write_text(s, encoding="utf-8")

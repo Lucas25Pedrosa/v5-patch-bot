@@ -9,7 +9,7 @@ THEOS_DIR="${THEOS:-${RUNNER_TEMP:-/tmp}/theos}"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 
-echo "Preparing Nexus 1.0 PT-BR"
+echo "Preparing Nexus 1.0.1 PT-BR"
 
 if [ -z "$TOKEN" ]; then
   echo "GH_TOKEN/GITHUB_TOKEN is required"
@@ -33,6 +33,14 @@ cp "$ROOT/iqface-enhancer-wordmark-beta/WordmarkActivation.m" "$WORK/WordmarkAct
 cp "$ROOT/iqface-enhancer-1.1/HideButton11.m" "$WORK/HideButton11.m"
 python3 "$ROOT/nexus-en/patch_hidebutton.py" "$WORK/HideButton11.m"
 
+# Match only the iQFace settings action in the fallback scanner. This keeps
+# iqfDismiss (settings chevron) and unrelated iQFace/Reels controls intact.
+sed -i '' '/if (IQF11ContainsIQF(control.accessibilityLabel) ||/,/    }/d' "$WORK/HideButton11.m"
+sed -i '' '/if (IQF11ContainsIQF(item.title) ||/,/    }/d' "$WORK/HideButton11.m"
+sed -i '' 's/if (IQF11ContainsIQF(action)) return YES;/if ([action isEqualToString:@"iqf_tapped"]) return YES;/' "$WORK/HideButton11.m"
+sed -i '' 's/if (IQF11ContainsIQF(actionName)) return YES;/if ([actionName isEqualToString:@"iqf_tapped"]) return YES;/' "$WORK/HideButton11.m"
+sed -i '' '/static BOOL IQF11ContainsIQF(NSString \*value) {/,/^}/d' "$WORK/HideButton11.m"
+
 # Cache 0.2.2 + Icons 1.1.0.
 python3 "$ROOT/nexus/prepare_cache.py" "$ROOT/iqface-cache/Tweak.m" "$WORK/CacheTweak.m"
 python3 "$ROOT/nexus/prepare_icons.py" "$ROOT/iqface-icons/Tweak.m" "$WORK/IconsTweak.m"
@@ -55,14 +63,19 @@ cp "$ROOT/nexus/NexusSettings.m" "$WORK/NexusSettings.m"
 python3 "$ROOT/nexus/prepare_makefile.py" "$ROOT/iqface-4in1/Makefile" "$WORK/Makefile"
 
 # Preparation validation.
-grep -F 'NexusVersion = @"1.0"' "$WORK/NexusSettings.m"
+grep -F 'NexusVersion = @"1.0.1"' "$WORK/NexusSettings.m"
 grep -F 'NexusCacheCreateManualSetting' "$WORK/CacheTweak.m"
 grep -F 'NexusIconsCreateSetting' "$WORK/IconsTweak.m"
 grep -F 'NexusOLEDCreateModeSetting' "$WORK/OLEDTweak.m"
 grep -F '@"value": @0' "$WORK/CacheTweak.m"
 grep -F 'staticCellWithTitle:subtitle:icon:' "$WORK/OLEDTweak.m"
+grep -F 'IQFInstallNavigationItemHooks();' "$WORK/EnhancerTweak.m"
+! grep -F 'IQFInstallTabBarHooks();' "$WORK/EnhancerTweak.m"
+grep -F 'button.accessibilityLabel isEqualToString:@"iQFace"' "$WORK/EnhancerTweak.m"
+grep -F 'containsObject:@"iqf_tapped"' "$WORK/EnhancerTweak.m"
 grep -F '@"iqfDismiss"' "$WORK/HideButton11.m"
-grep -F 'IQF11IsProtectedIQFaceAction' "$WORK/HideButton11.m"
+grep -F 'iqf_tapped' "$WORK/HideButton11.m"
+! grep -F 'IQF11ContainsIQF' "$WORK/HideButton11.m"
 
 # Compile the single Nexus library.
 cd "$WORK"
@@ -96,5 +109,7 @@ grep -F 'Limpar cache automaticamente' "$ARTIFACTS/strings.txt"
 grep -F 'Diariamente' "$ARTIFACTS/strings.txt"
 grep -F 'com.facebook.Facebook.MosaicIGImageDiskCache' "$ARTIFACTS/strings.txt"
 grep -F 'iqfDismiss' "$ARTIFACTS/strings.txt"
+grep -F 'iqf_tapped' "$ARTIFACTS/strings.txt"
+grep -F 'v1.0.1' "$ARTIFACTS/strings.txt"
 
-echo "Nexus 1.0 PT-BR build completed"
+echo "Nexus 1.0.1 PT-BR build completed"
