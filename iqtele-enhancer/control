@@ -1,8 +1,8 @@
-Package: com.lucas.iqteleenhancer
-Name: iQTele Enhancer
-Version: 0.1.0
+Package: com.lucas.prism
+Name: Prism
+Version: 1.0.0
 Architecture: iphoneos-arm
-Description: Oculta o botao de ajustes do iQTele e abre os ajustes por long press na linha de suporte do Telegram.
+Description: Aprimoramentos, tradução e ajustes de interface para iQTele.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
