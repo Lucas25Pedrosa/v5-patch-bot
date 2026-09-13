@@ -1,0 +1,79 @@
+name: Build iQFace OLED 0.2.5 native icon switches
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqface-oled/**"
+      - ".github/workflows/iqface-oled-1.1-native-icon-switch-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-oled
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Prepare validated OLED engine
+        run: |
+          set -euo pipefail
+          python3 prepare_oled.py
+          python3 prepare_separator.py
+          python3 finalize_020.py
+          python3 adapt_iqface11.py
+          python3 adapt_iqface11_native_icon_switches.py
+
+      - name: Validate source migration
+        run: |
+          set -euo pipefail
+          grep -F '// iQFaceOLED 0.2.5 — iQFace 1.1 native-icon switches' Tweak.m
+          grep -F 'staticCellWithTitle:subtitle:icon:' Tweak.m
+          grep -F 'circle.lefthalf.filled' Tweak.m
+          grep -F 'line.3.horizontal' Tweak.m
+          grep -F 'UISwitch' Tweak.m
+          grep -F 'accessoryView' Tweak.m
+          grep -F 'IQFPrefs' Tweak.m
+          grep -F 'setBool:forKey:' Tweak.m
+          grep -F 'IQFOLEDUpdateFeedSeparator' Tweak.m
+          grep -F 'IQFOLEDUpdateAvatarClip' Tweak.m
+          if grep -F 'switchCellWithTitle:subtitle:defaultsKey:defaultOn:' Tweak.m; then exit 1; fi
+          if grep -F 'IQFRow' Tweak.m; then exit 1; fi
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -name iQFaceOLED.dylib -print | head -n 1)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceOLED.dylib
+          shasum -a 256 artifacts/iQFaceOLED.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceOLED.dylib | grep -F 'Mach-O 64-bit'
+          file artifacts/iQFaceOLED.dylib | grep -F 'arm64'
+          strings -a artifacts/iQFaceOLED.dylib | grep -F 'staticCellWithTitle:subtitle:icon:'
+          strings -a artifacts/iQFaceOLED.dylib | grep -F 'circle.lefthalf.filled'
+          strings -a artifacts/iQFaceOLED.dylib | grep -F 'line.3.horizontal'
+          strings -a artifacts/iQFaceOLED.dylib | grep -F 'setBool:forKey:'
+          strings -a artifacts/iQFaceOLED.dylib | grep -F 'iQFaceOLEDFeedSeparatorsEnabled'
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceOLED-0.2.5-iQFace-1.1-arm64
+          path: iqface-oled/artifacts/
+          if-no-files-found: error
