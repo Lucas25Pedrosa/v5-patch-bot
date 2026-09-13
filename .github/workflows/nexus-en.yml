@@ -62,9 +62,31 @@ jobs:
       - name: Assemble Nexus English sources
         run: python3 nexus-en/assemble.py "$RUNNER_TEMP/nexus-en-build" "$RUNNER_TEMP/nexus-en-oled/Tweak.m"
 
-      - name: Upload prepared sources
+      - name: Build Nexus English
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/nexus-en-build"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p "$GITHUB_WORKSPACE/nexus-en/artifacts"
+          rm -f "$GITHUB_WORKSPACE/nexus-en/artifacts"/*
+          DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
+          test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" "$GITHUB_WORKSPACE/nexus-en/artifacts/Nexus.dylib"
+          cd "$GITHUB_WORKSPACE"
+          shasum -a 256 nexus-en/artifacts/Nexus.dylib > nexus-en/artifacts/SHA256SUMS.txt
+          file nexus-en/artifacts/Nexus.dylib > nexus-en/artifacts/file.txt
+          strings -a nexus-en/artifacts/Nexus.dylib > nexus-en/artifacts/strings.txt || true
+          otool -D nexus-en/artifacts/Nexus.dylib > nexus-en/artifacts/install-name.txt
+          otool -L nexus-en/artifacts/Nexus.dylib > nexus-en/artifacts/dependencies.txt
+          grep -F 'Mach-O 64-bit' nexus-en/artifacts/file.txt
+          grep -F 'arm64' nexus-en/artifacts/file.txt
+          grep -F '@rpath/Nexus.dylib' nexus-en/artifacts/install-name.txt
+          if grep -F '1.1-core-ptbr' nexus-en/artifacts/strings.txt; then exit 1; fi
+
+      - name: Upload Nexus English
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-English-prepared-sources
-          path: ${{ runner.temp }}/nexus-en-build/
+          name: Nexus-1.0-English-iQFace-1.1-arm64
+          path: nexus-en/artifacts/
           if-no-files-found: error
