@@ -1,4 +1,4 @@
-name: Build Nexus 1.0 English
+name: Build Nexus 1.0.1 English
 
 "on":
   workflow_dispatch:
@@ -89,6 +89,7 @@ jobs:
           grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
           grep -F 'iqfDismiss' nexus-en/artifacts/strings.txt
           grep -F 'iqf_tapped' nexus-en/artifacts/strings.txt
+          grep -F 'Nexus v1.0.1' nexus-en/artifacts/strings.txt
           python3 - <<'PY'
           from pathlib import Path
           data = Path('nexus-en/artifacts/Nexus.dylib').read_bytes()
@@ -104,6 +105,6 @@ jobs:
       - name: Upload Nexus English
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-1.0-English-iQFace-1.1-arm64
+          name: Nexus-1.0.1-English-iQFace-1.1-arm64
           path: nexus-en/artifacts/
           if-no-files-found: error
