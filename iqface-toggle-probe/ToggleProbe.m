@@ -208,6 +208,7 @@ static void IQFTPInitialize(void) {
         [NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
         IQFTPReportPath = [directory stringByAppendingPathComponent:@"iQFaceSettingsABI.txt"];
         IQFTPLog(@"iQFace ABI Probe 0.2.0");
+        IQFTPLog(@"validation-marker=iQFaceToggleProbe.txt");
         IQFTPLog(@"Facebook %@ (%@) | iOS %@",
                  [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?",
                  [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"?",
