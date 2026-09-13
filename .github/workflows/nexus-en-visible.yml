@@ -47,9 +47,10 @@ jobs:
           cp nexus/NexusSettings.m "$WORK/NexusSettings.m"
           python3 nexus/patch_presentation_v2.py "$WORK/NexusSettings.m"
           python3 nexus-en/patch_settings.py "$WORK/NexusSettings.m"
-          python3 - <<'PY'
+          WORK="$WORK" python3 - <<'PY'
+          import os
           from pathlib import Path
-          p = Path("$RUNNER_TEMP/nexus-en-visible-build/NexusSettings.m")
+          p = Path(os.environ["WORK"]) / "NexusSettings.m"
           s = p.read_text(encoding="utf-8")
           s = s.replace('NexusVersion = @"1.0.2"', 'NexusVersion = @"1.0.2 (a)"', 1)
           s = s.replace('setValue:@"v1.0.2" forKey:@"valueText"', 'setValue:@"v1.0.2 (a)" forKey:@"valueText"', 1)
