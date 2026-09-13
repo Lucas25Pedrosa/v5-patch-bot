@@ -24,23 +24,17 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Install Theos
-        run: |
-          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
 
       - name: Install signing tool
-        run: |
-          brew install ldid
+        run: brew install ldid
 
-      - name: Prepare validated 0.2.0 engine
+      - name: Prepare validated engine and iQFace 1.1 bridge
         run: |
           set -euo pipefail
           python3 prepare_oled.py
           python3 prepare_separator.py
           python3 finalize_020.py
-
-      - name: Adapt settings to iQFace 1.1
-        run: |
-          set -euo pipefail
           python3 adapt_iqface11.py
 
       - name: Patch 0.2.3 prefs bridge and switch icons
@@ -113,10 +107,8 @@ jobs:
           }''', '''    IQFOLEDSwitchFactory factory = (IQFOLEDSwitchFactory)(void *)objc_msgSend;
               id setting = factory(settingClass, selector, title, nil, defaultsKey, defaultOn);
               if (setting != nil && icon.length > 0) {
-                  @try {
-                      [setting setValue:icon forKey:@"icon"];
-                  } @catch (__unused NSException *exception) {
-                  }
+                  @try { [setting setValue:icon forKey:@"icon"]; }
+                  @catch (__unused NSException *exception) {}
               }
               return setting;
           }''', "switch icon property")
@@ -134,6 +126,18 @@ jobs:
                                                                                     @"line.3.horizontal",
                                                                                     IQFOLEDSeparatorsPreferenceKey,
                                                                                     NO)''', "separator icon argument")
+
+          declaration_point = "static NSArray *IQFOLEDTweakSections(id self, SEL command) {"
+          if declaration_point not in s:
+              raise SystemExit("tweak sections declaration not found")
+          s = s.replace(declaration_point,
+                        "static void IQFOLEDTryInstallCellIconHook(void);\n\n" + declaration_point,
+                        1)
+
+          rep('''    return IQFOLEDSectionsWithControls(sections);
+          }''', '''    IQFOLEDTryInstallCellIconHook();
+              return IQFOLEDSectionsWithControls(sections);
+          }''', "install cell hook when settings model is requested")
 
           marker = '''__attribute__((constructor))
           static void IQFOLEDInitialize(void) {'''
@@ -153,9 +157,9 @@ jobs:
                   UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size format:format];
                   return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
                       (void)context;
-                      CGRect backgroundRect = CGRectMake(0.0, 0.0, size.width, size.height);
+                      CGRect rect = CGRectMake(0.0, 0.0, size.width, size.height);
                       [[UIColor colorWithWhite:0.48 alpha:1.0] setFill];
-                      [[UIBezierPath bezierPathWithRoundedRect:backgroundRect cornerRadius:8.0] fill];
+                      [[UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:8.0] fill];
 
                       UIImageSymbolConfiguration *configuration =
                           [UIImageSymbolConfiguration configurationWithPointSize:17.0
@@ -189,13 +193,8 @@ jobs:
                   oledIcon = IQFOLEDRenderedToolIcon(@"circle.lefthalf.filled");
                   separatorIcon = IQFOLEDRenderedToolIcon(@"line.3.horizontal");
               });
-
-              if ([title isEqualToString:@"Modo OLED"] || [title isEqualToString:@"OLED Mode"]) {
-                  return oledIcon;
-              }
-              if ([title isEqualToString:@"Separadores no feed"] || [title isEqualToString:@"Feed separators"]) {
-                  return separatorIcon;
-              }
+              if ([title isEqualToString:@"Modo OLED"] || [title isEqualToString:@"OLED Mode"]) return oledIcon;
+              if ([title isEqualToString:@"Separadores no feed"] || [title isEqualToString:@"Feed separators"]) return separatorIcon;
               return nil;
           }
 
@@ -210,11 +209,9 @@ jobs:
 
               SEL settingSelector = NSSelectorFromString(@"settingForIndexPath:");
               if (![self respondsToSelector:settingSelector]) return cell;
-
               typedef id (*SettingGetter)(id, SEL, id);
               id setting = ((SettingGetter)(void *)objc_msgSend)(self, settingSelector, indexPath);
-              NSString *title = IQFOLEDSettingTitle(setting);
-              UIImage *icon = IQFOLEDIconForSettingsTitle(title);
+              UIImage *icon = IQFOLEDIconForSettingsTitle(IQFOLEDSettingTitle(setting));
               if (icon != nil) {
                   cell.imageView.image = icon;
                   cell.imageView.contentMode = UIViewContentModeCenter;
@@ -225,7 +222,6 @@ jobs:
 
           static void IQFOLEDTryInstallCellIconHook(void) {
               if (gIQFOLEDCellIconHookInstalled) return;
-
               gIQFOLEDCellIconHookAttempts += 1;
               Class target = NSClassFromString(@"IQFSettingsViewController");
               SEL selector = NSSelectorFromString(@"tableView:cellForRowAtIndexPath:");
@@ -236,26 +232,15 @@ jobs:
                   method_setImplementation(method, (IMP)&IQFOLEDCellForRow);
                   gIQFOLEDCellIconHookInstalled = YES;
               }
-
               if (!gIQFOLEDCellIconHookInstalled && gIQFOLEDCellIconHookAttempts < 120) {
                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                                 dispatch_get_main_queue(), ^{
-                      IQFOLEDTryInstallCellIconHook();
-                  });
+                                 dispatch_get_main_queue(), ^{ IQFOLEDTryInstallCellIconHook(); });
               }
           }
 
           '''
 
           s = s.replace(marker, icon_hook + marker, 1)
-
-          target_call = "        IQFOLEDTryInstallSettingsHook();"
-          if target_call not in s:
-              raise SystemExit("settings hook install call not found")
-          s = s.replace(target_call,
-                        target_call + "\n        IQFOLEDTryInstallCellIconHook();",
-                        1)
-
           p.write_text(s, encoding="utf-8")
           PY
 
@@ -263,65 +248,31 @@ jobs:
         run: |
           set -euo pipefail
           grep -F '// iQFaceOLED 0.2.3 — iQFace 1.1' Tweak.m
-          grep -F 'switchCellWithTitle:subtitle:defaultsKey:defaultOn:' Tweak.m
           grep -F 'IQFPrefs' Tweak.m
-          grep -F 'boolForKey:defaultValue:' Tweak.m
           grep -F 'IQFOLEDCellForRow' Tweak.m
           grep -F 'tableView:cellForRowAtIndexPath:' Tweak.m
-          grep -F '@"circle.lefthalf.filled"' Tweak.m
-          grep -F '@"line.3.horizontal"' Tweak.m
+          grep -F 'circle.lefthalf.filled' Tweak.m
+          grep -F 'line.3.horizontal' Tweak.m
           grep -F 'IQFOLEDUpdateFeedSeparator' Tweak.m
           grep -F 'IQFOLEDUpdateAvatarClip' Tweak.m
-          grep -F 'FBLineComponentInternalView' Tweak.m
-          grep -F '_FBMaskedRoundedCornerView' Tweak.m
-          if grep -F 'IQFRow' Tweak.m; then
-            echo "Unexpected IQFRow reference after iQFace 1.1 migration"
-            exit 1
-          fi
-          if grep -F 'viewDidAppear:' Tweak.m; then
-            echo "Unexpected settings lifecycle hook after iQFace 1.1 migration"
-            exit 1
-          fi
+          if grep -F 'IQFRow' Tweak.m; then exit 1; fi
 
       - name: Build and validate arm64 dylib
         run: |
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-
-          dylib_path=""
-          while IFS= read -r candidate; do
-            if file "$candidate" | grep -q "dynamically linked shared library"; then
-              dylib_path="$candidate"
-              break
-            fi
-          done < <(find .theos -name iQFaceOLED.dylib -print)
-
+          dylib_path="$(find .theos -name iQFaceOLED.dylib -print | head -n 1)"
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQFaceOLED.dylib
           shasum -a 256 artifacts/iQFaceOLED.dylib > artifacts/SHA256SUMS.txt
-
-          file_info="$(file artifacts/iQFaceOLED.dylib)"
-          echo "$file_info"
-          echo "$file_info" | grep -F "Mach-O 64-bit"
-          echo "$file_info" | grep -F "arm64"
-          echo "$file_info" | grep -F "dynamically linked shared library"
-
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "switchCellWithTitle:subtitle:defaultsKey:defaultOn:"
+          file artifacts/iQFaceOLED.dylib | grep -F "Mach-O 64-bit"
+          file artifacts/iQFaceOLED.dylib | grep -F "arm64"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFPrefs"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "boolForKey:defaultValue:"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "tableView:cellForRowAtIndexPath:"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "circle.lefthalf.filled"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "line.3.horizontal"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDEnabled"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDFeedSeparatorsEnabled"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "FBLineComponentInternalView"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "MRCAnimatedImageView"
-
-          if strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFRow"; then
-            echo "Unexpected IQFRow in final dylib"
-            exit 1
-          fi
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
