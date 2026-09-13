@@ -1,0 +1,1 @@
+Testing the exact iQFaceEnhancer 2.1 Core PT-BR Translation.m implementation from commit 2b764e9afb118063d74260f51d1a65527f2e7845, without the later timing, label-width, or font-size translation patches.
