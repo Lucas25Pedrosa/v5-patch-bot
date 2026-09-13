@@ -17,7 +17,7 @@ s = s.replace("iQFace4in1_INSTALL_PATH", "Nexus_INSTALL_PATH")
 s = s.replace("@rpath/iQFace4in1.dylib", "@rpath/Nexus.dylib")
 s = s.replace(
     "-Wno-deprecated-declarations",
-    "-Wno-deprecated-declarations -Wno-error=sign-compare",
+    "-Wno-deprecated-declarations -Wno-error=sign-compare -Wno-error=unused-function",
     1,
 )
 
@@ -25,4 +25,5 @@ assert "LIBRARY_NAME = Nexus" in s
 assert "NexusSettings.m" in s
 assert "@rpath/Nexus.dylib" in s
 assert "-Wno-error=sign-compare" in s
+assert "-Wno-error=unused-function" in s
 out.write_text(s, encoding="utf-8")
