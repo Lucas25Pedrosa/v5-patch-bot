@@ -1,176 +1,154 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 
 static NSString *reportPath;
-static NSString *stringsPath;
-static NSMutableSet *seenStrings;
-static NSMutableSet *seenScreens;
+static NSMutableSet<NSString *> *seenSignatures;
 static dispatch_source_t timer;
 
-static void appendText(NSString *path, NSString *text) {
-    if (!path.length || !text.length) return;
-    NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
+static void appendLine(NSString *line) {
+    if (!line.length || !reportPath.length) return;
+    NSString *payload = [line stringByAppendingString:@"\n"];
+    NSData *data = [payload dataUsingEncoding:NSUTF8StringEncoding];
+    NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:reportPath];
     if (!h) return;
     [h seekToEndOfFile];
-    [h writeData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+    [h writeData:data];
     [h closeFile];
 }
 
-static void logLine(NSString *line) {
-    appendText(reportPath, [line stringByAppendingString:@"\n"]);
+static NSString *rectString(CGRect r) {
+    return [NSString stringWithFormat:@"(%.1f,%.1f %.1fx%.1f)", r.origin.x, r.origin.y, r.size.width, r.size.height];
 }
 
-static NSString *cleanText(NSString *s) {
-    if (![s isKindOfClass:[NSString class]]) return @"";
-    NSString *v = [s stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
-    v = [v stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
-    return [v stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+static BOOL classEquals(UIView *view, NSString *name) {
+    return view && [NSStringFromClass(view.class) isEqualToString:name];
 }
 
-static void recordString(NSString *text, NSString *source, NSString *screen) {
-    NSString *v = cleanText(text);
-    if (!v.length) return;
-    NSString *key = [NSString stringWithFormat:@"%@|%@", screen ?: @"?", v];
-    if ([seenStrings containsObject:key]) return;
-    [seenStrings addObject:key];
-    appendText(stringsPath, [NSString stringWithFormat:@"%@ | %@ | %@\n", screen ?: @"?", source ?: @"?", v]);
+static BOOL hasDescendantNamed(UIView *view, NSString *name, NSUInteger depth) {
+    if (!view || depth > 8) return NO;
+    for (UIView *child in view.subviews) {
+        if (classEquals(child, name)) return YES;
+        if (hasDescendantNamed(child, name, depth + 1)) return YES;
+    }
+    return NO;
 }
 
-static void prepareFiles(void) {
-    seenStrings = [NSMutableSet set];
-    seenScreens = [NSMutableSet set];
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+static NSUInteger countImageViews(UIView *view, NSUInteger depth) {
+    if (!view || depth > 8) return 0;
+    NSUInteger count = [view isKindOfClass:UIImageView.class] ? 1 : 0;
+    for (UIView *child in view.subviews) count += countImageViews(child, depth + 1);
+    return count;
+}
+
+static BOOL containsVisibleImage(UIView *view, NSUInteger depth) {
+    if (!view || depth > 8) return NO;
+    if ([view isKindOfClass:UIImageView.class]) {
+        UIImageView *iv = (UIImageView *)view;
+        if (iv.image && !iv.hidden && iv.alpha > 0.01) return YES;
+    }
+    for (UIView *child in view.subviews) if (containsVisibleImage(child, depth + 1)) return YES;
+    return NO;
+}
+
+static void appendTree(UIView *view, NSMutableString *out, NSUInteger depth) {
+    if (!view || depth > 7) return;
+    NSString *indent = [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0];
+    CALayer *layer = view.layer;
+    [out appendFormat:@"%@%@ frame=%@ bounds=%@ hidden=%@ alpha=%.2f clips=%@ masks=%@ radius=%.1f",
+     indent, NSStringFromClass(view.class), rectString(view.frame), rectString(view.bounds),
+     view.hidden ? @"Y" : @"N", view.alpha, view.clipsToBounds ? @"Y" : @"N",
+     layer.masksToBounds ? @"Y" : @"N", layer.cornerRadius];
+    if ([view isKindOfClass:UIImageView.class]) {
+        UIImageView *iv = (UIImageView *)view;
+        [out appendFormat:@" image=%@ mode=%ld", iv.image ? @"Y" : @"N", (long)iv.contentMode];
+    }
+    [out appendString:@"\n"];
+    for (UIView *child in view.subviews) appendTree(child, out, depth + 1);
+}
+
+static BOOL looksLikeAvatarContainer(UIView *view) {
+    if (!classEquals(view, @"FBPassthroughView")) return NO;
+    CGFloat w = fabs(view.bounds.size.width);
+    CGFloat h = fabs(view.bounds.size.height);
+    if (w < 20.0 || h < 20.0 || w > 120.0 || h > 120.0) return NO;
+    if (fabs(w - h) > 12.0) return NO;
+    if (!containsVisibleImage(view, 0)) return NO;
+    return YES;
+}
+
+static void inspectCandidate(UIView *view) {
+    BOOL masked = hasDescendantNamed(view, @"_FBMaskedRoundedCornerView", 0);
+    BOOL mrc = hasDescendantNamed(view, @"MRCImageComponentView", 0);
+    BOOL animated = hasDescendantNamed(view, @"MRCAnimatedImageView", 0);
+    NSUInteger images = countImageViews(view, 0);
+
+    NSMutableString *tree = [NSMutableString string];
+    appendTree(view, tree, 0);
+
+    NSString *signature = [NSString stringWithFormat:@"%@|%@|%@|%lu|%@",
+                           masked ? @"M" : @"-", mrc ? @"C" : @"-", animated ? @"A" : @"-",
+                           (unsigned long)images, tree];
+    if ([seenSignatures containsObject:signature]) return;
+    [seenSignatures addObject:signature];
+
+    NSString *variant = masked ? @"A(masked)" : ((mrc && animated && images >= 1) ? @"B/unmasked-or-composite" : @"C/unknown");
+    appendLine(@"============================================================");
+    appendLine([NSString stringWithFormat:@"AVATAR CANDIDATE variant=%@ frame=%@ images=%lu masked=%@ mrc=%@ animated=%@",
+                variant, rectString(view.frame), (unsigned long)images,
+                masked ? @"Y" : @"N", mrc ? @"Y" : @"N", animated ? @"Y" : @"N"]);
+    appendLine(tree);
+}
+
+static void walkView(UIView *view, NSUInteger depth) {
+    if (!view || depth > 30 || view.hidden || view.alpha < 0.01) return;
+    if (looksLikeAvatarContainer(view)) inspectCandidate(view);
+    for (UIView *child in view.subviews) walkView(child, depth + 1);
+}
+
+static NSArray<UIWindow *> *allWindows(void) {
+    NSMutableArray<UIWindow *> *out = [NSMutableArray array];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            [out addObjectsFromArray:((UIWindowScene *)scene).windows];
+        }
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        [out addObjectsFromArray:UIApplication.sharedApplication.windows];
+#pragma clang diagnostic pop
+    }
+    return out;
+}
+
+static void scan(void) {
+    for (UIWindow *window in allWindows()) walkView(window, 0);
+}
+
+static void prepare(void) {
+    seenSignatures = [NSMutableSet set];
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject ?: NSTemporaryDirectory();
     NSString *dir = [docs stringByAppendingPathComponent:@"iQFaceProbe"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    reportPath = [dir stringByAppendingPathComponent:@"iQFaceProbe.txt"];
-    stringsPath = [dir stringByAppendingPathComponent:@"iQFaceStrings.txt"];
+    reportPath = [dir stringByAppendingPathComponent:@"AvatarProbe.txt"];
     [[NSFileManager defaultManager] createFileAtPath:reportPath contents:nil attributes:nil];
-    [[NSFileManager defaultManager] createFileAtPath:stringsPath contents:nil attributes:nil];
+    appendLine(@"iQFaceProbe 1.0 - avatar structure diagnostics");
+    appendLine(@"Reference class: IQFSetting");
+    appendLine([NSString stringWithFormat:@"Bundle=%@ iOS=%@", NSBundle.mainBundle.bundleIdentifier ?: @"?", UIDevice.currentDevice.systemVersion ?: @"?"]);
+    appendLine(@"Open the feed item with the problematic community/group avatar and leave it visible for a few seconds.");
 }
 
-static void checkClass(NSString *name) {
-    Class c = NSClassFromString(name);
-    logLine([NSString stringWithFormat:@"CLASS %@ = %@", name, c ? @"FOUND" : @"MISSING"]);
-}
-
-static void checkClassSelector(NSString *className, NSString *selectorName) {
-    Class c = NSClassFromString(className);
-    SEL s = NSSelectorFromString(selectorName);
-    BOOL ok = c && [c respondsToSelector:s];
-    logLine([NSString stringWithFormat:@"+[%@ %@] = %@", className, selectorName, ok ? @"FOUND" : @"MISSING"]);
-}
-
-static void writeCompatibilityReport(void) {
-    NSDictionary *info = [NSBundle mainBundle].infoDictionary ?: @{};
-    logLine(@"=== iQFaceProbe 1.0 ===");
-    logLine([NSString stringWithFormat:@"Facebook %@ (%@)", info[@"CFBundleShortVersionString"] ?: @"?", info[@"CFBundleVersion"] ?: @"?"]);
-    logLine([NSString stringWithFormat:@"iOS %@", [UIDevice currentDevice].systemVersion ?: @"?"]);
-    logLine(@"");
-    logLine(@"=== CLASSES ===");
-    for (NSString *name in @[@"IQFSettingsViewController", @"IQFSetting", @"IQFTweakSettings", @"IQFPrefs", @"IQFSymbol", @"IQFAssets", @"IQFRow", @"IQFSection", @"FBNavigationBar"]) checkClass(name);
-    logLine(@"");
-    logLine(@"=== IQFSETTING FACTORIES ===");
-    for (NSString *sel in @[@"buttonCellWithTitle:subtitle:icon:action:", @"switchCellWithTitle:subtitle:defaultsKey:defaultOn:", @"optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:", @"navigationCellWithTitle:subtitle:icon:viewController:", @"navigationCellWithTitle:subtitle:icon:navSections:", @"staticCellWithTitle:subtitle:icon:"]) checkClassSelector(@"IQFSetting", sel);
-    logLine(@"");
-    logLine(@"=== OLED FACEBOOK CLASSES ===");
-    for (NSString *name in @[@"FBTopBarAndContentView", @"FBTabBarAndContentView", @"FBMovableNavigationBarView", @"FBNewsFeedView", @"FBNewsFeedCollectionView", @"FBTabBar", @"FBPassthroughView", @"FBLineComponentInternalView", @"_FBMaskedRoundedCornerView", @"MRCImageComponentView", @"MRCAnimatedImageView"]) checkClass(name);
-    logLine(@"");
-    logLine(@"Open every iQFace settings page. Visible cells and strings will be appended below.");
-}
-
-static void scanView(UIView *view, NSUInteger depth, NSMutableString *tree, NSString *screen) {
-    if (!view || depth > 18) return;
-    NSString *indent = [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0];
-    NSString *className = NSStringFromClass(view.class);
-    [tree appendFormat:@"%@%@", indent, className];
-    NSMutableArray *texts = [NSMutableArray array];
-    if ([view isKindOfClass:[UILabel class]]) {
-        NSString *t = ((UILabel *)view).text; if (t.length) [texts addObject:t];
-    }
-    if ([view isKindOfClass:[UIButton class]]) {
-        NSString *t = ((UIButton *)view).currentTitle; if (t.length) [texts addObject:t];
-    }
-    if ([view isKindOfClass:[UITextField class]]) {
-        UITextField *v = (UITextField *)view; if (v.text.length) [texts addObject:v.text]; if (v.placeholder.length) [texts addObject:v.placeholder];
-    }
-    if ([view isKindOfClass:[UITextView class]]) {
-        NSString *t = ((UITextView *)view).text; if (t.length) [texts addObject:t];
-    }
-    if ([view isKindOfClass:[UITableViewCell class]]) {
-        UITableViewCell *c = (UITableViewCell *)view; if (c.textLabel.text.length) [texts addObject:c.textLabel.text]; if (c.detailTextLabel.text.length) [texts addObject:c.detailTextLabel.text];
-    }
-    if (texts.count) {
-        NSMutableArray *clean = [NSMutableArray array];
-        for (NSString *t in texts) {
-            NSString *v = cleanText(t);
-            if (!v.length) continue;
-            [clean addObject:v];
-            recordString(v, className, screen);
-        }
-        if (clean.count) [tree appendFormat:@" text=%@", [clean componentsJoinedByString:@" | "]];
-    }
-    [tree appendString:@"\n"];
-    for (UIView *sub in view.subviews) scanView(sub, depth + 1, tree, screen);
-}
-
-static void collectControllers(UIViewController *vc, NSMutableArray *out) {
-    if (!vc || [out containsObject:vc]) return;
-    [out addObject:vc];
-    if (vc.presentedViewController) collectControllers(vc.presentedViewController, out);
-    if ([vc isKindOfClass:[UINavigationController class]]) {
-        for (UIViewController *child in ((UINavigationController *)vc).viewControllers) collectControllers(child, out);
-    }
-    if ([vc isKindOfClass:[UITabBarController class]]) {
-        for (UIViewController *child in ((UITabBarController *)vc).viewControllers) collectControllers(child, out);
-    }
-    for (UIViewController *child in vc.childViewControllers) collectControllers(child, out);
-}
-
-static BOOL relevantController(UIViewController *vc) {
-    NSString *name = NSStringFromClass(vc.class);
-    if ([name hasPrefix:@"IQF"]) return YES;
-    NSString *title = vc.title ?: vc.navigationItem.title;
-    return title && [title rangeOfString:@"iQFace" options:NSCaseInsensitiveSearch].location != NSNotFound;
-}
-
-static void captureSettings(void) {
-    NSMutableArray *controllers = [NSMutableArray array];
-    for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if (w.rootViewController) collectControllers(w.rootViewController, controllers);
-    }
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            for (UIWindow *w in ((UIWindowScene *)scene).windows) if (w.rootViewController) collectControllers(w.rootViewController, controllers);
-        }
-    }
-    for (UIViewController *vc in controllers) {
-        if (!relevantController(vc) || !vc.isViewLoaded || !vc.view.window) continue;
-        NSString *className = NSStringFromClass(vc.class);
-        NSString *title = cleanText(vc.title ?: vc.navigationItem.title ?: @"");
-        NSString *screen = title.length ? [NSString stringWithFormat:@"%@ [%@]", className, title] : className;
-        NSMutableString *tree = [NSMutableString string];
-        scanView(vc.view, 0, tree, screen);
-        NSString *sig = [NSString stringWithFormat:@"%@:%lu", screen, (unsigned long)tree.hash];
-        if ([seenScreens containsObject:sig]) continue;
-        [seenScreens addObject:sig];
-        logLine(@"");
-        logLine(@"=== SETTINGS SNAPSHOT ===");
-        logLine([NSString stringWithFormat:@"Controller: %@", className]);
-        logLine([NSString stringWithFormat:@"Title: %@", title.length ? title : @"(none)"]);
-        logLine(tree);
-        logLine(@"=== END SNAPSHOT ===");
-    }
-}
-
-__attribute__((constructor)) static void IQFProbeInit(void) {
+__attribute__((constructor))
+static void ProbeInit(void) {
     @autoreleasepool {
+        if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.facebook.Facebook"] ||
+            [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
         dispatch_async(dispatch_get_main_queue(), ^{
-            prepareFiles();
-            writeCompatibilityReport();
+            prepare();
             timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-            dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), 2 * NSEC_PER_SEC, NSEC_PER_SEC / 5);
-            dispatch_source_set_event_handler(timer, ^{ captureSettings(); });
+            dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), NSEC_PER_SEC, NSEC_PER_SEC / 5);
+            dispatch_source_set_event_handler(timer, ^{ scan(); });
             dispatch_resume(timer);
         });
     }
