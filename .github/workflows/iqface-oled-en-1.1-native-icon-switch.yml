@@ -104,9 +104,11 @@ jobs:
           strings -a artifacts/iQFaceOLED.dylib | grep -F 'setBool:forKey:'
           strings -a artifacts/iQFaceOLED.dylib | grep -F 'iQFaceOLEDFeedSeparatorsEnabled'
 
-      - name: Upload dylib
+      - name: Upload dylib and generated source
         uses: actions/upload-artifact@v4
         with:
           name: iQFaceOLED-en-0.2.5-iQFace-1.1-arm64
-          path: iqface-oled-en/artifacts/
+          path: |
+            iqface-oled-en/artifacts/
+            iqface-oled-en/Tweak.m
           if-no-files-found: error
