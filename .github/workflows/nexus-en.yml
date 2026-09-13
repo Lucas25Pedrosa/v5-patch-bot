@@ -24,12 +24,28 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare English modules
+      - name: Prepare Enhancer
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/nexus-en-build"
           rm -rf "$WORK"
           mkdir -p "$WORK"
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$WORK/EnhancerTweak.m"
+          python3 nexus-en/prepare_enhancer.py "$WORK/EnhancerTweak.m"
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
+          cp iqface-enhancer-1.1/HideButton11.m "$WORK/HideButton11.m"
+
+      - name: Prepare English modules
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/nexus-en-build"
           python3 nexus-en/prepare_cache.py iqface-cache-en/Tweak.m "$WORK/CacheTweak.m"
           python3 nexus-en/prepare_icons.py iqface-icons-en/Tweak.m "$WORK/IconsTweak.m"
           cp iqface-icons-en/IconPicker.m "$WORK/IconsPicker.m"
