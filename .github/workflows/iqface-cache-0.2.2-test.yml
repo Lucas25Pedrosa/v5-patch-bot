@@ -1,0 +1,111 @@
+name: Build iQFace Cache 0.2.2 Test
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/iqface-cache-0.2.2-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqface-cache
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Prepare 0.2.2 options-format fix
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          p = Path("Tweak.m")
+          s = p.read_text()
+          s = s.replace("// iQFaceCache 0.2.1", "// iQFaceCache 0.2.2-test", 1)
+
+          old = '''    NSArray<NSString *> *options = IQFCCacheUsesPortuguese()
+              ? @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"]
+              : @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];'''
+
+          new = '''    // iQFace 1.1 selectedOptionTitle expects dictionaries with
+              // exact keys: value (NSNumber) and title (NSString).
+              NSArray<NSDictionary<NSString *, id> *> *options = IQFCCacheUsesPortuguese()
+                  ? @[
+                      @{@"value": @0, @"title": @"Desativado"},
+                      @{@"value": @1, @"title": @"Diariamente"},
+                      @{@"value": @2, @"title": @"Semanalmente"},
+                      @{@"value": @3, @"title": @"Mensalmente"}
+                  ]
+                  : @[
+                      @{@"value": @0, @"title": @"Disabled"},
+                      @{@"value": @1, @"title": @"Daily"},
+                      @{@"value": @2, @"title": @"Weekly"},
+                      @{@"value": @3, @"title": @"Monthly"}
+                  ];'''
+
+          if old not in s:
+              raise SystemExit("Expected 0.2.1 options block not found")
+
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+          grep -F "iQFaceCache 0.2.2-test" Tweak.m
+          grep -F '@{"value": @0, @"title": @"Desativado"}' Tweak.m
+          grep -F '@{"value": @3, @"title": @"Mensalmente"}' Tweak.m
+          grep -F 'NSClassFromString(@"IQFTweakSettings")' Tweak.m
+          grep -F "class_getClassMethod" Tweak.m
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build and validate arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQFaceCache.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQFaceCache.dylib
+          shasum -a 256 artifacts/iQFaceCache.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/iQFaceCache.dylib
+          strings -a artifacts/iQFaceCache.dylib > artifacts/strings.txt || true
+
+          grep -Fq "IQFTweakSettings" artifacts/strings.txt
+          grep -Fq "IQFSetting" artifacts/strings.txt
+          grep -Fq "buttonCellWithTitle:subtitle:icon:action:" artifacts/strings.txt
+          grep -Fq "optionsCellWithTitle:subtitle:icon:defaultsKey:defaultValue:options:" artifacts/strings.txt
+          grep -Fq "iQFaceCacheAutoFrequency" artifacts/strings.txt
+          grep -Fq "value" artifacts/strings.txt
+          grep -Fq "title" artifacts/strings.txt
+          grep -Fq "FERRAMENTAS" artifacts/strings.txt
+          grep -Fq "Limpar cache automaticamente" artifacts/strings.txt
+
+          if grep -Fq "viewWillAppear:" artifacts/strings.txt; then
+            echo "Unexpected view lifecycle hook"
+            exit 1
+          fi
+          if grep -Fq "setSections:" artifacts/strings.txt; then
+            echo "Unexpected setSections mutation"
+            exit 1
+          fi
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQFaceCache-0.2.2-test-iQFace-1.1-arm64
+          path: iqface-cache/artifacts/
+          if-no-files-found: error
