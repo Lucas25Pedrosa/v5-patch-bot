@@ -3,56 +3,58 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-extern void IQFIconsPresentIconPickerFromViewController(UIViewController *presenter);
+// iQFaceIcons 1.1.0
+// iQFace 1.1-only settings integration using IQFSetting + IQFTweakSettings.
+// Keeps the existing icon picker unchanged and replaces only the old IQFRow bridge.
 
-static void (*IQFIconsOriginalViewDidAppear)(UIViewController *, SEL, BOOL) = NULL;
+static NSArray *(*IQFIconsOriginalTweakSections)(id, SEL) = NULL;
 static BOOL IQFIconsHookInstalled = NO;
 static NSInteger IQFIconsHookAttempts = 0;
-static const void *IQFIconsRowInstalledKey = &IQFIconsRowInstalledKey;
 
-static BOOL IQFIconsClassImplementsSelector(Class cls, SEL selector) {
-    unsigned int count = 0;
-    Method *methods = class_copyMethodList(cls, &count);
-    BOOL found = NO;
-    for (unsigned int i = 0; i < count; i++) {
-        if (method_getName(methods[i]) == selector) {
-            found = YES;
-            break;
-        }
+static NSString *IQFIconsSettingTitle(id setting) {
+    if (setting == nil) {
+        return nil;
     }
-    free(methods);
-    return found;
+
+    SEL selector = NSSelectorFromString(@"title");
+    if (![setting respondsToSelector:selector]) {
+        return nil;
+    }
+
+    typedef id (*IQFIconsObjectGetter)(id, SEL);
+    IQFIconsObjectGetter getter = (IQFIconsObjectGetter)(void *)objc_msgSend;
+    id value = getter(setting, selector);
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+static BOOL IQFIconsIsOwnTitle(NSString *title) {
+    return [title isEqualToString:@"Alterar ícone"] ||
+           [title isEqualToString:@"Change Icon"];
 }
 
 static BOOL IQFIconsIsToolsHeader(NSString *header) {
     if (![header isKindOfClass:NSString.class]) {
         return NO;
     }
+
     NSString *normalized = header.lowercaseString;
     return [normalized isEqualToString:@"tools"] ||
            [normalized isEqualToString:@"ferramentas"] ||
            [normalized isEqualToString:@"herramientas"];
 }
 
-static BOOL IQFIconsAlreadyContainsRow(NSArray *sections) {
-    for (id section in sections) {
-        NSArray *rows = nil;
-        @try {
-            rows = [section valueForKey:@"rows"];
-        } @catch (__unused NSException *exception) {
-            rows = nil;
-        }
-        if (![rows isKindOfClass:NSArray.class]) {
+static BOOL IQFIconsSectionsAlreadyContainSetting(NSArray *sections) {
+    for (id rawSection in sections) {
+        if (![rawSection isKindOfClass:NSDictionary.class]) {
             continue;
         }
+
+        NSArray *rows = [rawSection[@"rows"] isKindOfClass:NSArray.class]
+            ? rawSection[@"rows"]
+            : @[];
+
         for (id row in rows) {
-            NSString *title = nil;
-            @try {
-                title = [row valueForKey:@"title"];
-            } @catch (__unused NSException *exception) {
-                title = nil;
-            }
-            if ([title isEqualToString:@"Alterar ícone"] || [title isEqualToString:@"Change Icon"]) {
+            if (IQFIconsIsOwnTitle(IQFIconsSettingTitle(row))) {
                 return YES;
             }
         }
@@ -60,107 +62,107 @@ static BOOL IQFIconsAlreadyContainsRow(NSArray *sections) {
     return NO;
 }
 
-static id IQFIconsFindToolsSection(NSArray *sections) {
-    for (id section in sections) {
-        NSString *header = nil;
-        @try {
-            header = [section valueForKey:@"header"];
-        } @catch (__unused NSException *exception) {
-            header = nil;
-        }
-        if (IQFIconsIsToolsHeader(header)) {
-            return section;
-        }
-    }
-    return nil;
-}
+static id IQFIconsCreateNavigationSetting(void) {
+    Class settingClass = NSClassFromString(@"IQFSetting");
+    Class pickerClass = NSClassFromString(@"IQFIconsPickerController");
+    SEL selector = NSSelectorFromString(@"navigationCellWithTitle:subtitle:icon:viewController:");
 
-static id IQFIconsCreateNativeRow(UIViewController *controller) {
-    SEL selector = NSSelectorFromString(@"valueRowWithTitle:icon:detail:tap:");
-    if (controller == nil || ![controller respondsToSelector:selector]) {
+    if (settingClass == Nil || pickerClass == Nil ||
+        ![settingClass respondsToSelector:selector]) {
         return nil;
     }
 
-    __weak UIViewController *weakController = controller;
-    void (^tapBlock)(void) = ^{
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIViewController *presenter = weakController;
-            if (presenter == nil || presenter.presentedViewController != nil) {
-                return;
-            }
-            IQFIconsPresentIconPickerFromViewController(presenter);
-        });
+    UIViewController *picker = [pickerClass new];
+    if (![picker isKindOfClass:UIViewController.class]) {
+        return nil;
+    }
+
+    typedef id (*IQFIconsNavigationFactory)(id, SEL, id, id, id, id);
+    IQFIconsNavigationFactory factory = (IQFIconsNavigationFactory)(void *)objc_msgSend;
+    return factory(settingClass,
+                   selector,
+                   @"Alterar ícone",
+                   nil,
+                   @"app",
+                   picker);
+}
+
+static NSArray *IQFIconsSectionsWithControl(NSArray *sections) {
+    if (![sections isKindOfClass:NSArray.class] || sections.count == 0) {
+        return sections;
+    }
+
+    if (IQFIconsSectionsAlreadyContainSetting(sections)) {
+        return sections;
+    }
+
+    id iconSetting = IQFIconsCreateNavigationSetting();
+    if (iconSetting == nil) {
+        return sections;
+    }
+
+    NSMutableArray *updatedSections = [sections mutableCopy];
+    NSInteger toolsIndex = NSNotFound;
+
+    for (NSUInteger i = 0; i < updatedSections.count; i++) {
+        id rawSection = updatedSections[i];
+        if (![rawSection isKindOfClass:NSDictionary.class]) {
+            continue;
+        }
+
+        NSString *header = [rawSection[@"header"] isKindOfClass:NSString.class]
+            ? rawSection[@"header"]
+            : nil;
+        if (IQFIconsIsToolsHeader(header)) {
+            toolsIndex = (NSInteger)i;
+            break;
+        }
+    }
+
+    if (toolsIndex != NSNotFound) {
+        NSDictionary *existingSection = updatedSections[(NSUInteger)toolsIndex];
+        NSMutableDictionary *updatedSection = [existingSection mutableCopy];
+        NSArray *existingRows = [existingSection[@"rows"] isKindOfClass:NSArray.class]
+            ? existingSection[@"rows"]
+            : @[];
+        NSMutableArray *updatedRows = [existingRows mutableCopy];
+        [updatedRows addObject:iconSetting];
+        updatedSection[@"rows"] = [updatedRows copy];
+        updatedSections[(NSUInteger)toolsIndex] = [updatedSection copy];
+        return [updatedSections copy];
+    }
+
+    NSDictionary *toolsSection = @{
+        @"header": @"FERRAMENTAS",
+        @"rows": @[iconSetting]
     };
 
-    typedef id (*IQFIconsNativeRowBuilder)(id, SEL, id, id, id, id);
-    IQFIconsNativeRowBuilder builder = (IQFIconsNativeRowBuilder)(void *)objc_msgSend;
-    return builder(controller, selector, @"Alterar ícone", @"app", @"", [tapBlock copy]);
-}
-
-static void IQFIconsInstallRow(UIViewController *controller) {
-    if (controller == nil || objc_getAssociatedObject(controller, IQFIconsRowInstalledKey) != nil) {
-        return;
-    }
-
-    NSArray *sections = nil;
-    @try {
-        sections = [controller valueForKey:@"sections"];
-    } @catch (__unused NSException *exception) {
-        sections = nil;
-    }
-
-    if (![sections isKindOfClass:NSArray.class] || sections.count == 0) {
-        return;
-    }
-
-    if (IQFIconsAlreadyContainsRow(sections)) {
-        objc_setAssociatedObject(controller, IQFIconsRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        return;
-    }
-
-    id toolsSection = IQFIconsFindToolsSection(sections);
-    if (toolsSection == nil) {
-        NSLog(@"[iQFaceIcons] seção Ferramentas não encontrada; tela mantida intacta");
-        return;
-    }
-
-    NSArray *rows = nil;
-    @try {
-        rows = [toolsSection valueForKey:@"rows"];
-    } @catch (__unused NSException *exception) {
-        rows = nil;
-    }
-    if (![rows isKindOfClass:NSArray.class]) {
-        return;
-    }
-
-    id nativeRow = IQFIconsCreateNativeRow(controller);
-    Class rowClass = NSClassFromString(@"IQFRow");
-    if (nativeRow == nil || rowClass == Nil || ![nativeRow isKindOfClass:rowClass]) {
-        NSLog(@"[iQFaceIcons] construtor nativo de IQFRow indisponível");
-        return;
-    }
-
-    NSMutableArray *updatedRows = [rows mutableCopy];
-    [updatedRows addObject:nativeRow];
-
-    @try {
-        [toolsSection setValue:[updatedRows copy] forKey:@"rows"];
-        if ([controller isKindOfClass:UITableViewController.class]) {
-            [((UITableViewController *)controller).tableView reloadData];
+    NSUInteger insertionIndex = updatedSections.count;
+    for (NSUInteger i = 0; i < updatedSections.count; i++) {
+        id rawSection = updatedSections[i];
+        if (![rawSection isKindOfClass:NSDictionary.class]) {
+            continue;
         }
-        objc_setAssociatedObject(controller, IQFIconsRowInstalledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        NSLog(@"[iQFaceIcons] linha Alterar ícone adicionada");
-    } @catch (__unused NSException *exception) {
-        NSLog(@"[iQFaceIcons] não foi possível adicionar a linha; tela mantida intacta");
+
+        NSString *header = [rawSection[@"header"] isKindOfClass:NSString.class]
+            ? rawSection[@"header"]
+            : nil;
+        if ([header caseInsensitiveCompare:@"DEV"] == NSOrderedSame ||
+            [header caseInsensitiveCompare:@"ABOUT"] == NSOrderedSame) {
+            insertionIndex = i;
+            break;
+        }
     }
+
+    [updatedSections insertObject:toolsSection atIndex:MIN(insertionIndex, updatedSections.count)];
+    return [updatedSections copy];
 }
 
-static void IQFIconsViewDidAppear(UIViewController *self, SEL command, BOOL animated) {
-    if (IQFIconsOriginalViewDidAppear != NULL) {
-        IQFIconsOriginalViewDidAppear(self, command, animated);
-    }
-    IQFIconsInstallRow(self);
+static NSArray *IQFIconsTweakSections(id self, SEL command) {
+    NSArray *sections = IQFIconsOriginalTweakSections != NULL
+        ? IQFIconsOriginalTweakSections(self, command)
+        : nil;
+    return IQFIconsSectionsWithControl(sections);
 }
 
 static void IQFIconsTryInstallHook(void) {
@@ -169,21 +171,15 @@ static void IQFIconsTryInstallHook(void) {
     }
 
     IQFIconsHookAttempts += 1;
-    Class target = NSClassFromString(@"IQFSettingsViewController");
-    if (target != Nil) {
-        SEL selector = @selector(viewDidAppear:);
-        Method inheritedOrOwn = class_getInstanceMethod(target, selector);
-        if (inheritedOrOwn != NULL) {
-            IQFIconsOriginalViewDidAppear = (void (*)(UIViewController *, SEL, BOOL))method_getImplementation(inheritedOrOwn);
-            const char *types = method_getTypeEncoding(inheritedOrOwn);
 
-            if (IQFIconsClassImplementsSelector(target, selector)) {
-                method_setImplementation(inheritedOrOwn, (IMP)&IQFIconsViewDidAppear);
-                IQFIconsHookInstalled = YES;
-            } else if (class_addMethod(target, selector, (IMP)&IQFIconsViewDidAppear, types)) {
-                IQFIconsHookInstalled = YES;
-            }
-        }
+    Class target = NSClassFromString(@"IQFTweakSettings");
+    SEL selector = NSSelectorFromString(@"sections");
+    Method method = target != Nil ? class_getClassMethod(target, selector) : NULL;
+
+    if (method != NULL) {
+        IQFIconsOriginalTweakSections = (NSArray *(*)(id, SEL))method_getImplementation(method);
+        method_setImplementation(method, (IMP)&IQFIconsTweakSections);
+        IQFIconsHookInstalled = YES;
     }
 
     if (!IQFIconsHookInstalled && IQFIconsHookAttempts < 120) {
