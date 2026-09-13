@@ -49,3 +49,10 @@ jobs:
           python3 nexus-en/prepare_cache.py iqface-cache-en/Tweak.m "$WORK/CacheTweak.m"
           python3 nexus-en/prepare_icons.py iqface-icons-en/Tweak.m "$WORK/IconsTweak.m"
           cp iqface-icons-en/IconPicker.m "$WORK/IconsPicker.m"
+
+      - name: Upload prepared sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-English-prepared-sources
+          path: ${{ runner.temp }}/nexus-en-build/
+          if-no-files-found: error
