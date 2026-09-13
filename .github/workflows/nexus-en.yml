@@ -49,18 +49,7 @@ jobs:
           python3 nexus-en/prepare_cache.py iqface-cache-en/Tweak.m "$WORK/CacheTweak.m"
           python3 nexus-en/prepare_icons.py iqface-icons-en/Tweak.m "$WORK/IconsTweak.m"
           cp iqface-icons-en/IconPicker.m "$WORK/IconsPicker.m"
-
-      - name: Download validated English OLED source
-        uses: actions/download-artifact@v4
-        with:
-          name: iQFaceOLED-en-0.2.5-iQFace-1.1-arm64
-          repository: ${{ github.repository }}
-          run-id: 34735836621
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/nexus-en-oled
-
-      - name: Assemble Nexus English sources
-        run: python3 nexus-en/assemble.py "$RUNNER_TEMP/nexus-en-build" "$RUNNER_TEMP/nexus-en-oled/Tweak.m"
+          python3 nexus-en/prepare_remaining_modules.py "$WORK"
 
       - name: Build Nexus English
         run: |
@@ -82,7 +71,16 @@ jobs:
           grep -F 'Mach-O 64-bit' nexus-en/artifacts/file.txt
           grep -F 'arm64' nexus-en/artifacts/file.txt
           grep -F '@rpath/Nexus.dylib' nexus-en/artifacts/install-name.txt
+          grep -F 'Change Icon' nexus-en/artifacts/strings.txt
+          grep -F 'OLED Mode' nexus-en/artifacts/strings.txt
+          grep -F 'Feed separators' nexus-en/artifacts/strings.txt
+          grep -F 'Clear cache' nexus-en/artifacts/strings.txt
+          grep -F 'Nexus Developer' nexus-en/artifacts/strings.txt
+          grep -F 'IPA Vault' nexus-en/artifacts/strings.txt
+          grep -F 'IPA Source • Exclusive Nexus Distributor' nexus-en/artifacts/strings.txt
+          grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
           if grep -F '1.1-core-ptbr' nexus-en/artifacts/strings.txt; then exit 1; fi
+          if grep -F 'Desenvolvedor do Nexus' nexus-en/artifacts/strings.txt; then exit 1; fi
 
       - name: Upload Nexus English
         uses: actions/upload-artifact@v4
