@@ -22,6 +22,28 @@ if not new_match:
     raise RuntimeError("could not locate iQFace 1.1 translation dictionary")
 new_body = new_match.group(1)
 
+# Nexus PT-BR uses a few compact labels where the literal iQFace 1.1
+# translation is wider than the switch cell. Keep the meaning intact while
+# avoiding truncation in the native settings layout.
+compact_overrides = {
+    '@"Confirm friend requests": @"Confirmar solicitações de amizade"':
+        '@"Confirm friend requests": @"Confirmar pedidos de amizade"',
+    '@"Confirm follow and join": @"Confirmar ações de seguir e entrar"':
+        '@"Confirm follow and join": @"Confirmar seguir e entrar"',
+    '@"Confirm posting a comment": @"Confirmar publicação do comentário"':
+        '@"Confirm posting a comment": @"Confirmar comentário"',
+    '@"Hide Reels screen elements": @"Ocultar elementos da tela de Reels"':
+        '@"Hide Reels screen elements": @"Ocultar elementos dos Reels"',
+    '@"Show Reels screen elements": @"Mostrar elementos da tela de Reels"':
+        '@"Show Reels screen elements": @"Mostrar elementos dos Reels"',
+    '@"Hide \\\"People You May Know\\\"": @"Ocultar \\\"Pessoas que você talvez conheça\\\""':
+        '@"Hide \\\"People You May Know\\\"": @"Ocultar pessoas sugeridas"',
+}
+for old, new_value in compact_overrides.items():
+    if old not in new_body:
+        raise RuntimeError(f"missing source translation for compact override: {old}")
+    new_body = new_body.replace(old, new_value, 1)
+
 legacy_pattern = re.compile(
     r"(static NSDictionary<NSString \*, NSString \*> \*IQFPortugueseUIStrings\(void\) \{.*?translations = @\{)(.*?)(\n        \};)",
     flags=re.S,
@@ -32,8 +54,8 @@ if not legacy_match:
 
 updated = legacy[:legacy_match.start(2)] + new_body + legacy[legacy_match.end(2):]
 
-# Guard a representative set of iQFace 1.1-only strings so we cannot silently
-# fall back to the older 1.0 translation table again.
+# Guard a representative set of iQFace 1.1-only strings and the compact labels
+# so the build cannot silently fall back to the previous wording.
 required = [
     '@"Block in-stream video ads": @"Bloquear anúncios em vídeos"',
     '@"Hide suggested posts": @"Ocultar publicações sugeridas"',
@@ -41,6 +63,11 @@ required = [
     '@"Separate buttons": @"Botões separados"',
     '@"Hide creator information": @"Ocultar informações do criador"',
     '@"Confirm sending a message": @"Confirmar envio de mensagens"',
+    '@"Confirm friend requests": @"Confirmar pedidos de amizade"',
+    '@"Confirm follow and join": @"Confirmar seguir e entrar"',
+    '@"Confirm posting a comment": @"Confirmar comentário"',
+    '@"Hide Reels screen elements": @"Ocultar elementos dos Reels"',
+    '@"Hide \\\"People You May Know\\\"": @"Ocultar pessoas sugeridas"',
 ]
 for marker in required:
     if marker not in updated:
