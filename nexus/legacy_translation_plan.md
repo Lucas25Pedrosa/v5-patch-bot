@@ -1,0 +1,4 @@
+Source: commit 2b764e9afb118063d74260f51d1a65527f2e7845
+File: iqface-enhancer-core-ptbr/Translation.m
+SHA: 30b92cb76a4aa62f138b54bb5511d5d0f1962d48
+Method: MSHookMessageEx on IQFSettingsViewController viewDidLayoutSubviews and viewDidAppear.
