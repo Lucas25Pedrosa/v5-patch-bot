@@ -42,8 +42,14 @@ jobs:
           cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
           cp iqface-enhancer-1.1/HideButton11.m "$WORK/HideButton11.m"
           python3 nexus-en/patch_hidebutton.py "$WORK/HideButton11.m"
+          sed -i '' '/if (IQF11ContainsIQF(control.accessibilityLabel) ||/,/    }/d' "$WORK/HideButton11.m"
+          sed -i '' '/if (IQF11ContainsIQF(item.title) ||/,/    }/d' "$WORK/HideButton11.m"
+          sed -i '' 's/if (IQF11ContainsIQF(action)) return YES;/if ([action isEqualToString:@"iqf_tapped"]) return YES;/' "$WORK/HideButton11.m"
+          sed -i '' 's/if (IQF11ContainsIQF(actionName)) return YES;/if ([actionName isEqualToString:@"iqf_tapped"]) return YES;/' "$WORK/HideButton11.m"
           grep -F 'iqfDismiss' "$WORK/HideButton11.m"
-          grep -F 'IQF11IsProtectedIQFaceAction' "$WORK/HideButton11.m"
+          grep -F 'iqf_tapped' "$WORK/HideButton11.m"
+          ! grep -F 'IQF11ContainsIQF(control.accessibilityLabel)' "$WORK/HideButton11.m"
+          ! grep -F 'IQF11ContainsIQF(item.title)' "$WORK/HideButton11.m"
 
       - name: Prepare English modules
         run: |
@@ -82,6 +88,7 @@ jobs:
           grep -F 'IPA Vault' nexus-en/artifacts/strings.txt
           grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
           grep -F 'iqfDismiss' nexus-en/artifacts/strings.txt
+          grep -F 'iqf_tapped' nexus-en/artifacts/strings.txt
           python3 - <<'PY'
           from pathlib import Path
           data = Path('nexus-en/artifacts/Nexus.dylib').read_bytes()
