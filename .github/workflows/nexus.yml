@@ -28,7 +28,9 @@ jobs:
       - name: Build Nexus
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash nexus/build.sh
+        run: |
+          cp nexus/prepare_makefile_v2.py nexus/prepare_makefile.py
+          bash nexus/build.sh
 
       - name: Upload Nexus
         uses: actions/upload-artifact@v4
