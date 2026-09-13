@@ -12,33 +12,27 @@ needle = '''static void IQFTranslateViewTree(UIView *view) {
 '''
 assert needle in s
 
-helper = r'''static NSSet<NSString *> *IQFPortugueseTranslatedValues(void) {
-    static NSSet<NSString *> *values;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        values = [NSSet setWithArray:IQFPortugueseUIStrings().allValues];
-    });
-    return values;
-}
-
-// iQFace 1.1 lays out some UIListContentView title labels using the width of
-// the original English string. Translation changes intrinsicContentSize but
-// the manually-sized UILabel frame can remain at the old width (for example,
-// "Bloquear anúncios" needs ~141pt while the English-sized frame is ~74pt).
-// Run this after iQFace's own layout and only touch known translated titles.
+helper = r'''// iQFace 1.1 can keep the title UILabel at the width measured for the
+// original English text even after PT-BR localization changes the intrinsic
+// width. Apply the correction to title-sized labels inside UIListContentView
+// regardless of which translation table produced the Portuguese text.
 static void IQFFixTranslatedListLabelWidth(UILabel *label) {
     if (label == nil || label.text.length == 0) return;
-    if (![IQFPortugueseTranslatedValues() containsObject:label.text]) return;
 
     UIView *contentView = label.superview;
     if (contentView == nil || ![NSStringFromClass(contentView.class) isEqualToString:@"UIListContentView"]) return;
 
+    // iQFace setting titles use the 17pt list title style. Keep subtitles and
+    // secondary 15pt content untouched.
+    if (label.font.pointSize < 16.0) return;
+
     CGFloat wanted = ceil(label.intrinsicContentSize.width);
+    CGFloat current = CGRectGetWidth(label.frame);
     CGFloat available = floor(CGRectGetWidth(contentView.bounds) - CGRectGetMinX(label.frame));
-    if (wanted <= 0.0 || available <= 0.0) return;
+    if (wanted <= 0.0 || available <= 0.0 || current + 0.5 >= wanted) return;
 
     CGFloat target = MIN(wanted, available);
-    if (CGRectGetWidth(label.frame) + 0.5 >= target) return;
+    if (current + 0.5 >= target) return;
 
     CGRect frame = label.frame;
     frame.size.width = target;
@@ -63,9 +57,7 @@ new_label = '''    if ([view isKindOfClass:UILabel.class]) {
 assert old_label in s
 s = s.replace(old_label, new_label, 1)
 
-# Keep the historical controller hooks. The width correction runs from the
-# same post-layout translation traversal, so UIKit cannot leave the title at
-# the stale English frame width after viewDidLayoutSubviews.
 assert 'IQFFixTranslatedListLabelWidth(label);' in s
 assert 'UIListContentView' in s
+assert 'label.font.pointSize < 16.0' in s
 p.write_text(s, encoding="utf-8")
