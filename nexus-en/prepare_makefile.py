@@ -14,7 +14,7 @@ s = s.replace("iQFace4in1_CFLAGS", "Nexus_CFLAGS")
 s = s.replace("iQFace4in1_LDFLAGS", "Nexus_LDFLAGS")
 s = s.replace("iQFace4in1_INSTALL_PATH", "Nexus_INSTALL_PATH")
 s = s.replace("@rpath/iQFace4in1.dylib", "@rpath/Nexus.dylib")
-s = s.replace("-Wno-deprecated-declarations", "-Wno-deprecated-declarations -Wno-error=sign-compare", 1)
+s = s.replace("-Wno-deprecated-declarations", "-Wno-deprecated-declarations -Wno-error=sign-compare -Wno-error=unused-function", 1)
 assert "Translation.m" not in s
 assert "LIBRARY_NAME = Nexus" in s
 out.write_text(s, encoding="utf-8")
