@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 WORK="${RUNNER_TEMP:-/tmp}/nexus-build"
 TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+THEOS_DIR="${THEOS:-${RUNNER_TEMP:-/tmp}/theos}"
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
@@ -60,4 +61,36 @@ grep -F 'NexusOLEDCreateModeSetting' "$WORK/OLEDTweak.m"
 grep -F '@"value": @0' "$WORK/CacheTweak.m"
 grep -F 'staticCellWithTitle:subtitle:icon:' "$WORK/OLEDTweak.m"
 
-echo "Nexus source preparation completed"
+# Compile the single Nexus library.
+cd "$WORK"
+make clean all FINALPACKAGE=1 THEOS="$THEOS_DIR"
+
+ARTIFACTS="$ROOT/nexus/artifacts"
+mkdir -p "$ARTIFACTS"
+rm -f "$ARTIFACTS"/*
+DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
+test -n "$DYLIB_PATH"
+cp "$DYLIB_PATH" "$ARTIFACTS/Nexus.dylib"
+shasum -a 256 "$ARTIFACTS/Nexus.dylib" > "$ARTIFACTS/SHA256SUMS.txt"
+file "$ARTIFACTS/Nexus.dylib" > "$ARTIFACTS/file.txt"
+strings -a "$ARTIFACTS/Nexus.dylib" > "$ARTIFACTS/strings.txt" || true
+otool -D "$ARTIFACTS/Nexus.dylib" > "$ARTIFACTS/install-name.txt"
+otool -L "$ARTIFACTS/Nexus.dylib" > "$ARTIFACTS/dependencies.txt"
+
+# Binary validation: Nexus identity and all four PT-BR modules.
+grep -F 'Mach-O 64-bit' "$ARTIFACTS/file.txt"
+grep -F 'arm64' "$ARTIFACTS/file.txt"
+grep -F '@rpath/Nexus.dylib' "$ARTIFACTS/install-name.txt"
+grep -F '1.1-core-ptbr' "$ARTIFACTS/strings.txt"
+grep -F 'RECURSOS' "$ARTIFACTS/strings.txt"
+grep -F 'Alterar ícone' "$ARTIFACTS/strings.txt"
+grep -F 'IQFIconsPickerController' "$ARTIFACTS/strings.txt"
+grep -F 'Modo OLED' "$ARTIFACTS/strings.txt"
+grep -F 'Separadores no feed' "$ARTIFACTS/strings.txt"
+grep -F 'FBLineComponentInternalView' "$ARTIFACTS/strings.txt"
+grep -F 'Limpar cache' "$ARTIFACTS/strings.txt"
+grep -F 'Limpar cache automaticamente' "$ARTIFACTS/strings.txt"
+grep -F 'Diariamente' "$ARTIFACTS/strings.txt"
+grep -F 'com.facebook.Facebook.MosaicIGImageDiskCache' "$ARTIFACTS/strings.txt"
+
+echo "Nexus 1.0 PT-BR build completed"
