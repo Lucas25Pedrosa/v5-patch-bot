@@ -1,0 +1,38 @@
+name: Build Nexus 1.0 PT-BR
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nexus/**"
+      - ".github/workflows/nexus.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Nexus
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash nexus/build.sh
+
+      - name: Upload Nexus
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-1.0-PTBR-iQFace-1.1-arm64
+          path: nexus/artifacts/
+          if-no-files-found: error
