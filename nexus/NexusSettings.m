@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 __attribute__((used, visibility("default"))) NSString * const NexusVersion = @"1.0";
 
@@ -15,22 +16,47 @@ static NSArray *(*NexusOriginalSections)(id, SEL) = NULL;
 static BOOL NexusHookInstalled = NO;
 static NSInteger NexusHookAttempts = 0;
 
-static NSString *NexusTitleForSetting(id setting) {
-    if (setting == nil) return nil;
+static NSString *NexusStringProperty(id object, NSString *key) {
+    if (object == nil || key.length == 0) return nil;
     @try {
-        id title = [setting valueForKey:@"title"];
-        return [title isKindOfClass:NSString.class] ? title : nil;
+        id value = [object valueForKey:key];
+        return [value isKindOfClass:NSString.class] ? value : nil;
     } @catch (__unused NSException *exception) {
         return nil;
     }
 }
 
+static NSString *NexusTitleForSetting(id setting) {
+    return NexusStringProperty(setting, @"title");
+}
+
+static NSString *NexusSubtitleForSetting(id setting) {
+    return NexusStringProperty(setting, @"subtitle");
+}
+
 static BOOL NexusIsToolsHeader(NSString *header) {
     if (![header isKindOfClass:NSString.class]) return NO;
     NSString *normalized = header.lowercaseString;
-    return [normalized isEqualToString:@"ferramentas"] ||
+    return [normalized isEqualToString:@"nexus"] ||
+           [normalized isEqualToString:@"ferramentas"] ||
            [normalized isEqualToString:@"tools"] ||
            [normalized isEqualToString:@"herramientas"];
+}
+
+static BOOL NexusIsDevHeader(NSString *header) {
+    if (![header isKindOfClass:NSString.class]) return NO;
+    NSString *normalized = header.lowercaseString;
+    return [normalized isEqualToString:@"dev"] ||
+           [normalized isEqualToString:@"developer"] ||
+           [normalized isEqualToString:@"desenvolvedor"] ||
+           [normalized isEqualToString:@"desarrollador"];
+}
+
+static BOOL NexusIsAboutHeader(NSString *header) {
+    if (![header isKindOfClass:NSString.class]) return NO;
+    NSString *normalized = header.lowercaseString;
+    return [normalized isEqualToString:@"about"] ||
+           [normalized isEqualToString:@"sobre"];
 }
 
 static BOOL NexusIsOwnedTitle(NSString *title) {
@@ -45,6 +71,52 @@ static BOOL NexusIsOwnedTitle(NSString *title) {
            [title isEqualToString:@"Clear cache"] ||
            [title isEqualToString:@"Limpar cache automaticamente"] ||
            [title isEqualToString:@"Clear cache automatically"];
+}
+
+static id NexusCreateButtonSetting(NSString *title,
+                                   NSString *subtitle,
+                                   NSString *icon,
+                                   void (^action)(void)) {
+    Class settingClass = NSClassFromString(@"IQFSetting");
+    SEL selector = NSSelectorFromString(@"buttonCellWithTitle:subtitle:icon:action:");
+    if (settingClass == Nil || ![settingClass respondsToSelector:selector]) return nil;
+
+    typedef id (*Factory)(id, SEL, id, id, id, id);
+    Factory factory = (Factory)(void *)objc_msgSend;
+    return factory(settingClass, selector, title, subtitle, icon, [action copy]);
+}
+
+static id NexusCreateStaticSetting(NSString *title,
+                                   NSString *subtitle,
+                                   NSString *icon) {
+    Class settingClass = NSClassFromString(@"IQFSetting");
+    SEL selector = NSSelectorFromString(@"staticCellWithTitle:subtitle:icon:");
+    if (settingClass == Nil || ![settingClass respondsToSelector:selector]) return nil;
+
+    typedef id (*Factory)(id, SEL, id, id, id);
+    Factory factory = (Factory)(void *)objc_msgSend;
+    return factory(settingClass, selector, title, subtitle, icon);
+}
+
+static id NexusCreateDeveloperCredit(void) {
+    void (^action)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSURL *url = [NSURL URLWithString:@"https://t.me/lucaspedrosa"];
+            if (url == nil) return;
+            [UIApplication.sharedApplication openURL:url
+                                            options:@{}
+                                  completionHandler:nil];
+        });
+    };
+
+    return NexusCreateButtonSetting(@"Lucas",
+                                    @"Desenvolvedor do Nexus",
+                                    @"paperplane.fill",
+                                    action);
+}
+
+static id NexusCreateAboutVersion(void) {
+    return NexusCreateStaticSetting(@"Nexus v1.0", nil, @"point.3.connected.trianglepath.dotted");
 }
 
 static NSArray *NexusRows(void) {
@@ -65,12 +137,90 @@ static NSArray *NexusRows(void) {
     return [rows copy];
 }
 
-static NSArray *NexusSectionsWithTools(NSArray *sections) {
+static void NexusAddDeveloperCredit(NSMutableArray *sections) {
+    for (NSUInteger i = 0; i < sections.count; i++) {
+        id rawSection = sections[i];
+        if (![rawSection isKindOfClass:NSDictionary.class]) continue;
+
+        NSDictionary *section = (NSDictionary *)rawSection;
+        NSString *header = [section[@"header"] isKindOfClass:NSString.class]
+            ? section[@"header"]
+            : nil;
+        if (!NexusIsDevHeader(header)) continue;
+
+        NSArray *existingRows = [section[@"rows"] isKindOfClass:NSArray.class]
+            ? section[@"rows"]
+            : @[];
+
+        for (id row in existingRows) {
+            if ([NexusTitleForSetting(row) isEqualToString:@"Lucas"] &&
+                [NexusSubtitleForSetting(row) isEqualToString:@"Desenvolvedor do Nexus"]) {
+                return;
+            }
+        }
+
+        id credit = NexusCreateDeveloperCredit();
+        if (credit == nil) return;
+
+        NSMutableArray *rows = [existingRows mutableCopy];
+        [rows addObject:credit];
+
+        NSMutableDictionary *updatedSection = [section mutableCopy];
+        updatedSection[@"rows"] = [rows copy];
+        sections[i] = [updatedSection copy];
+        return;
+    }
+}
+
+static void NexusAddAboutVersion(NSMutableArray *sections) {
+    for (NSUInteger i = 0; i < sections.count; i++) {
+        id rawSection = sections[i];
+        if (![rawSection isKindOfClass:NSDictionary.class]) continue;
+
+        NSDictionary *section = (NSDictionary *)rawSection;
+        NSString *header = [section[@"header"] isKindOfClass:NSString.class]
+            ? section[@"header"]
+            : nil;
+        if (!NexusIsAboutHeader(header)) continue;
+
+        NSArray *existingRows = [section[@"rows"] isKindOfClass:NSArray.class]
+            ? section[@"rows"]
+            : @[];
+
+        for (id row in existingRows) {
+            if ([NexusTitleForSetting(row) isEqualToString:@"Nexus v1.0"]) {
+                return;
+            }
+        }
+
+        id version = NexusCreateAboutVersion();
+        if (version == nil) return;
+
+        NSMutableArray *rows = [existingRows mutableCopy];
+        NSUInteger insertionIndex = rows.count;
+
+        for (NSUInteger rowIndex = 0; rowIndex < rows.count; rowIndex++) {
+            NSString *title = NexusTitleForSetting(rows[rowIndex]);
+            NSString *normalized = title.lowercaseString;
+            if ([normalized hasPrefix:@"iqface v1.1"]) {
+                insertionIndex = rowIndex + 1;
+                break;
+            }
+        }
+
+        [rows insertObject:version atIndex:MIN(insertionIndex, rows.count)];
+
+        NSMutableDictionary *updatedSection = [section mutableCopy];
+        updatedSection[@"rows"] = [rows copy];
+        sections[i] = [updatedSection copy];
+        return;
+    }
+}
+
+static NSArray *NexusSectionsWithAdditions(NSArray *sections) {
     if (![sections isKindOfClass:NSArray.class]) return sections;
 
     NSArray *ownedRows = NexusRows();
-    if (ownedRows.count == 0) return sections;
-
     NSMutableArray *updatedSections = [sections mutableCopy];
     NSInteger toolsIndex = NSNotFound;
 
@@ -86,47 +236,50 @@ static NSArray *NexusSectionsWithTools(NSArray *sections) {
         }
     }
 
-    if (toolsIndex != NSNotFound) {
-        NSDictionary *section = updatedSections[(NSUInteger)toolsIndex];
-        NSArray *existingRows = [section[@"rows"] isKindOfClass:NSArray.class]
-            ? section[@"rows"]
-            : @[];
-        NSMutableArray *rows = [NSMutableArray arrayWithArray:ownedRows];
+    if (ownedRows.count > 0) {
+        if (toolsIndex != NSNotFound) {
+            NSDictionary *section = updatedSections[(NSUInteger)toolsIndex];
+            NSArray *existingRows = [section[@"rows"] isKindOfClass:NSArray.class]
+                ? section[@"rows"]
+                : @[];
+            NSMutableArray *rows = [NSMutableArray arrayWithArray:ownedRows];
 
-        for (id row in existingRows) {
-            if (!NexusIsOwnedTitle(NexusTitleForSetting(row))) {
-                [rows addObject:row];
+            for (id row in existingRows) {
+                if (!NexusIsOwnedTitle(NexusTitleForSetting(row))) {
+                    [rows addObject:row];
+                }
             }
-        }
 
-        NSMutableDictionary *updatedSection = [section mutableCopy];
-        updatedSection[@"header"] = @"FERRAMENTAS";
-        updatedSection[@"rows"] = [rows copy];
-        updatedSections[(NSUInteger)toolsIndex] = [updatedSection copy];
-        return [updatedSections copy];
+            NSMutableDictionary *updatedSection = [section mutableCopy];
+            updatedSection[@"header"] = @"NEXUS";
+            updatedSection[@"rows"] = [rows copy];
+            updatedSections[(NSUInteger)toolsIndex] = [updatedSection copy];
+        } else {
+            NSDictionary *nexusSection = @{
+                @"header": @"NEXUS",
+                @"rows": ownedRows
+            };
+
+            NSUInteger insertionIndex = updatedSections.count;
+            for (NSUInteger i = 0; i < updatedSections.count; i++) {
+                id rawSection = updatedSections[i];
+                if (![rawSection isKindOfClass:NSDictionary.class]) continue;
+                NSString *header = [rawSection[@"header"] isKindOfClass:NSString.class]
+                    ? rawSection[@"header"]
+                    : nil;
+                if (NexusIsDevHeader(header) || NexusIsAboutHeader(header)) {
+                    insertionIndex = i;
+                    break;
+                }
+            }
+
+            [updatedSections insertObject:nexusSection
+                                  atIndex:MIN(insertionIndex, updatedSections.count)];
+        }
     }
 
-    NSDictionary *toolsSection = @{
-        @"header": @"FERRAMENTAS",
-        @"rows": ownedRows
-    };
-
-    NSUInteger insertionIndex = updatedSections.count;
-    for (NSUInteger i = 0; i < updatedSections.count; i++) {
-        id rawSection = updatedSections[i];
-        if (![rawSection isKindOfClass:NSDictionary.class]) continue;
-        NSString *header = [rawSection[@"header"] isKindOfClass:NSString.class]
-            ? rawSection[@"header"]
-            : nil;
-        if ([header caseInsensitiveCompare:@"DEV"] == NSOrderedSame ||
-            [header caseInsensitiveCompare:@"ABOUT"] == NSOrderedSame ||
-            [header caseInsensitiveCompare:@"SOBRE"] == NSOrderedSame) {
-            insertionIndex = i;
-            break;
-        }
-    }
-
-    [updatedSections insertObject:toolsSection atIndex:MIN(insertionIndex, updatedSections.count)];
+    NexusAddDeveloperCredit(updatedSections);
+    NexusAddAboutVersion(updatedSections);
     return [updatedSections copy];
 }
 
@@ -134,7 +287,7 @@ static NSArray *NexusTweakSections(id self, SEL command) {
     NSArray *sections = NexusOriginalSections != NULL
         ? NexusOriginalSections(self, command)
         : nil;
-    return NexusSectionsWithTools(sections);
+    return NexusSectionsWithAdditions(sections);
 }
 
 static void NexusTryInstallHook(void) {
