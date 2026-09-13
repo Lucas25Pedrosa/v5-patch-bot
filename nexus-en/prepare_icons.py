@@ -9,5 +9,5 @@ old = '''        dispatch_async(dispatch_get_main_queue(), ^{
         });'''
 assert old in s
 s = s.replace(old, '        // Nexus owns settings integration.', 1)
-s += '\n\nid NexusIconsCreateSetting(void) { return IQFIconsCreateNavigationSetting(); }\nid NexusIconsCreateIPAVaultSetting(void) { return IQFIconsCreateLinkButton(@"IPA Vault", @"IPA Source • Exclusive Nexus Distributor", @"shippingbox.circle", @"https://t.me/ipavault"); }\n'
+s += '\n\nid NexusIconsCreateSetting(void) { return IQFIconsCreateNavigationSetting(); }\nid NexusIconsCreateIPAVaultSetting(void) { return IQFIconsCreateLinkButton(@"IPA Vault", @"IPA Source • Nexus Distributor", @"shippingbox.circle", @"https://t.me/ipavault"); }\n'
 out.write_text(s, encoding="utf-8")
