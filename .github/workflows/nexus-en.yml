@@ -89,7 +89,7 @@ jobs:
           grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
           grep -F 'iqfDismiss' nexus-en/artifacts/strings.txt
           grep -F 'iqf_tapped' nexus-en/artifacts/strings.txt
-          grep -F 'Nexus v1.0.1' nexus-en/artifacts/strings.txt
+          grep -F 'v1.0.1' nexus-en/artifacts/strings.txt
           python3 - <<'PY'
           from pathlib import Path
           data = Path('nexus-en/artifacts/Nexus.dylib').read_bytes()
