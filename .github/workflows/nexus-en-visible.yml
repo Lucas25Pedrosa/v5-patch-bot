@@ -1,0 +1,93 @@
+name: Build Nexus 1.0.2 English - iQFace Icon Visible
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nexus-en-visible/**"
+      - ".github/workflows/nexus-en-visible.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Prepare sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/nexus-en-visible-build"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$WORK/EnhancerTweak.m"
+          python3 nexus-en-visible/prepare_enhancer.py "$WORK/EnhancerTweak.m"
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
+          python3 nexus-en/prepare_cache.py iqface-cache-en/Tweak.m "$WORK/CacheTweak.m"
+          python3 nexus-en/prepare_icons.py iqface-icons-en/Tweak.m "$WORK/IconsTweak.m"
+          cp iqface-icons-en/IconPicker.m "$WORK/IconsPicker.m"
+          python3 nexus-en/prepare_oled_module.py "$WORK"
+          cp nexus/NexusSettings.m "$WORK/NexusSettings.m"
+          python3 nexus/patch_presentation_v2.py "$WORK/NexusSettings.m"
+          python3 nexus-en/patch_settings.py "$WORK/NexusSettings.m"
+          python3 nexus-en-visible/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
+          ! grep -F 'HideButton11.m' "$WORK/Makefile"
+          ! grep -F 'Translation.m' "$WORK/Makefile"
+          ! grep -F 'IQFInstallNavigationItemHooks();' "$WORK/EnhancerTweak.m"
+          ! grep -F 'IQFInstallTabBarHooks();' "$WORK/EnhancerTweak.m"
+          grep -F 'NexusAvatarFix.m' "$WORK/Makefile"
+
+      - name: Build Nexus English Visible Icon
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/nexus-en-visible-build"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p "$GITHUB_WORKSPACE/nexus-en-visible/artifacts"
+          rm -f "$GITHUB_WORKSPACE/nexus-en-visible/artifacts"/*
+          DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
+          test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" "$GITHUB_WORKSPACE/nexus-en-visible/artifacts/Nexus.dylib"
+          cd "$GITHUB_WORKSPACE"
+          shasum -a 256 nexus-en-visible/artifacts/Nexus.dylib > nexus-en-visible/artifacts/SHA256SUMS.txt
+          file nexus-en-visible/artifacts/Nexus.dylib > nexus-en-visible/artifacts/file.txt
+          strings -a nexus-en-visible/artifacts/Nexus.dylib > nexus-en-visible/artifacts/strings.txt || true
+          otool -D nexus-en-visible/artifacts/Nexus.dylib > nexus-en-visible/artifacts/install-name.txt
+          grep -F 'Mach-O 64-bit' nexus-en-visible/artifacts/file.txt
+          grep -F 'arm64' nexus-en-visible/artifacts/file.txt
+          grep -F '@rpath/Nexus.dylib' nexus-en-visible/artifacts/install-name.txt
+          grep -F 'Change Icon' nexus-en-visible/artifacts/strings.txt
+          grep -F 'OLED Mode' nexus-en-visible/artifacts/strings.txt
+          grep -F 'Feed separators' nexus-en-visible/artifacts/strings.txt
+          grep -F 'Clear cache' nexus-en-visible/artifacts/strings.txt
+          grep -F 'Nexus Developer' nexus-en-visible/artifacts/strings.txt
+          grep -F 'IPA Vault' nexus-en-visible/artifacts/strings.txt
+          grep -F 'v1.0.2' nexus-en-visible/artifacts/strings.txt
+          grep -F 'nexus_avatar_addSubview:' nexus-en-visible/artifacts/strings.txt
+          grep -F 'nexus_avatar_setImage:' nexus-en-visible/artifacts/strings.txt
+          if grep -F '1.1-core-ptbr' nexus-en-visible/artifacts/strings.txt; then exit 1; fi
+          if grep -F 'Desenvolvedor do Nexus' nexus-en-visible/artifacts/strings.txt; then exit 1; fi
+
+      - name: Upload Nexus English Visible Icon
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-1.0.2-English-iQFaceIcon-Visible-arm64
+          path: nexus-en-visible/artifacts/
+          if-no-files-found: error
