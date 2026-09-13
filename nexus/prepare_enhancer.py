@@ -19,6 +19,17 @@ replacement = '''static void IQFAttachLongPress(UIView *view) {
 s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
 assert n == 1
 
+# Nexus PT-BR is a dedicated Portuguese build. Force the Enhancer's native
+# IQFLoc hook to return Portuguese before controls are created so Auto Layout
+# measures the final strings on the first frame instead of translating labels
+# after layout.
+portuguese_pattern = r"static BOOL IQFShouldUsePortuguese\(void\) \{.*?\n\}"
+portuguese_replacement = '''static BOOL IQFShouldUsePortuguese(void) {
+    return YES;
+}'''
+s, n = re.subn(portuguese_pattern, portuguese_replacement, s, count=1, flags=re.S)
+assert n == 1
+
 # Nexus PT-BR: block the original iQFace settings launcher before its first
 # rendered frame. The navigation/addSubview hook uses the Enhancer's exact
 # matcher (UIButton + accessibilityLabel "iQFace" + action "iqf_tapped").
@@ -31,10 +42,28 @@ new_hooks = '''        IQFInstallNavigationItemHooks();'''
 assert old_hooks in s
 s = s.replace(old_hooks, new_hooks, 1)
 
+# Safe mode previously prevented the native localization hook from ever being
+# installed. Install IQFLoc unconditionally in PT-BR; the post-layout
+# Translation.m hooks remain only as fallback for strings not routed by IQFLoc.
+old_install = '''        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!IQFSafeModeEnabled()) {
+                IQFTryInstallIQFaceHooks();
+                IQFCleanVisibleSettingsItems();
+            }
+        });'''
+new_install = '''        dispatch_async(dispatch_get_main_queue(), ^{
+            IQFTryInstallIQFaceHooks();
+            IQFCleanVisibleSettingsItems();
+        });'''
+assert old_install in s
+s = s.replace(old_install, new_install, 1)
+
 assert 'IQFFindSymbol("IQFPresentSettings")' in s
 assert 'IQFPresentLauncherMenu' not in s
 assert 'IQFInstallNavigationItemHooks();' in s
 assert 'IQFInstallTabBarHooks();' not in s
+assert 'static BOOL IQFShouldUsePortuguese(void) {\n    return YES;\n}' in s
+assert 'IQFTryInstallIQFaceHooks();' in s
 tweak.write_text(s, encoding="utf-8")
 
 s = translation.read_text(encoding="utf-8")
