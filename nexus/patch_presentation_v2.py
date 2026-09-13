@@ -59,8 +59,29 @@ if old_order not in s:
     raise SystemExit("about ordering marker not found")
 s = s.replace(old_order, new_order, 1)
 
+old_dev = '''        NSMutableArray *rows = [existingRows mutableCopy];
+        [rows addObject:credit];
+
+        NSMutableDictionary *updatedSection = [section mutableCopy];'''
+new_dev = '''        NSMutableArray *rows = [existingRows mutableCopy];
+        NSUInteger insertionIndex = rows.count;
+        for (NSUInteger rowIndex = 0; rowIndex < rows.count; rowIndex++) {
+            NSString *title = NexusTitleForSetting(rows[rowIndex]);
+            if ([title isEqualToString:@"iQTweak"]) {
+                insertionIndex = rowIndex;
+                break;
+            }
+        }
+        [rows insertObject:credit atIndex:MIN(insertionIndex, rows.count)];
+
+        NSMutableDictionary *updatedSection = [section mutableCopy];'''
+if old_dev not in s:
+    raise SystemExit("developer ordering marker not found")
+s = s.replace(old_dev, new_dev, 1)
+
 assert '@"hammer.fill"' in s
 assert 'setValue:@"v1.0" forKey:@"valueText"' in s
 assert '[normalized isEqualToString:@"iqface"]' in s
+assert '[title isEqualToString:@"iQTweak"]' in s
 p.write_text(s, encoding="utf-8")
 print("Applied Nexus presentation v2 fixes")
