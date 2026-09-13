@@ -29,7 +29,7 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare FBOLED 0.2.3 test
+      - name: Prepare FBOLED 0.2.4 test
         run: |
           set -euo pipefail
           python3 prepare_023.py
@@ -37,9 +37,13 @@ jobs:
       - name: Validate targeted avatar fixes
         run: |
           set -euo pipefail
-          grep -F 'FBOLED 0.2.3 TEST' FBOLED.m
+          grep -F 'FBOLED 0.2.4 TEST' FBOLED.m
           grep -F 'FBOLEDIsUnmaskedAvatarVariant' FBOLED.m
           grep -F 'FBOLEDIsCompositeCommunityAvatarVariant' FBOLED.m
+          grep -F 'FBOLEDApplyImmediateCompositeAvatarClip' FBOLED.m
+          grep -F 'FBOLEDInstallImmediateAvatarHooks' FBOLED.m
+          grep -F 'fboled_avatar_addSubview:' FBOLED.m
+          grep -F 'fboled_avatar_setImage:' FBOLED.m
           grep -F 'FDSTouchStateComponentView' FBOLED.m
           grep -F '_FBMaskedRoundedCornerView' FBOLED.m
           grep -F 'MRCImageComponentView' FBOLED.m
@@ -67,12 +71,14 @@ jobs:
           grep -F 'MRCImageComponentView' artifacts/strings.txt
           grep -F 'MRCAnimatedImageView' artifacts/strings.txt
           grep -F 'FDSTouchStateComponentView' artifacts/strings.txt
+          grep -F 'fboled_avatar_addSubview:' artifacts/strings.txt
+          grep -F 'fboled_avatar_setImage:' artifacts/strings.txt
           shasum -a 256 artifacts/FBOLED.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload FBOLED dylib
         uses: actions/upload-artifact@v4
         with:
-          name: FBOLED-0.2.3-community-avatar-test-arm64
+          name: FBOLED-0.2.4-community-avatar-noflash-test-arm64
           path: fboled/artifacts/
           if-no-files-found: error
           retention-days: 90
