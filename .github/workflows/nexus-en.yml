@@ -1,10 +1,12 @@
-name: Build Nexus 1.0.1 English
+name: Build Nexus 1.0.2 English
 
 "on":
   workflow_dispatch:
   push:
     paths:
       - "nexus-en/**"
+      - "nexus/NexusAvatarFix.m"
+      - "nexus/patch_presentation_v2.py"
       - ".github/workflows/nexus-en.yml"
 
 permissions:
@@ -59,6 +61,10 @@ jobs:
           python3 nexus-en/prepare_icons.py iqface-icons-en/Tweak.m "$WORK/IconsTweak.m"
           cp iqface-icons-en/IconPicker.m "$WORK/IconsPicker.m"
           python3 nexus-en/prepare_remaining_modules.py "$WORK"
+          grep -F 'NexusAvatarFix.m' "$WORK/Makefile"
+          grep -F 'nexus_avatar_addSubview:' "$WORK/NexusAvatarFix.m"
+          grep -F 'nexus_avatar_setImage:' "$WORK/NexusAvatarFix.m"
+          grep -F 'FDSTouchStateComponentView' "$WORK/NexusAvatarFix.m"
 
       - name: Build Nexus English
         run: |
@@ -89,7 +95,10 @@ jobs:
           grep -F 'https://t.me/ipavault' nexus-en/artifacts/strings.txt
           grep -F 'iqfDismiss' nexus-en/artifacts/strings.txt
           grep -F 'iqf_tapped' nexus-en/artifacts/strings.txt
-          grep -F 'v1.0.1' nexus-en/artifacts/strings.txt
+          grep -F 'v1.0.2' nexus-en/artifacts/strings.txt
+          grep -F 'nexus_avatar_addSubview:' nexus-en/artifacts/strings.txt
+          grep -F 'nexus_avatar_setImage:' nexus-en/artifacts/strings.txt
+          grep -F 'FDSTouchStateComponentView' nexus-en/artifacts/strings.txt
           python3 - <<'PY'
           from pathlib import Path
           data = Path('nexus-en/artifacts/Nexus.dylib').read_bytes()
@@ -105,6 +114,6 @@ jobs:
       - name: Upload Nexus English
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-1.0.1-English-iQFace-1.1-arm64
+          name: Nexus-1.0.2-English-iQFace-1.1-arm64
           path: nexus-en/artifacts/
           if-no-files-found: error
