@@ -1,0 +1,19 @@
+name: Build Nexus 1.0 English
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nexus-en/**"
+      - ".github/workflows/nexus-en.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
