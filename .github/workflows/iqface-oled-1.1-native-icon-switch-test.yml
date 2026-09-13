@@ -1,5 +1,6 @@
 name: Build iQFace OLED 0.2.5 native icon switches
 
+# Trigger build for the 0.2.5 native icon-row test.
 "on":
   workflow_dispatch:
   push:
