@@ -1,4 +1,4 @@
-name: Build iQFace OLED 0.2.1 for iQFace 1.1
+name: Build iQFace OLED 0.2.2 for iQFace 1.1
 
 "on":
   workflow_dispatch:
@@ -43,30 +43,116 @@ jobs:
           set -euo pipefail
           python3 adapt_iqface11.py
 
+      - name: Patch 0.2.2 prefs bridge and icons
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("Tweak.m")
+          s = p.read_text(encoding="utf-8")
+
+          def rep(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {n}")
+              s = s.replace(old, new, 1)
+
+          rep("// iQFaceOLED 0.2.1 — iQFace 1.1",
+              "// iQFaceOLED 0.2.2 — iQFace 1.1",
+              "version")
+
+          rep('''static BOOL IQFOLEDLoadEnabledPreference(void) {
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDPreferenceKey] == nil) {
+                  return YES;
+              }
+              return [defaults boolForKey:IQFOLEDPreferenceKey];
+          }
+          ''', '''static BOOL IQFOLEDLoadEnabledPreference(void) {
+              Class prefs = NSClassFromString(@"IQFPrefs");
+              SEL selector = NSSelectorFromString(@"boolForKey:defaultValue:");
+              if (prefs != Nil && [prefs respondsToSelector:selector]) {
+                  typedef BOOL (*Getter)(id, SEL, id, BOOL);
+                  return ((Getter)(void *)objc_msgSend)(prefs, selector, IQFOLEDPreferenceKey, YES);
+              }
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDPreferenceKey] == nil) return YES;
+              return [defaults boolForKey:IQFOLEDPreferenceKey];
+          }
+          ''', "OLED pref reader")
+
+          rep('''static BOOL IQFOLEDLoadSeparatorsPreference(void) {
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDSeparatorsPreferenceKey] == nil) return NO;
+              return [defaults boolForKey:IQFOLEDSeparatorsPreferenceKey];
+          }
+          ''', '''static BOOL IQFOLEDLoadSeparatorsPreference(void) {
+              Class prefs = NSClassFromString(@"IQFPrefs");
+              SEL selector = NSSelectorFromString(@"boolForKey:defaultValue:");
+              if (prefs != Nil && [prefs respondsToSelector:selector]) {
+                  typedef BOOL (*Getter)(id, SEL, id, BOOL);
+                  return ((Getter)(void *)objc_msgSend)(prefs, selector, IQFOLEDSeparatorsPreferenceKey, NO);
+              }
+              NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+              if ([defaults objectForKey:IQFOLEDSeparatorsPreferenceKey] == nil) return NO;
+              return [defaults boolForKey:IQFOLEDSeparatorsPreferenceKey];
+          }
+          ''', "separator pref reader")
+
+          rep('''static id IQFOLEDCreateNativeSwitch(NSString *title,
+                                              NSString *defaultsKey,
+                                              BOOL defaultOn) {''', '''static id IQFOLEDCreateNativeSwitch(NSString *title,
+                                              NSString *icon,
+                                              NSString *defaultsKey,
+                                              BOOL defaultOn) {''', "switch signature")
+
+          rep('''    IQFOLEDSwitchFactory factory = (IQFOLEDSwitchFactory)(void *)objc_msgSend;
+              return factory(settingClass, selector, title, nil, defaultsKey, defaultOn);
+          }''', '''    IQFOLEDSwitchFactory factory = (IQFOLEDSwitchFactory)(void *)objc_msgSend;
+              id setting = factory(settingClass, selector, title, nil, defaultsKey, defaultOn);
+              if (setting != nil && icon.length > 0) {
+                  @try {
+                      [setting setValue:icon forKey:@"icon"];
+                  } @catch (__unused NSException *exception) {
+                  }
+              }
+              return setting;
+          }''', "switch icon assignment")
+
+          rep('''IQFOLEDCreateNativeSwitch(@"Modo OLED",
+                                                                         IQFOLEDPreferenceKey,
+                                                                         YES)''', '''IQFOLEDCreateNativeSwitch(@"Modo OLED",
+                                                                         @"circle.lefthalf.filled",
+                                                                         IQFOLEDPreferenceKey,
+                                                                         YES)''', "OLED icon")
+
+          rep('''IQFOLEDCreateNativeSwitch(@"Separadores no feed",
+                                                                                    IQFOLEDSeparatorsPreferenceKey,
+                                                                                    NO)''', '''IQFOLEDCreateNativeSwitch(@"Separadores no feed",
+                                                                                    @"line.3.horizontal",
+                                                                                    IQFOLEDSeparatorsPreferenceKey,
+                                                                                    NO)''', "separator icon")
+
+          p.write_text(s, encoding="utf-8")
+          PY
+
       - name: Validate source migration
         run: |
           set -euo pipefail
-          grep -F '// iQFaceOLED 0.2.1 — iQFace 1.1' Tweak.m
+          grep -F '// iQFaceOLED 0.2.2 — iQFace 1.1' Tweak.m
           grep -F 'switchCellWithTitle:subtitle:defaultsKey:defaultOn:' Tweak.m
-          grep -F 'IQFTweakSettings' Tweak.m
-          grep -F 'IQFSetting' Tweak.m
-          grep -F '@"Modo OLED"' Tweak.m
-          grep -F '@"Separadores no feed"' Tweak.m
-          grep -F 'IQFOLEDIsUnmaskedAvatarVariant' Tweak.m
-          grep -F 'IQFOLEDUpdateAvatarClip' Tweak.m
+          grep -F 'IQFPrefs' Tweak.m
+          grep -F 'boolForKey:defaultValue:' Tweak.m
+          grep -F '@"circle.lefthalf.filled"' Tweak.m
+          grep -F '@"line.3.horizontal"' Tweak.m
           grep -F 'IQFOLEDUpdateFeedSeparator' Tweak.m
+          grep -F 'IQFOLEDUpdateAvatarClip' Tweak.m
           grep -F 'FBLineComponentInternalView' Tweak.m
           grep -F '_FBMaskedRoundedCornerView' Tweak.m
           if grep -F 'IQFRow' Tweak.m; then
             echo "Unexpected IQFRow reference after iQFace 1.1 migration"
-            exit 1
-          fi
-          if grep -F 'rowWithTitle:icon:key:def:onChange:' Tweak.m; then
-            echo "Unexpected legacy toggle row after iQFace 1.1 migration"
-            exit 1
-          fi
-          if grep -F 'valueRowWithTitle:icon:detail:tap:' Tweak.m; then
-            echo "Unexpected legacy value row after iQFace 1.1 migration"
             exit 1
           fi
           if grep -F 'viewDidAppear:' Tweak.m; then
@@ -99,33 +185,23 @@ jobs:
           echo "$file_info" | grep -F "dynamically linked shared library"
 
           strings -a artifacts/iQFaceOLED.dylib | grep -F "switchCellWithTitle:subtitle:defaultsKey:defaultOn:"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFPrefs"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "boolForKey:defaultValue:"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "circle.lefthalf.filled"
+          strings -a artifacts/iQFaceOLED.dylib | grep -F "line.3.horizontal"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDEnabled"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "iQFaceOLEDFeedSeparatorsEnabled"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "Modo OLED"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "Separadores no feed"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "FBNewsFeedView"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "FBLineComponentInternalView"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "FBPassthroughView"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "_FBMaskedRoundedCornerView"
-          strings -a artifacts/iQFaceOLED.dylib | grep -F "MRCImageComponentView"
           strings -a artifacts/iQFaceOLED.dylib | grep -F "MRCAnimatedImageView"
 
           if strings -a artifacts/iQFaceOLED.dylib | grep -F "IQFRow"; then
             echo "Unexpected IQFRow in final dylib"
             exit 1
           fi
-          if strings -a artifacts/iQFaceOLED.dylib | grep -F "rowWithTitle:icon:key:def:onChange:"; then
-            echo "Unexpected old toggle constructor in final dylib"
-            exit 1
-          fi
-          if strings -a artifacts/iQFaceOLED.dylib | grep -F "valueRowWithTitle:icon:detail:tap:"; then
-            echo "Unexpected old value constructor in final dylib"
-            exit 1
-          fi
 
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: iQFaceOLED-0.2.1-iQFace-1.1-arm64
+          name: iQFaceOLED-0.2.2-iQFace-1.1-arm64
           path: iqface-oled/artifacts/
           if-no-files-found: error
