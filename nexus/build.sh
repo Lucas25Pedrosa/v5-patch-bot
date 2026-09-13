@@ -31,6 +31,7 @@ curl -fsSL \
 python3 "$ROOT/nexus/prepare_enhancer.py" "$WORK/EnhancerTweak.m" "$WORK/Translation.m"
 cp "$ROOT/iqface-enhancer-wordmark-beta/WordmarkActivation.m" "$WORK/WordmarkActivation.m"
 cp "$ROOT/iqface-enhancer-1.1/HideButton11.m" "$WORK/HideButton11.m"
+python3 "$ROOT/nexus-en/patch_hidebutton.py" "$WORK/HideButton11.m"
 
 # Cache 0.2.2 + Icons 1.1.0.
 python3 "$ROOT/nexus/prepare_cache.py" "$ROOT/iqface-cache/Tweak.m" "$WORK/CacheTweak.m"
@@ -60,6 +61,8 @@ grep -F 'NexusIconsCreateSetting' "$WORK/IconsTweak.m"
 grep -F 'NexusOLEDCreateModeSetting' "$WORK/OLEDTweak.m"
 grep -F '@"value": @0' "$WORK/CacheTweak.m"
 grep -F 'staticCellWithTitle:subtitle:icon:' "$WORK/OLEDTweak.m"
+grep -F '@"iqfDismiss"' "$WORK/HideButton11.m"
+grep -F 'IQF11IsProtectedIQFaceAction' "$WORK/HideButton11.m"
 
 # Compile the single Nexus library.
 cd "$WORK"
@@ -92,5 +95,6 @@ grep -F 'Limpar cache' "$ARTIFACTS/strings.txt"
 grep -F 'Limpar cache automaticamente' "$ARTIFACTS/strings.txt"
 grep -F 'Diariamente' "$ARTIFACTS/strings.txt"
 grep -F 'com.facebook.Facebook.MosaicIGImageDiskCache' "$ARTIFACTS/strings.txt"
+grep -F 'iqfDismiss' "$ARTIFACTS/strings.txt"
 
 echo "Nexus 1.0 PT-BR build completed"
