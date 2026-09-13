@@ -39,6 +39,7 @@ assert n == 1
 scanner_pattern = r"static void IQFStartSafeScanner\(void\) \{.*?\n\}"
 scanner_replacement = '''static void IQFStartSafeScanner(void) {
     // Intentionally disabled in Nexus English visible-icon variant.
+    (void)IQFSafeScannerStarted;
 }'''
 s, n = re.subn(scanner_pattern, scanner_replacement, s, count=1, flags=re.S)
 assert n == 1
