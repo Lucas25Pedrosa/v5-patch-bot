@@ -1,84 +1,69 @@
 from pathlib import Path
 import sys
 
-p = Path(sys.argv[1])
-s = p.read_text(encoding="utf-8")
+translation = Path(sys.argv[1])
+tweak = translation.with_name("EnhancerTweak.m")
 
-marker = '''static void IQFTranslateViewTree(UIView *view) {'''
-helper = r'''static UISwitch *IQFFindNearestSwitchForLabel(UILabel *label) {
-    if (label == nil) return nil;
-    UIView *ancestor = label.superview;
-    for (NSUInteger depth = 0; depth < 4 && ancestor != nil; depth++, ancestor = ancestor.superview) {
-        NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:ancestor];
-        while (stack.count > 0) {
-            UIView *candidate = stack.lastObject;
-            [stack removeLastObject];
-            if ([candidate isKindOfClass:UISwitch.class]) {
-                UISwitch *toggle = (UISwitch *)candidate;
-                CGRect toggleRect = [toggle.superview convertRect:toggle.frame toView:label.superview];
-                CGFloat deltaY = fabs(CGRectGetMidY(toggleRect) - CGRectGetMidY(label.frame));
-                if (deltaY <= 28.0) return toggle;
-            }
-            for (UIView *subview in candidate.subviews) {
-                [stack addObject:subview];
-            }
-        }
-    }
-    return nil;
+if not tweak.exists():
+    raise RuntimeError("EnhancerTweak.m not found beside Translation.m")
+
+s = tweak.read_text(encoding="utf-8")
+
+needle = "void IQFOpenSettings(void) {\n    NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;"
+replacement = "void IQFOpenSettings(void) {\n    IQFInstallLocalizationHook();\n    NSTimeInterval now = NSDate.timeIntervalSinceReferenceDate;"
+if needle not in s:
+    raise RuntimeError("IQFOpenSettings marker not found")
+s = s.replace(needle, replacement, 1)
+
+replacements = {
+    '@"Follow system": @"Seguir idioma do sistema"': '@"Follow system": @"Seguir sistema"',
+    '@"Hide group suggestions": @"Ocultar sugestões de grupos"': '@"Hide group suggestions": @"Ocultar grupos sugeridos"',
+    '@"Join Telegram channel": @"Entrar no canal do Telegram"': '@"Join Telegram channel": @"Canal do Telegram"',
+    '@"Confirm posting a comment": @"Confirmar publicação do comentário"': '@"Confirm posting a comment": @"Confirmar comentário"',
+    '@"Confirm friend requests": @"Confirmar solicitações de amizade"': '@"Confirm friend requests": @"Confirmar amizades"',
+    '@"Confirm follow and join": @"Confirmar ações de seguir e entrar"': '@"Confirm follow and join": @"Confirmar seguir/entrar"',
+    '@"Confirm sending a message": @"Confirmar envio de mensagens"': '@"Confirm sending a message": @"Confirmar mensagem"',
 }
+for old, new in replacements.items():
+    if old not in s:
+        raise RuntimeError(f"missing native translation: {old}")
+    s = s.replace(old, new, 1)
 
-static BOOL IQFIsTranslatedPortugueseValue(NSString *text) {
-    if (text.length == 0) return NO;
-    return [IQFPortugueseUIStrings().allValues containsObject:text];
-}
-
-static void IQFExpandTranslatedLabelToAvailableWidth(UILabel *label) {
-    if (label == nil || label.superview == nil || !IQFIsTranslatedPortugueseValue(label.text)) return;
-
-    CGRect frame = label.frame;
-    if (CGRectIsEmpty(frame)) return;
-
-    CGSize fit = [label sizeThatFits:CGSizeMake(CGFLOAT_MAX, MAX(CGRectGetHeight(frame), 1.0))];
-    CGFloat desiredWidth = ceil(fit.width) + 2.0;
-    if (desiredWidth <= CGRectGetWidth(frame) + 0.5) return;
-
-    CGFloat maxRight = CGRectGetWidth(label.superview.bounds) - 12.0;
-    UISwitch *toggle = IQFFindNearestSwitchForLabel(label);
-    if (toggle != nil) {
-        CGRect toggleRect = [toggle.superview convertRect:toggle.frame toView:label.superview];
-        maxRight = MIN(maxRight, CGRectGetMinX(toggleRect) - 14.0);
-    }
-
-    CGFloat availableWidth = floor(maxRight - CGRectGetMinX(frame));
-    if (availableWidth <= CGRectGetWidth(frame)) return;
-
-    frame.size.width = MIN(desiredWidth, availableWidth);
-    label.frame = frame;
-    label.adjustsFontSizeToFitWidth = NO;
-    [label setContentCompressionResistancePriority:760.0 forAxis:UILayoutConstraintAxisHorizontal];
-    [label invalidateIntrinsicContentSize];
-}
-
-static void IQFTranslateViewTree(UIView *view) {'''
-
+marker = '            @"English": @"Inglês",\n'
 if marker not in s:
-    raise RuntimeError("IQFTranslateViewTree marker not found")
-s = s.replace(marker, helper, 1)
+    raise RuntimeError("native dictionary marker not found")
 
-old = '''    if ([view isKindOfClass:UILabel.class]) {
-        UILabel *label = (UILabel *)view;
-        NSString *translated = IQFTranslateUIString(label.text);
-        if (![translated isEqualToString:label.text]) label.text = translated;
-    } else if ([view isKindOfClass:UIButton.class]) {'''
-new = '''    if ([view isKindOfClass:UILabel.class]) {
-        UILabel *label = (UILabel *)view;
-        NSString *translated = IQFTranslateUIString(label.text);
-        if (![translated isEqualToString:label.text]) label.text = translated;
-        IQFExpandTranslatedLabelToAvailableWidth(label);
-    } else if ([view isKindOfClass:UIButton.class]) {'''
+extra = '''            @"General": @"Geral",
+            @"Stories": @"Stories",
+            @"Reels": @"Reels",
+            @"FEATURES": @"RECURSOS",
+            @"Appearance": @"Aparência",
+            @"APPEARANCE": @"APARÊNCIA",
+            @"DEV": @"DEV",
+            @"ABOUT": @"SOBRE",
+            @"Open links in Safari": @"Abrir no Safari",
+            @"Block in-stream video ads": @"Bloquear anúncios em vídeos",
+            @"Hide suggested posts": @"Ocultar posts sugeridos",
+            @"Hide stories": @"Ocultar stories",
+            @"Ghost mode in stories": @"Modo fantasma",
+            @"Watch stories locally (grey ring)": @"Assistir localmente",
+            @"Hide Reels screen elements": @"Ocultar elementos",
+            @"Show Reels screen elements": @"Mostrar elementos",
+            @"Separate buttons": @"Botões separados",
+            @"Reels controls": @"Controles do Reels",
+            @"Button layout": @"Layout dos botões",
+            @"One iQ button": @"Um botão iQ",
+            @"Hold for Reels menu": @"Segure para menu",
+            @"Reels overlay": @"Sobreposição do Reels",
+            @"Hide action rail": @"Ocultar ações",
+            @"Hide Likes": @"Ocultar curtidas",
+            @"Hide Comments": @"Ocultar comentários",
+            @"Hide Share": @"Ocultar compartilhamento",
+            @"Hide creator information": @"Ocultar criador",
+            @"Hide description": @"Ocultar descrição",
+            @"Save photo": @"Salvar foto",
+            @"Save full-resolution photo": @"Salvar foto original",
+'''
+s = s.replace(marker, marker + extra, 1)
 
-if old not in s:
-    raise RuntimeError("expected UILabel translation block not found")
-s = s.replace(old, new, 1)
-
-p.write_text(s, encoding="utf-8")
+tweak.write_text(s, encoding="utf-8")
