@@ -1,0 +1,238 @@
+name: Facebook UI / Info.plist Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "URL direta do IPA do Facebook"
+        required: true
+        default: "https://pub-4c58191013f0429aab20e217182b7f04.r2.dev/Facebook/Facebook_579.0.0.ipa"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Inspect Facebook UI metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Download IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/facebook-ui-probe"
+          mkdir -p "$WORK"
+          cd "$WORK"
+
+          echo "Downloading IPA..."
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --retry-delay 2 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --output Facebook.ipa \
+            "$IPA_URL"
+
+          echo "Downloaded: $(du -h Facebook.ipa | cut -f1)"
+          unzip -tq Facebook.ipa >/dev/null
+          echo "IPA archive: OK"
+
+      - name: Extract main Info.plist and executable
+        id: extract
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/facebook-ui-probe"
+          cd "$WORK"
+
+          APP_INFO="$(unzip -Z1 Facebook.ipa | awk '/^Payload\/[^/]+\.app\/Info\.plist$/ {print; exit}')"
+          if [ -z "$APP_INFO" ]; then
+            echo "Main app Info.plist not found" >&2
+            exit 1
+          fi
+
+          echo "Main plist: $APP_INFO"
+          unzip -p Facebook.ipa "$APP_INFO" > Info.plist
+
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+
+          p = Path("Info.plist")
+          with p.open("rb") as f:
+              data = plistlib.load(f)
+
+          with Path("Info.plist.xml").open("wb") as f:
+              plistlib.dump(data, f, fmt=plistlib.FMT_XML, sort_keys=True)
+
+          exe = data.get("CFBundleExecutable", "")
+          Path("executable-name.txt").write_text(str(exe), encoding="utf-8")
+          PY
+
+          EXE_NAME="$(cat executable-name.txt)"
+          if [ -z "$EXE_NAME" ]; then
+            echo "CFBundleExecutable is missing" >&2
+            exit 1
+          fi
+
+          APP_PREFIX="${APP_INFO%Info.plist}"
+          EXE_PATH="${APP_PREFIX}${EXE_NAME}"
+          echo "Main executable: $EXE_PATH"
+          unzip -p Facebook.ipa "$EXE_PATH" > FacebookExecutable
+          chmod +x FacebookExecutable || true
+
+          echo "app_info=$APP_INFO" >> "$GITHUB_OUTPUT"
+          echo "exe_name=$EXE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build Liquid Glass / tab bar report
+        run: |
+          set -euo pipefail
+          WORK="$RUNNER_TEMP/facebook-ui-probe"
+          cd "$WORK"
+
+          # Search embedded strings for likely UI gates/classes without preserving the full binary.
+          LC_ALL=C strings -a FacebookExecutable \
+            | grep -Eai 'liquid.?glass|glass|tab.?bar|tabbar|uitabbar|designrequirescompatibility|appearance|navigation.?bar|uinavigationbar|toolbar|uitoolbar|sidebar|visual.?effect|uivisualeffect' \
+            | sort -u \
+            | head -n 1200 \
+            > ui_strings.txt || true
+
+          python3 - <<'PY'
+          import plistlib
+          import re
+          from pathlib import Path
+
+          with Path("Info.plist").open("rb") as f:
+              p = plistlib.load(f)
+
+          def fmt(v):
+              if isinstance(v, bool):
+                  return "true" if v else "false"
+              if v is None:
+                  return "<ausente>"
+              if isinstance(v, (dict, list)):
+                  text = repr(v)
+                  return text if len(text) <= 500 else text[:500] + "…"
+              return str(v)
+
+          basic_keys = [
+              "CFBundleDisplayName",
+              "CFBundleName",
+              "CFBundleIdentifier",
+              "CFBundleShortVersionString",
+              "CFBundleVersion",
+              "CFBundleExecutable",
+              "MinimumOSVersion",
+              "DTPlatformName",
+              "DTPlatformVersion",
+              "DTSDKName",
+              "DTXcode",
+              "DTXcodeBuild",
+              "BuildMachineOSBuild",
+              "UIDesignRequiresCompatibility",
+              "UIUserInterfaceStyle",
+              "UIViewControllerBasedStatusBarAppearance",
+          ]
+
+          interesting = re.compile(
+              r"liquid|glass|tab|design|compatib|appearance|navigation|toolbar|sidebar|visual|effect",
+              re.I,
+          )
+
+          found = []
+          def walk(obj, path="root"):
+              if isinstance(obj, dict):
+                  for k, v in obj.items():
+                      kp = f"{path}.{k}"
+                      if interesting.search(str(k)):
+                          found.append((kp, v))
+                      walk(v, kp)
+              elif isinstance(obj, list):
+                  for i, v in enumerate(obj):
+                      walk(v, f"{path}[{i}]")
+
+          walk(p)
+
+          sdk = str(p.get("DTSDKName", ""))
+          platform_version = str(p.get("DTPlatformVersion", ""))
+          compat_present = "UIDesignRequiresCompatibility" in p
+          compat = p.get("UIDesignRequiresCompatibility")
+
+          lines = []
+          lines.append("# Facebook UI / Info.plist Probe")
+          lines.append("")
+          lines.append("## Identificação da build")
+          lines.append("")
+          lines.append("| Campo | Valor |")
+          lines.append("|---|---|")
+          for key in basic_keys:
+              lines.append(f"| `{key}` | `{fmt(p.get(key))}` |")
+
+          lines.append("")
+          lines.append("## Leitura rápida")
+          lines.append("")
+          if sdk:
+              lines.append(f"- SDK declarado pelo app: **{sdk}**.")
+          elif platform_version:
+              lines.append(f"- Versão da plataforma declarada: **{platform_version}**.")
+          else:
+              lines.append("- O Info.plist não expõe `DTSDKName`/`DTPlatformVersion`.")
+
+          if not compat_present:
+              lines.append("- `UIDesignRequiresCompatibility` **não existe** no Info.plist principal.")
+          elif compat is False:
+              lines.append("- `UIDesignRequiresCompatibility = false`: o app não solicita o modo de compatibilidade por essa chave.")
+          elif compat is True:
+              lines.append("- `UIDesignRequiresCompatibility = true`: o app solicita o modo de compatibilidade por essa chave.")
+          else:
+              lines.append(f"- `UIDesignRequiresCompatibility` existe com valor inesperado: `{fmt(compat)}`.")
+
+          m = re.search(r"iphoneos(\d+)", sdk, re.I)
+          if m:
+              major = int(m.group(1))
+              if major >= 27:
+                  lines.append("- A build declara SDK iOS 27 ou posterior; isso merece comparação direta com uma build SDK 26 para a mudança da tab bar.")
+              elif major == 26:
+                  lines.append("- A build declara SDK iOS 26; uma regressão visual da tab bar provavelmente exige também investigar gates/implementação interna do Facebook.")
+
+          lines.append("")
+          lines.append("## Chaves do Info.plist relacionadas à interface")
+          lines.append("")
+          if found:
+              for path, value in sorted(found, key=lambda x: x[0].lower()):
+                  lines.append(f"- `{path}` = `{fmt(value)}`")
+          else:
+              lines.append("Nenhuma chave adicional correspondente aos filtros foi encontrada.")
+
+          strings_path = Path("ui_strings.txt")
+          matches = strings_path.read_text(errors="replace").splitlines() if strings_path.exists() else []
+          lines.append("")
+          lines.append("## Strings do executável relacionadas a Liquid Glass / tab bar")
+          lines.append("")
+          lines.append(f"Foram encontradas **{len(matches)}** strings filtradas. O arquivo completo `ui_strings.txt` acompanha o artefato.")
+          lines.append("")
+          for s in matches[:200]:
+              safe = s.replace("`", "'")
+              lines.append(f"- `{safe}`")
+          if len(matches) > 200:
+              lines.append(f"- … mais {len(matches) - 200} entradas em `ui_strings.txt`.")
+
+          Path("report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload diagnostic report
+        uses: actions/upload-artifact@v4
+        with:
+          name: facebook-ui-plist-probe
+          path: |
+            ${{ runner.temp }}/facebook-ui-probe/report.md
+            ${{ runner.temp }}/facebook-ui-probe/Info.plist.xml
+            ${{ runner.temp }}/facebook-ui-probe/ui_strings.txt
+          if-no-files-found: error
+          retention-days: 3
