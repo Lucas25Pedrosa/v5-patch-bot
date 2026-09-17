@@ -1,0 +1,54 @@
+name: Build Facebook Liquid Glass Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "facebook-liquidglass-probe/**"
+      - ".github/workflows/facebook-liquidglass-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: facebook-liquidglass-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name NexusLiquidGlassProbe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/NexusLiquidGlassProbe.dylib
+          shasum -a 256 artifacts/NexusLiquidGlassProbe.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/NexusLiquidGlassProbe.dylib
+          strings -a artifacts/NexusLiquidGlassProbe.dylib | grep -F "Nexus Liquid Glass Probe 0.1"
+          strings -a artifacts/NexusLiquidGlassProbe.dylib | grep -F "RUNTIME_BOOL"
+          strings -a artifacts/NexusLiquidGlassProbe.dylib | grep -F "FBLiquidGlassAppJob"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusLiquidGlassProbe-0.1-arm64
+          path: facebook-liquidglass-probe/artifacts/
+          if-no-files-found: error
+          retention-days: 7
