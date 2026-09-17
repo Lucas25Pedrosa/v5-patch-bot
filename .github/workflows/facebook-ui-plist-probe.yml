@@ -1,9 +1,6 @@
 name: Facebook UI / Info.plist Probe
 
 on:
-  push:
-    paths:
-      - '.github/workflows/facebook-ui-plist-probe.yml'
   workflow_dispatch:
     inputs:
       ipa_url:
