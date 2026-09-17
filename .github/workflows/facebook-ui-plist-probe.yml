@@ -1,6 +1,9 @@
 name: Facebook UI / Info.plist Probe
 
 on:
+  push:
+    paths:
+      - '.github/workflows/facebook-ui-plist-probe.yml'
   workflow_dispatch:
     inputs:
       ipa_url:
@@ -20,7 +23,7 @@ jobs:
     steps:
       - name: Download IPA
         env:
-          IPA_URL: ${{ inputs.ipa_url }}
+          IPA_URL: ${{ inputs.ipa_url || 'https://pub-4c58191013f0429aab20e217182b7f04.r2.dev/Facebook/Facebook_579.0.0.ipa' }}
         run: |
           set -euo pipefail
           WORK="$RUNNER_TEMP/facebook-ui-probe"
@@ -94,7 +97,6 @@ jobs:
           WORK="$RUNNER_TEMP/facebook-ui-probe"
           cd "$WORK"
 
-          # Search embedded strings for likely UI gates/classes without preserving the full binary.
           LC_ALL=C strings -a FacebookExecutable \
             | grep -Eai 'liquid.?glass|glass|tab.?bar|tabbar|uitabbar|designrequirescompatibility|appearance|navigation.?bar|uinavigationbar|toolbar|uitoolbar|sidebar|visual.?effect|uivisualeffect' \
             | sort -u \
