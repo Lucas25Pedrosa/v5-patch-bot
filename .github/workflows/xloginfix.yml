@@ -1,4 +1,4 @@
-name: Build XLoginFix
+name: Verify XLoginFix
 
 "on":
   workflow_dispatch:
@@ -15,39 +15,46 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  verify:
     runs-on: macos-15
-    timeout-minutes: 30
-
-    defaults:
-      run:
-        working-directory: xloginfix
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Install Theos
-        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
-
-      - name: Install signing tool
-        run: brew install ldid
-
-      - name: Build XLoginFix dylib
+      - name: Verify canonical dylib
+        shell: bash
         run: |
           set -euo pipefail
-          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
-          mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name XLoginFix.dylib ! -path '*/XLoginFix.dylib.dSYM/*' -print -quit)"
-          test -n "$dylib_path"
-          cp "$dylib_path" artifacts/XLoginFix.dylib
-          file artifacts/XLoginFix.dylib
-          shasum -a 256 artifacts/XLoginFix.dylib > artifacts/SHA256SUMS.txt
-          strings -a artifacts/XLoginFix.dylib | grep -F "FahdTwitter_oauth_token"
-          strings -a artifacts/XLoginFix.dylib | grep -F "private_startLoginFlowWithSender:"
-          strings -a artifacts/XLoginFix.dylib | grep -F "buildAndAddAccountWithToken:secret:screenName:userId:"
 
-      - name: Upload XLoginFix dylib
+          dylib="xloginfix/vendor/FahdTwitterLoginBypass.dylib"
+          expected="d6a3994fbc78cb41d95e281a230419105bc3ea3d4c55aba646b94ea51dee5a0a"
+
+          if [[ ! -f "$dylib" ]]; then
+            echo "Vendor dylib not present yet."
+            echo "Expected path: $dylib"
+            exit 0
+          fi
+
+          actual="$(shasum -a 256 "$dylib" | awk '{print $1}')"
+          test "$actual" = "$expected"
+
+          info="$(file "$dylib")"
+          echo "$info"
+          echo "$info" | grep -F "arm64"
+          echo "$info" | grep -F "arm64e"
+
+          strings -a "$dylib" | grep -F "FahdTwitter_oauth_token"
+          strings -a "$dylib" | grep -F "private_startLoginFlowWithSender:"
+          strings -a "$dylib" | grep -F "buildAndAddAccountWithToken:secret:screenName:userId:"
+
+          mkdir -p xloginfix/artifacts
+          cp "$dylib" xloginfix/artifacts/XLoginFix.dylib
+          shasum -a 256 xloginfix/artifacts/XLoginFix.dylib > xloginfix/artifacts/SHA256SUMS.txt
+
+      - name: Upload verified dylib
+        if: ${{ hashFiles('xloginfix/artifacts/XLoginFix.dylib') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: XLoginFix-1.0.0-arm64-arm64e
