@@ -1,0 +1,55 @@
+name: Build XLoginFix
+
+"on":
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "xloginfix/**"
+      - ".github/workflows/xloginfix.yml"
+  push:
+    paths:
+      - "xloginfix/**"
+      - ".github/workflows/xloginfix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: xloginfix
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XLoginFix dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLoginFix.dylib ! -path '*/XLoginFix.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLoginFix.dylib
+          file artifacts/XLoginFix.dylib
+          shasum -a 256 artifacts/XLoginFix.dylib > artifacts/SHA256SUMS.txt
+          strings -a artifacts/XLoginFix.dylib | grep -F "FahdTwitter_oauth_token"
+          strings -a artifacts/XLoginFix.dylib | grep -F "private_startLoginFlowWithSender:"
+          strings -a artifacts/XLoginFix.dylib | grep -F "buildAndAddAccountWithToken:secret:screenName:userId:"
+
+      - name: Upload XLoginFix dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLoginFix-1.0.0-arm64-arm64e
+          path: xloginfix/artifacts/
+          if-no-files-found: error
