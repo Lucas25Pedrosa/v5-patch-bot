@@ -14,3 +14,6 @@ Saída no aparelho:
 `Documents/XLoginProbe.txt`
 
 Referência inicial: X 12.27.1.
+
+
+Build trigger: branch x-login-fix-1.0.
