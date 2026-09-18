@@ -1,0 +1,58 @@
+name: Build XLoginProbe
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - "x-login-fix-1.0"
+    paths:
+      - "x-login-probe/**"
+      - ".github/workflows/x-login-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XLoginProbe
+        run: |
+          make -C x-login-probe clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
+      - name: Collect artifact
+        run: |
+          mkdir -p x-login-probe/artifacts
+          DYLIB="$(find x-login-probe/.theos -type f -name XLoginProbe.dylib -print -quit)"
+          test -n "$DYLIB"
+          cp "$DYLIB" x-login-probe/artifacts/XLoginProbe.dylib
+          file x-login-probe/artifacts/XLoginProbe.dylib | tee x-login-probe/artifacts/file.txt
+          shasum -a 256 x-login-probe/artifacts/XLoginProbe.dylib | tee x-login-probe/artifacts/SHA256SUMS.txt
+          otool -D x-login-probe/artifacts/XLoginProbe.dylib | tee x-login-probe/artifacts/install-name.txt
+          otool -L x-login-probe/artifacts/XLoginProbe.dylib | tee x-login-probe/artifacts/dependencies.txt
+          strings -a x-login-probe/artifacts/XLoginProbe.dylib > x-login-probe/artifacts/strings.txt
+
+          grep -F "Mach-O 64-bit" x-login-probe/artifacts/file.txt
+          grep -F "arm64" x-login-probe/artifacts/file.txt
+          grep -F "@rpath/XLoginProbe.dylib" x-login-probe/artifacts/install-name.txt
+          grep -F "XLoginProbe 1.0 started" x-login-probe/artifacts/strings.txt
+          grep -F "private_startLoginFlowWithSender:" x-login-probe/artifacts/strings.txt
+          grep -F "TFSKeychain" x-login-probe/artifacts/strings.txt
+
+      - name: Upload XLoginProbe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLoginProbe-1.0-arm64
+          path: x-login-probe/artifacts/
+          if-no-files-found: error
