@@ -12,6 +12,8 @@ static IMP gOrigInstallGateForAccount = NULL;
 static IMP gOrigDummyFeature = NULL;
 static IMP gOrigNFBSetupSections = NULL;
 static IMP gOrigNFBViewWillAppear = NULL;
+static IMP gOrigCanPresentDash = NULL;
+static IMP gOrigDidTapDashButton = NULL;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -20,6 +22,7 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
+static BOOL gSidebarHooked = NO;
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -299,6 +302,125 @@ static void XLGInstallNFBSettingsIntegration(void) {
     gNFBSettingsHooked = setupHooked || appearHooked;
 }
 
+
+#pragma mark - Liquid Glass sidebar fix
+
+static BOOL XLGCanPresentDash(id self, SEL _cmd) {
+    if (XLGEnabled()) return YES;
+
+    if (gOrigCanPresentDash) {
+        return ((BOOL (*)(id, SEL))gOrigCanPresentDash)(self, _cmd);
+    }
+    return NO;
+}
+
+static BOOL XLGPresentDashUsingNativePresenter(UIViewController *source) {
+    if (!source) return NO;
+
+    SEL presentSEL =
+        NSSelectorFromString(@"presentDashFromViewController:animated:completion:");
+
+    NSMutableArray<UIViewController *> *queue = [NSMutableArray array];
+    NSMutableSet<NSValue *> *seen = [NSMutableSet set];
+
+    void (^enqueue)(UIViewController *) = ^(UIViewController *vc) {
+        if (!vc) return;
+        NSValue *key = [NSValue valueWithNonretainedObject:vc];
+        if ([seen containsObject:key]) return;
+        [seen addObject:key];
+        [queue addObject:vc];
+    };
+
+    enqueue(source);
+    enqueue(source.navigationController);
+    enqueue(source.parentViewController);
+    enqueue(source.presentingViewController);
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (window.rootViewController) enqueue(window.rootViewController);
+        }
+    }
+
+    for (NSUInteger i = 0; i < queue.count && i < 128; i++) {
+        UIViewController *candidate = queue[i];
+
+        if ([candidate respondsToSelector:presentSEL]) {
+            ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(
+                candidate,
+                presentSEL,
+                source,
+                YES,
+                nil
+            );
+            return YES;
+        }
+
+        enqueue(candidate.navigationController);
+        enqueue(candidate.parentViewController);
+        enqueue(candidate.presentingViewController);
+
+        for (UIViewController *child in candidate.childViewControllers) {
+            enqueue(child);
+        }
+
+        if ([candidate isKindOfClass:UITabBarController.class]) {
+            enqueue(((UITabBarController *)candidate).selectedViewController);
+        }
+
+        if ([candidate isKindOfClass:UINavigationController.class]) {
+            enqueue(((UINavigationController *)candidate).visibleViewController);
+        }
+    }
+
+    return NO;
+}
+
+static void XLGDidTapDashButton(id self, SEL _cmd, id sender) {
+    if (!XLGEnabled()) {
+        if (gOrigDidTapDashButton) {
+            ((void (*)(id, SEL, id))gOrigDidTapDashButton)(self, _cmd, sender);
+        }
+        return;
+    }
+
+    // Liquid Glass can leave the avatar action attached while the normal
+    // canPresentDash path rejects presentation. Prefer the X-owned presenter.
+    if ([self isKindOfClass:UIViewController.class] &&
+        XLGPresentDashUsingNativePresenter((UIViewController *)self)) {
+        return;
+    }
+
+    // Fallback to X's original action if no presenter was found.
+    if (gOrigDidTapDashButton) {
+        ((void (*)(id, SEL, id))gOrigDidTapDashButton)(self, _cmd, sender);
+    }
+}
+
+static void XLGInstallSidebarFix(void) {
+    if (gSidebarHooked) return;
+
+    Class cls = NSClassFromString(@"T1TabNavigationController");
+    if (!cls) return;
+
+    BOOL canHook =
+        XLGHookMethod(cls,
+                      NSSelectorFromString(@"canPresentDash"),
+                      NO,
+                      (IMP)XLGCanPresentDash,
+                      &gOrigCanPresentDash);
+
+    BOOL tapHook =
+        XLGHookMethod(cls,
+                      NSSelectorFromString(@"_t1_action_didTapDashButton:"),
+                      NO,
+                      (IMP)XLGDidTapDashButton,
+                      &gOrigDidTapDashButton);
+
+    gSidebarHooked = canHook || tapHook;
+}
+
 static void XLGInstallHooks(void) {
     Class cls = Nil;
 
@@ -372,6 +494,7 @@ static void XLGInstallHooks(void) {
     }
 
     XLGSyncCompatibilityGate();
+    XLGInstallSidebarFix();
     XLGInstallNFBSettingsIntegration();
 }
 
@@ -388,7 +511,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.1.0 standalone + optional NFB settings integration loaded");
+        NSLog(@"[XLiquidGlass] 1.2.0 standalone + NFB toggle + sidebar fix loaded");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
