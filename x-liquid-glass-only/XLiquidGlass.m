@@ -50,7 +50,7 @@ static UIWindow *XLKeyWindow(void) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *w in ((UIWindowScene *)scene).windows) if (w.isKeyWindow) return w;
     }
-    return UIApplication.sharedApplication.windows.firstObject;
+    return nil;
 }
 
 static UIViewController *XLTopController(void) {
