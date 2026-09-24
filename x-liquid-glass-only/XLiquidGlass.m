@@ -357,33 +357,63 @@ static UIViewController *XLGSidebarPresenter(void) {
     return controller;
 }
 
-static id XLGSidebarCurrentAccount(void) {
-    Class twitterClass=NSClassFromString(@"TFNTwitter");
-    SEL sharedSEL=NSSelectorFromString(@"sharedTwitter");
-    SEL activeSEL=NSSelectorFromString(@"activeAccount");
-
-    if (twitterClass && [twitterClass respondsToSelector:sharedSEL]) {
-        id twitter=((id(*)(id,SEL))objc_msgSend)(twitterClass,sharedSEL);
-        if (twitter && [twitter respondsToSelector:activeSEL]) {
-            id account=((id(*)(id,SEL))objc_msgSend)(twitter,activeSEL);
-            if (account) return account;
-        }
-    }
-
+static id XLGSidebarAppNavigation(void) {
     UIViewController *root=XLGSidebarActiveWindow().rootViewController;
     NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
     if (root) [queue addObject:root];
 
-    for (NSUInteger i=0;i<queue.count && i<128;i++) {
+    for (NSUInteger i=0;i<queue.count && i<192;i++) {
         UIViewController *vc=queue[i];
-        SEL accountSEL=NSSelectorFromString(@"account");
-        if ([vc respondsToSelector:accountSEL]) {
-            id account=((id(*)(id,SEL))objc_msgSend)(vc,accountSEL);
-            if (account) return account;
+
+        // Moe's redesign path resolves the host appNavigation first.
+        SEL appNavigationSEL=NSSelectorFromString(@"appNavigation");
+        if ([vc respondsToSelector:appNavigationSEL]) {
+            id appNavigation=((id(*)(id,SEL))objc_msgSend)(vc,appNavigationSEL);
+            if (appNavigation) return appNavigation;
         }
-        if (vc.presentedViewController) [queue addObject:vc.presentedViewController];
-        [queue addObjectsFromArray:vc.childViewControllers ?: @[]];
+
+        Class hostClass=NSClassFromString(@"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController");
+        if (hostClass && [vc isKindOfClass:hostClass]) return vc;
+
+        Class legacyClass=NSClassFromString(@"T1TabbedAppNavigationViewController");
+        if (legacyClass && [vc isKindOfClass:legacyClass]) return vc;
+
+        if (vc.presentedViewController && ![queue containsObject:vc.presentedViewController])
+            [queue addObject:vc.presentedViewController];
+
+        for (UIViewController *child in vc.childViewControllers ?: @[]) {
+            if (![queue containsObject:child]) [queue addObject:child];
+        }
     }
+
+    return nil;
+}
+
+static id XLGSidebarCurrentAccount(void) {
+    // Match Moe first: the current account belongs to redesign appNavigation.
+    id appNavigation=XLGSidebarAppNavigation();
+    SEL accountSEL=NSSelectorFromString(@"account");
+    if (appNavigation && [appNavigation respondsToSelector:accountSEL]) {
+        id account=((id(*)(id,SEL))objc_msgSend)(appNavigation,accountSEL);
+        if (account) return account;
+    }
+
+    // Secondary fallback only if the redesign navigation did not expose it.
+    Class twitterClass=NSClassFromString(@"TFNTwitter");
+    for (NSString *sharedName in @[@"sharedTwitter",@"sharedInstance",@"shared"]) {
+        SEL sharedSEL=NSSelectorFromString(sharedName);
+        if (!twitterClass || ![twitterClass respondsToSelector:sharedSEL]) continue;
+
+        id twitter=((id(*)(id,SEL))objc_msgSend)(twitterClass,sharedSEL);
+        for (NSString *accountName in @[@"activeAccount",@"currentAccount",@"account"]) {
+            SEL sel=NSSelectorFromString(accountName);
+            if (twitter && [twitter respondsToSelector:sel]) {
+                id account=((id(*)(id,SEL))objc_msgSend)(twitter,sel);
+                if (account) return account;
+            }
+        }
+    }
+
     return nil;
 }
 
