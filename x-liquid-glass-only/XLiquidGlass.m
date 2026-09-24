@@ -884,6 +884,248 @@ static void XLGInstallSidebarFix(void) {
                   &gOrigTabAppear);
 }
 
+
+#pragma mark - Liquid Glass Tab Bar badge fixes
+
+static IMP gOrigLGBadgeViewDidLoad = NULL;
+static IMP gOrigLGBadgeViewDidAppear = NULL;
+static IMP gOrigLGBadgeSetTabViews = NULL;
+static IMP gOrigLGBadgeSyncTabBarItems = NULL;
+static IMP gOrigLGBadgeSyncBadges = NULL;
+static IMP gOrigLGBadgeTraitCollectionDidChange = NULL;
+static IMP gOrigLGBadgeViewDidLayoutSubviews = NULL;
+
+static char kXLGCompactBadgeAppearanceAppliedKey;
+
+static void XLGInvalidateLiquidGlassCompactBadge(id controller) {
+    if (!controller) return;
+    objc_setAssociatedObject(
+        controller,
+        &kXLGCompactBadgeAppearanceAppliedKey,
+        nil,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC
+    );
+}
+
+static void XLGNormalizeLiquidGlassUnreadBadgeValues(id controller) {
+    if (!controller || !XLGEnabled()) return;
+
+    SEL viewControllersSEL=NSSelectorFromString(@"viewControllers");
+    if (![controller respondsToSelector:viewControllersSEL]) return;
+
+    id value=((id(*)(id,SEL))objc_msgSend)(controller,viewControllersSEL);
+    if (![value isKindOfClass:NSArray.class]) return;
+
+    NSCharacterSet *whitespace=[NSCharacterSet whitespaceAndNewlineCharacterSet];
+
+    for (id viewController in (NSArray *)value) {
+        if (![viewController isKindOfClass:UIViewController.class]) continue;
+
+        UITabBarItem *item=((UIViewController *)viewController).tabBarItem;
+        if (!item) continue;
+
+        NSString *badge=item.badgeValue;
+        if (![badge isKindOfClass:NSString.class]) continue;
+
+        NSString *trimmed=[badge stringByTrimmingCharactersInSet:whitespace];
+        if (trimmed.length==0) {
+            item.badgeValue=nil;
+        }
+    }
+}
+
+static void XLGApplyCompactBadgeToStateAppearance(UITabBarItemStateAppearance *state) {
+    if (!state) return;
+
+    NSMutableDictionary<NSAttributedStringKey,id> *attributes=
+        [state.badgeTextAttributes mutableCopy] ?: [NSMutableDictionary dictionary];
+
+    attributes[NSFontAttributeName]=
+        [UIFont systemFontOfSize:9.0 weight:UIFontWeightBold];
+
+    if (!attributes[NSForegroundColorAttributeName]) {
+        attributes[NSForegroundColorAttributeName]=UIColor.whiteColor;
+    }
+
+    state.badgeTextAttributes=[attributes copy];
+}
+
+static void XLGApplyCompactBadgeToItemAppearance(UITabBarItemAppearance *itemAppearance) {
+    if (!itemAppearance) return;
+
+    XLGApplyCompactBadgeToStateAppearance(itemAppearance.normal);
+    XLGApplyCompactBadgeToStateAppearance(itemAppearance.selected);
+    XLGApplyCompactBadgeToStateAppearance(itemAppearance.disabled);
+    XLGApplyCompactBadgeToStateAppearance(itemAppearance.focused);
+}
+
+static void XLGApplyCompactBadgeToAppearance(UITabBarAppearance *appearance) {
+    if (!appearance) return;
+
+    XLGApplyCompactBadgeToItemAppearance(appearance.stackedLayoutAppearance);
+    XLGApplyCompactBadgeToItemAppearance(appearance.inlineLayoutAppearance);
+    XLGApplyCompactBadgeToItemAppearance(appearance.compactInlineLayoutAppearance);
+}
+
+static void XLGNormalizeLiquidGlassBadges(id controller) {
+    if (!controller || !XLGEnabled()) return;
+
+    Class liquidClass=NSClassFromString(@"T1LiquidGlassTabBarController");
+    if (liquidClass && ![controller isKindOfClass:liquidClass]) return;
+
+    if (![controller isKindOfClass:UIViewController.class]) return;
+    UIViewController *viewController=(UIViewController *)controller;
+    if (!viewController.isViewLoaded) return;
+
+    // Moe normalizes unread values before touching appearance.
+    XLGNormalizeLiquidGlassUnreadBadgeValues(controller);
+
+    SEL tabBarSEL=NSSelectorFromString(@"tabBar");
+    if (![controller respondsToSelector:tabBarSEL]) return;
+
+    id tabBarObject=((id(*)(id,SEL))objc_msgSend)(controller,tabBarSEL);
+    if (![tabBarObject isKindOfClass:UITabBar.class]) return;
+    UITabBar *tabBar=(UITabBar *)tabBarObject;
+
+    NSNumber *alreadyApplied=
+        objc_getAssociatedObject(controller,&kXLGCompactBadgeAppearanceAppliedKey);
+    if (alreadyApplied.boolValue) return;
+
+    UITabBarAppearance *appearance=[tabBar.standardAppearance copy];
+    if (!appearance) appearance=[UITabBarAppearance new];
+
+    XLGApplyCompactBadgeToAppearance(appearance);
+
+    tabBar.standardAppearance=appearance;
+    if (@available(iOS 15.0,*)) {
+        tabBar.scrollEdgeAppearance=appearance;
+    }
+
+    objc_setAssociatedObject(
+        controller,
+        &kXLGCompactBadgeAppearanceAppliedKey,
+        @YES,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC
+    );
+}
+
+static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
+    if (!controller || !XLGEnabled()) return;
+
+    __weak id weakController=controller;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.05*NSEC_PER_SEC)),
+        dispatch_get_main_queue(),^{
+            id strongController=weakController;
+            if (!strongController) return;
+            XLGInvalidateLiquidGlassCompactBadge(strongController);
+            XLGNormalizeLiquidGlassBadges(strongController);
+        }
+    );
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.25*NSEC_PER_SEC)),
+        dispatch_get_main_queue(),^{
+            id strongController=weakController;
+            if (!strongController) return;
+            XLGInvalidateLiquidGlassCompactBadge(strongController);
+            XLGNormalizeLiquidGlassBadges(strongController);
+        }
+    );
+}
+
+static void XLGLGBadgeViewDidLoad(id self,SEL cmd) {
+    if (gOrigLGBadgeViewDidLoad)
+        ((void(*)(id,SEL))gOrigLGBadgeViewDidLoad)(self,cmd);
+
+    XLGInvalidateLiquidGlassCompactBadge(self);
+    XLGNormalizeLiquidGlassBadges(self);
+    XLGScheduleLiquidGlassBadgeRefresh(self);
+}
+
+static void XLGLGBadgeViewDidAppear(id self,SEL cmd,BOOL animated) {
+    if (gOrigLGBadgeViewDidAppear)
+        ((void(*)(id,SEL,BOOL))gOrigLGBadgeViewDidAppear)(self,cmd,animated);
+
+    XLGInvalidateLiquidGlassCompactBadge(self);
+    XLGNormalizeLiquidGlassBadges(self);
+    XLGScheduleLiquidGlassBadgeRefresh(self);
+}
+
+static void XLGLGBadgeSetTabViews(id self,SEL cmd,id tabViews) {
+    if (gOrigLGBadgeSetTabViews)
+        ((void(*)(id,SEL,id))gOrigLGBadgeSetTabViews)(self,cmd,tabViews);
+
+    XLGInvalidateLiquidGlassCompactBadge(self);
+    XLGNormalizeLiquidGlassBadges(self);
+    XLGScheduleLiquidGlassBadgeRefresh(self);
+}
+
+static void XLGLGBadgeSyncTabBarItems(id self,SEL cmd) {
+    if (gOrigLGBadgeSyncTabBarItems)
+        ((void(*)(id,SEL))gOrigLGBadgeSyncTabBarItems)(self,cmd);
+
+    XLGInvalidateLiquidGlassCompactBadge(self);
+    XLGNormalizeLiquidGlassBadges(self);
+    XLGScheduleLiquidGlassBadgeRefresh(self);
+}
+
+static void XLGLGBadgeSyncBadges(id self,SEL cmd) {
+    if (gOrigLGBadgeSyncBadges)
+        ((void(*)(id,SEL))gOrigLGBadgeSyncBadges)(self,cmd);
+
+    // Moe's syncBadges hook immediately normalizes after the original method.
+    XLGNormalizeLiquidGlassUnreadBadgeValues(self);
+    XLGInvalidateLiquidGlassCompactBadge(self);
+    XLGNormalizeLiquidGlassBadges(self);
+}
+
+static void XLGLGBadgeTraitCollectionDidChange(id self,SEL cmd,id previousTraitCollection) {
+    if (gOrigLGBadgeTraitCollectionDidChange)
+        ((void(*)(id,SEL,id))gOrigLGBadgeTraitCollectionDidChange)(
+            self,cmd,previousTraitCollection
+        );
+
+    XLGInvalidateLiquidGlassCompactBadge(self);
+    XLGNormalizeLiquidGlassBadges(self);
+}
+
+static void XLGLGBadgeViewDidLayoutSubviews(id self,SEL cmd) {
+    if (gOrigLGBadgeViewDidLayoutSubviews)
+        ((void(*)(id,SEL))gOrigLGBadgeViewDidLayoutSubviews)(self,cmd);
+
+    XLGNormalizeLiquidGlassUnreadBadgeValues(self);
+    XLGNormalizeLiquidGlassBadges(self);
+}
+
+static void XLGInstallLiquidGlassBadgeFixes(void) {
+    Class cls=NSClassFromString(@"T1LiquidGlassTabBarController");
+    if (!cls) return;
+
+    XLGHookMethod(cls,@selector(viewDidLoad),NO,
+                  (IMP)XLGLGBadgeViewDidLoad,&gOrigLGBadgeViewDidLoad);
+
+    XLGHookMethod(cls,@selector(viewDidAppear:),NO,
+                  (IMP)XLGLGBadgeViewDidAppear,&gOrigLGBadgeViewDidAppear);
+
+    XLGHookMethod(cls,NSSelectorFromString(@"setTabViews:"),NO,
+                  (IMP)XLGLGBadgeSetTabViews,&gOrigLGBadgeSetTabViews);
+
+    XLGHookMethod(cls,NSSelectorFromString(@"_t1_syncTabBarItems"),NO,
+                  (IMP)XLGLGBadgeSyncTabBarItems,&gOrigLGBadgeSyncTabBarItems);
+
+    XLGHookMethod(cls,NSSelectorFromString(@"syncBadges"),NO,
+                  (IMP)XLGLGBadgeSyncBadges,&gOrigLGBadgeSyncBadges);
+
+    XLGHookMethod(cls,@selector(traitCollectionDidChange:),NO,
+                  (IMP)XLGLGBadgeTraitCollectionDidChange,
+                  &gOrigLGBadgeTraitCollectionDidChange);
+
+    XLGHookMethod(cls,@selector(viewDidLayoutSubviews),NO,
+                  (IMP)XLGLGBadgeViewDidLayoutSubviews,
+                  &gOrigLGBadgeViewDidLayoutSubviews);
+}
+
 static void XLGInstallHooks(void) {
     Class cls = Nil;
 
@@ -958,6 +1200,7 @@ static void XLGInstallHooks(void) {
 
     XLGSyncCompatibilityGate();
     XLGInstallSidebarFix();
+    XLGInstallLiquidGlassBadgeFixes();
     XLGInstallNFBSettingsIntegration();
 }
 
@@ -974,7 +1217,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.3.1 standalone + NFB toggle + Moe swipe/navigation routing loaded");
+        NSLog(@"[XLiquidGlass] 1.4.0 standalone + NFB toggle + Moe swipe/navigation + badge fixes loaded");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
