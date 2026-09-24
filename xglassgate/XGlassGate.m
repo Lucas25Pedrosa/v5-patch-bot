@@ -1,156 +1,255 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <dispatch/dispatch.h>
-#import <dlfcn.h>
-#import <string.h>
 
-typedef void (*MSHookMemoryType)(void *target, const void *data, size_t size);
+static IMP gOrigInstallGate = NULL;
+static IMP gOrigInstallGateForAccount = NULL;
 
-static IMP gOriginalInstallGate = NULL;
-static BOOL gGetterPatched = NO;
-static BOOL gGateHookInstalled = NO;
+static BOOL gDebugSettingsHooked = NO;
+static BOOL gSwiftLiquidGlassHooked = NO;
+static BOOL gRedesignFeaturesHooked = NO;
+static BOOL gInstallGateHooked = NO;
+static BOOL gInstallGateForAccountHooked = NO;
+static BOOL gDummyFeatureHooked = NO;
 
-#pragma mark - Symbol lookup
+#pragma mark - Moe Liquid Glass ON state
 
-static void *XGGFindSymbol(const char *name) {
-    if (!name) return NULL;
-
-    void *symbol = dlsym(RTLD_DEFAULT, name);
-    if (symbol) return symbol;
-
-    char underscored[256] = {0};
-    size_t length = strlen(name);
-    if (length + 2 < sizeof(underscored)) {
-        underscored[0] = '_';
-        strlcpy(underscored + 1, name, sizeof(underscored) - 1);
-        symbol = dlsym(RTLD_DEFAULT, underscored);
-    }
-
-    return symbol;
+static BOOL XGGEnableLiquidGlass(void) {
+    // This standalone test build represents BHTManager.enableLiquidGlass == YES.
+    return YES;
 }
 
-#pragma mark - XAppearance getter patch
+#pragma mark - Runtime hook helper
 
-static BOOL XGGTryPatchAppearanceGetter(void) {
-    if (gGetterPatched) return YES;
+static BOOL XGGHookMethod(Class cls,
+                          SEL sel,
+                          BOOL classMethod,
+                          IMP replacement,
+                          IMP *originalOut) {
+    if (!cls || !sel || !replacement) return NO;
 
-    MSHookMemoryType hookMemory = (MSHookMemoryType)XGGFindSymbol("MSHookMemory");
-    if (!hookMemory) {
-        return NO;
-    }
-
-    void *getter = XGGFindSymbol("$s11XAppearance10AppearanceC20isLiquidGlassEnabledSbvgZ");
-    if (!getter) {
-        return NO;
-    }
-
-    // X 12.23 / TwitterSPMMigration.framework / offset 0x245F48.
-    // Original function prologue:
-    //   stp x29, x30, [sp, #-0x10]!
-    //   mov x29, sp
-    // Replacement:
-    //   mov w0, #1
-    //   ret
-    static const unsigned char expected[8] = {
-        0xFD, 0x7B, 0xBF, 0xA9,
-        0xFD, 0x03, 0x00, 0x91
-    };
-
-    static const unsigned char replacement[8] = {
-        0x20, 0x00, 0x80, 0x52,
-        0xC0, 0x03, 0x5F, 0xD6
-    };
-
-    if (memcmp(getter, replacement, sizeof(replacement)) == 0) {
-        gGetterPatched = YES;
-        return YES;
-    }
-
-    if (memcmp(getter, expected, sizeof(expected)) != 0) {
-        const unsigned char *bytes = (const unsigned char *)getter;
-        NSLog(@"[XGlassGate] getter bytes mismatch: %02x %02x %02x %02x %02x %02x %02x %02x",
-              bytes[0], bytes[1], bytes[2], bytes[3],
-              bytes[4], bytes[5], bytes[6], bytes[7]);
-        return NO;
-    }
-
-    hookMemory(getter, replacement, sizeof(replacement));
-    gGetterPatched = (memcmp(getter, replacement, sizeof(replacement)) == 0);
-
-    NSLog(@"[XGlassGate] XAppearance.isLiquidGlassEnabled getter %@",
-          gGetterPatched ? @"patched TRUE" : @"patch FAILED");
-
-    return gGetterPatched;
-}
-
-#pragma mark - Stable native gate from 0.1.0
-
-static void XGGInstallGateReplacement(id self, SEL _cmd, BOOL redesignEnabled) {
-    NSLog(@"[XGlassGate] %@ requested=%@ -> forced YES",
-          NSStringFromSelector(_cmd),
-          redesignEnabled ? @"YES" : @"NO");
-
-    if (gOriginalInstallGate) {
-        ((void (*)(id, SEL, BOOL))gOriginalInstallGate)(self, _cmd, YES);
-    }
-}
-
-static BOOL XGGTryInstallGateHook(void) {
-    if (gGateHookInstalled) return YES;
-
-    Class installerClass = objc_getClass("T1LiquidGlassGateInstaller");
-    if (!installerClass) return NO;
-
-    SEL selector = NSSelectorFromString(@"installGateWithRedesignEnabled:");
-    Method method = class_getClassMethod(installerClass, selector);
-    if (!method) {
-        method = class_getInstanceMethod(installerClass, selector);
-    }
+    Method method = classMethod ? class_getClassMethod(cls, sel)
+                                : class_getInstanceMethod(cls, sel);
     if (!method) return NO;
 
-    IMP current = method_getImplementation(method);
-    if (current == (IMP)XGGInstallGateReplacement) {
-        gGateHookInstalled = YES;
-        return YES;
+    Class target = classMethod ? object_getClass(cls) : cls;
+    if (!target) return NO;
+
+    IMP current = class_getMethodImplementation(target, sel);
+    if (current == replacement) return YES;
+
+    const char *types = method_getTypeEncoding(method);
+    if (!types) return NO;
+
+    if (originalOut && !*originalOut) {
+        *originalOut = current;
     }
 
-    gOriginalInstallGate = method_setImplementation(method,
-                                                     (IMP)XGGInstallGateReplacement);
-    gGateHookInstalled = (gOriginalInstallGate != NULL);
-
-    NSLog(@"[XGlassGate] native gate hook %@",
-          gGateHookInstalled ? @"installed" : @"FAILED");
-
-    return gGateHookInstalled;
+    class_replaceMethod(target, sel, replacement, types);
+    return class_getMethodImplementation(target, sel) == replacement;
 }
 
-#pragma mark - Load order
+#pragma mark - Exact ON-state replacements observed in Moe/NFB 6.3.1
 
-static void XGGInstall(void) {
-    XGGTryPatchAppearanceGetter();
-    XGGTryInstallGateHook();
+static BOOL XGGReturnLiquidGlassState(id self, SEL _cmd) {
+    (void)self;
+    (void)_cmd;
+    return XGGEnableLiquidGlass();
+}
+
+static BOOL XGGDummyTest1Feature(id self, SEL _cmd) {
+    (void)self;
+    (void)_cmd;
+
+    // Moe returns YES here whenever Liquid Glass is enabled.
+    if (XGGEnableLiquidGlass()) return YES;
+    return NO;
+}
+
+static void XGGInstallGateWithRedesignEnabled(id self,
+                                               SEL _cmd,
+                                               BOOL requestedState) {
+    (void)requestedState;
+
+    // Moe discards the value requested by X and forwards its own LG state.
+    if (gOrigInstallGate) {
+        ((void (*)(id, SEL, BOOL))gOrigInstallGate)(
+            self, _cmd, XGGEnableLiquidGlass()
+        );
+    }
+}
+
+static void XGGInstallGateForAccount(id self, SEL _cmd, id account) {
+    // Moe lets X install the normal account gate first...
+    if (gOrigInstallGateForAccount) {
+        ((void (*)(id, SEL, id))gOrigInstallGateForAccount)(
+            self, _cmd, account
+        );
+    }
+
+    // ...then immediately re-applies installGateWithRedesignEnabled:
+    // using BHTManager.enableLiquidGlass.
+    SEL gateSEL = NSSelectorFromString(@"installGateWithRedesignEnabled:");
+    if ([self respondsToSelector:gateSEL]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(
+            self, gateSEL, XGGEnableLiquidGlass()
+        );
+    }
+}
+
+#pragma mark - Moe compatibility gate
+
+static void XGGSyncLiquidGlassCompatibilityGate(void) {
+    BOOL enabled = XGGEnableLiquidGlass();
+
+    // Exact persisted gate used by Moe and already understood by X.
+    [[NSUserDefaults standardUserDefaults]
+        setBool:enabled
+        forKey:@"T1LiquidGlassRedesignPersistedGate"];
+
+    // Exact X-owned compatibility override called by Moe.
+    Class compatibility =
+        NSClassFromString(@"_TtC17TFSUtilitiesSwift32LiquidGlassCompatibilityOverride");
+    SEL applySEL = NSSelectorFromString(@"applyOverrideIfNeeded");
+
+    if (enabled &&
+        compatibility &&
+        [compatibility respondsToSelector:applySEL]) {
+        ((void (*)(id, SEL))objc_msgSend)(compatibility, applySEL);
+    }
+}
+
+#pragma mark - Hook installation
+
+static void XGGInstallMoeHooks(void) {
+    Class cls = Nil;
+
+    if (!gDebugSettingsHooked) {
+        cls = NSClassFromString(@"T1LiquidGlassDebugSettings");
+        if (cls) {
+            gDebugSettingsHooked =
+                XGGHookMethod(cls,
+                              NSSelectorFromString(@"useTabBarControllerEnabled"),
+                              YES,
+                              (IMP)XGGReturnLiquidGlassState,
+                              NULL);
+            if (gDebugSettingsHooked)
+                NSLog(@"[XGlassGateMoe] T1LiquidGlassDebugSettings hooked");
+        }
+    }
+
+    if (!gSwiftLiquidGlassHooked) {
+        cls = NSClassFromString(@"_TtC17TFSUtilitiesSwift11LiquidGlass");
+        if (cls) {
+            gSwiftLiquidGlassHooked =
+                XGGHookMethod(cls,
+                              NSSelectorFromString(@"isEnabled"),
+                              YES,
+                              (IMP)XGGReturnLiquidGlassState,
+                              NULL);
+            if (gSwiftLiquidGlassHooked)
+                NSLog(@"[XGlassGateMoe] TFSUtilitiesSwift.LiquidGlass hooked");
+        }
+    }
+
+    if (!gRedesignFeaturesHooked) {
+        cls = NSClassFromString(
+            @"_TtC14T1TwitterSwift27LiquidGlassRedesignFeatures"
+        );
+        if (cls) {
+            gRedesignFeaturesHooked =
+                XGGHookMethod(cls,
+                              NSSelectorFromString(@"isRedesignEnabled"),
+                              NO,
+                              (IMP)XGGReturnLiquidGlassState,
+                              NULL);
+            if (gRedesignFeaturesHooked)
+                NSLog(@"[XGlassGateMoe] LiquidGlassRedesignFeatures hooked");
+        }
+    }
+
+    cls = NSClassFromString(@"T1LiquidGlassGateInstaller");
+    if (cls) {
+        if (!gInstallGateHooked) {
+            gInstallGateHooked =
+                XGGHookMethod(
+                    cls,
+                    NSSelectorFromString(@"installGateWithRedesignEnabled:"),
+                    YES,
+                    (IMP)XGGInstallGateWithRedesignEnabled,
+                    &gOrigInstallGate
+                );
+            if (gInstallGateHooked)
+                NSLog(@"[XGlassGateMoe] installGateWithRedesignEnabled hooked");
+        }
+
+        if (!gInstallGateForAccountHooked) {
+            gInstallGateForAccountHooked =
+                XGGHookMethod(
+                    cls,
+                    NSSelectorFromString(@"installGateForAccount:"),
+                    YES,
+                    (IMP)XGGInstallGateForAccount,
+                    &gOrigInstallGateForAccount
+                );
+            if (gInstallGateForAccountHooked)
+                NSLog(@"[XGlassGateMoe] installGateForAccount hooked");
+        }
+    }
+
+    if (!gDummyFeatureHooked) {
+        cls = NSClassFromString(@"TFNTwitterAccount");
+        if (cls) {
+            gDummyFeatureHooked =
+                XGGHookMethod(
+                    cls,
+                    NSSelectorFromString(@"isDummyTest1FeatureEnabled"),
+                    NO,
+                    (IMP)XGGDummyTest1Feature,
+                    NULL
+                );
+            if (gDummyFeatureHooked)
+                NSLog(@"[XGlassGateMoe] TFNTwitterAccount dummy feature hooked");
+        }
+    }
+
+    XGGSyncLiquidGlassCompatibilityGate();
+
+    // Once the installer exists, explicitly synchronize it to ON.
+    Class installer = NSClassFromString(@"T1LiquidGlassGateInstaller");
+    SEL gateSEL = NSSelectorFromString(@"installGateWithRedesignEnabled:");
+    if (installer && [installer respondsToSelector:gateSEL]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(
+            installer, gateSEL, XGGEnableLiquidGlass()
+        );
+    }
 }
 
 static void XGGScheduleRetry(NSTimeInterval delay) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                 (int64_t)(delay * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        XGGInstall();
-    });
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{
+            XGGInstallMoeHooks();
+        }
+    );
 }
 
 __attribute__((constructor))
-static void XGlassGateInit(void) {
+static void XGlassGateMoeInit(void) {
     @autoreleasepool {
-        NSLog(@"[XGlassGate] 0.8.0 loaded");
+        NSLog(@"[XGlassGateMoe] 1.0.0 loaded - X 12.28.1 Moe activation path");
 
-        // Equivalent to the physical TwitterSPMMigration patch, but performed
-        // in memory. No Swift function trampoline, no T1Twitter patch, no
-        // second-factor hook, and no navigation branch patch.
-        XGGInstall();
+        // Moe's targets live in several X frameworks and do not necessarily
+        // exist at constructor time. Re-run installation as those images load.
+        XGGInstallMoeHooks();
         XGGScheduleRetry(0.00);
         XGGScheduleRetry(0.05);
         XGGScheduleRetry(0.20);
+        XGGScheduleRetry(0.50);
         XGGScheduleRetry(1.00);
+        XGGScheduleRetry(2.00);
+        XGGScheduleRetry(4.00);
     }
 }
