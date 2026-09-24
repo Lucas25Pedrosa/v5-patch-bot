@@ -417,6 +417,64 @@ static id XLGSidebarCurrentAccount(void) {
     return nil;
 }
 
+
+static UIViewController *XLGSidebarContentPresentingViewController(void) {
+    id appNavigation=XLGSidebarAppNavigation();
+    SEL currentPanelSEL=NSSelectorFromString(@"currentPanelNavigationController");
+
+    if (appNavigation && [appNavigation respondsToSelector:currentPanelSEL]) {
+        id panel=((id(*)(id,SEL))objc_msgSend)(appNavigation,currentPanelSEL);
+        if ([panel isKindOfClass:UIViewController.class]) {
+            return panel;
+        }
+    }
+
+    return XLGSidebarPresenter();
+}
+
+static void XLGRouteContentViewController(UIViewController *viewController) {
+    if (![viewController isKindOfClass:UIViewController.class]) return;
+
+    UIViewController *presenter=XLGSidebarContentPresentingViewController();
+    if (!presenter) return;
+
+    // This is Moe's first-choice route. X settings controllers implement this
+    // and construct their own navigation context, which preserves Back and the
+    // normal NeoFreeBird settings injection.
+    SEL tfnPresentSEL=NSSelectorFromString(@"tfn_presentFromViewController:animated:");
+    if ([viewController respondsToSelector:tfnPresentSEL]) {
+        ((void(*)(id,SEL,id,BOOL))objc_msgSend)(
+            viewController,
+            tfnPresentSEL,
+            presenter,
+            YES
+        );
+        return;
+    }
+
+    UINavigationController *navigation=nil;
+    if ([presenter isKindOfClass:UINavigationController.class]) {
+        navigation=(UINavigationController *)presenter;
+    } else {
+        navigation=presenter.navigationController;
+    }
+
+    if (navigation) {
+        [navigation pushViewController:viewController animated:YES];
+    } else {
+        [presenter presentViewController:viewController animated:YES completion:nil];
+    }
+}
+
+static void XLGRouteModalViewController(UIViewController *viewController) {
+    if (![viewController isKindOfClass:UIViewController.class]) return;
+
+    UIViewController *presenter=XLGSidebarContentPresentingViewController();
+    if (presenter) {
+        [presenter presentViewController:viewController animated:YES completion:nil];
+    }
+}
+
 @implementation XLiquidGlassSidebarDrawerViewController
 
 - (instancetype)init {
@@ -729,35 +787,46 @@ static id XLGSidebarCurrentAccount(void) {
 
 - (void)dashContentPresenterPresentContentViewController:(UIViewController *)viewController
                                         dismissDashBlock:(id)dismissDashBlock {
-    (void)dismissDashBlock;
-    [self xlg_dismissAnimated:YES completion:^{
-        UIViewController *presenter=XLGSidebarPresenter();
-        if ([presenter isKindOfClass:UINavigationController.class]) {
-            [(UINavigationController *)presenter pushViewController:viewController animated:YES];
-        } else if (presenter.navigationController) {
-            [presenter.navigationController pushViewController:viewController animated:YES];
-        } else {
-            [presenter presentViewController:viewController animated:YES completion:nil];
-        }
-    }];
+    dispatch_block_t route=^{
+        XLGRouteContentViewController(viewController);
+    };
+
+    // Moe gives X's own dismissDashBlock priority. That block restores the host
+    // navigation state before routing the selected sidebar destination.
+    if (dismissDashBlock) {
+        void (^dismiss)(BOOL,dispatch_block_t)=dismissDashBlock;
+        dismiss(YES,route);
+    } else {
+        [self xlg_dismissAnimated:YES completion:route];
+    }
 }
 
 - (void)dashContentPresenterPresentModalViewController:(UIViewController *)viewController
                                       dismissDashBlock:(id)dismissDashBlock {
-    (void)dismissDashBlock;
-    [self xlg_dismissAnimated:YES completion:^{
-        [XLGSidebarPresenter() presentViewController:viewController
-                                           animated:YES
-                                         completion:nil];
-    }];
+    dispatch_block_t route=^{
+        XLGRouteModalViewController(viewController);
+    };
+
+    if (dismissDashBlock) {
+        void (^dismiss)(BOOL,dispatch_block_t)=dismissDashBlock;
+        dismiss(YES,route);
+    } else {
+        [self xlg_dismissAnimated:YES completion:route];
+    }
 }
 
 - (void)dashContentPresenterSwitchAccountWithBlock:(id)block
                                   dismissDashBlock:(id)dismissDashBlock {
-    (void)dismissDashBlock;
-    [self xlg_dismissAnimated:YES completion:^{
+    dispatch_block_t switchAccount=^{
         if (block) ((void(^)(void))block)();
-    }];
+    };
+
+    if (dismissDashBlock) {
+        void (^dismiss)(BOOL,dispatch_block_t)=dismissDashBlock;
+        dismiss(YES,switchAccount);
+    } else {
+        [self xlg_dismissAnimated:YES completion:switchAccount];
+    }
 }
 @end
 
@@ -905,7 +974,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.3.0 standalone + NFB toggle + Moe-style swipe sidebar loaded");
+        NSLog(@"[XLiquidGlass] 1.3.1 standalone + NFB toggle + Moe swipe/navigation routing loaded");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
