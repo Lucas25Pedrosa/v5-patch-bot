@@ -301,14 +301,10 @@ static void XLGInstallNFBSettingsIntegration(void) {
 
 
 
-#pragma mark - Liquid Glass sidebar fix (Moe-compatible reconstruction)
+#pragma mark - Liquid Glass sidebar swipe fix
 
-static IMP gOrigNavDidShow = NULL;
-static IMP gOrigNavLayout = NULL;
 static IMP gOrigTabLoad = NULL;
 static IMP gOrigTabAppear = NULL;
-
-static char kXLGSidebarButtonInstalledKey;
 static char kXLGSidebarEdgePanKey;
 
 @class XLiquidGlassSidebarDrawerViewController;
@@ -321,74 +317,61 @@ static char kXLGSidebarEdgePanKey;
 @property (nonatomic, assign) BOOL presenting;
 + (instancetype)sharedCoordinator;
 - (UIViewController *)xlg_buildDashViewControllerForAccount:(id)account;
-- (void)xlg_presentAnimated:(BOOL)animated;
+- (BOOL)xlg_presentAnimated:(BOOL)animated;
 - (void)xlg_dismissAnimated:(BOOL)animated completion:(dispatch_block_t)completion;
-- (void)xlg_didTapSidebarButton:(id)sender;
 - (void)xlg_didRecognizeEdgePan:(UIScreenEdgePanGestureRecognizer *)gesture;
 @end
 
 @interface XLiquidGlassSidebarDrawerViewController : UIViewController
 @property (nonatomic, strong) UIViewController *dashViewController;
-@property (nonatomic, copy) dispatch_block_t dismissRequestHandler;
+@property (nonatomic, copy) void (^dismissRequestHandler)(BOOL animated);
 @property (nonatomic, strong) UIView *dimmingView;
 @property (nonatomic, strong) UIView *panelView;
 @property (nonatomic, strong) UIPanGestureRecognizer *panRecognizer;
-@property (nonatomic, assign) CGFloat panStartX;
+@property (nonatomic, assign) CGFloat progress;
+@property (nonatomic, assign) CGFloat panStartProgress;
+- (CGFloat)xlg_panelWidth;
+- (void)xlg_applyProgress;
 @end
 
-static UIWindow *XLGActiveWindow(void) {
+static UIWindow *XLGSidebarActiveWindow(void) {
+    UIWindow *fallback=nil;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         UIWindowScene *windowScene=(UIWindowScene *)scene;
         for (UIWindow *window in windowScene.windows) {
+            if (!fallback && !window.hidden) fallback=window;
             if (window.isKeyWindow) return window;
         }
     }
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class]) continue;
-        UIWindow *window=((UIWindowScene *)scene).windows.firstObject;
-        if (window) return window;
-    }
-    return nil;
+    return fallback;
 }
 
-static UIViewController *XLGTopViewController(void) {
-    UIViewController *vc=XLGActiveWindow().rootViewController;
-    for (NSInteger i=0; vc && i<32; i++) {
-        if (vc.presentedViewController) {
-            vc=vc.presentedViewController;
-            continue;
-        }
-        if ([vc isKindOfClass:UINavigationController.class]) {
-            UIViewController *next=((UINavigationController *)vc).visibleViewController;
-            if (next) { vc=next; continue; }
-        }
-        if ([vc isKindOfClass:UITabBarController.class]) {
-            UIViewController *next=((UITabBarController *)vc).selectedViewController;
-            if (next) { vc=next; continue; }
-        }
-        break;
+// Moe presents from the active window's root controller, following only the
+// presentedViewController chain. Do not descend into nav/tab children here.
+static UIViewController *XLGSidebarPresenter(void) {
+    UIViewController *controller=XLGSidebarActiveWindow().rootViewController;
+    while (controller.presentedViewController) {
+        controller=controller.presentedViewController;
     }
-    return vc;
+    return controller;
 }
 
-static id XLGCurrentAccount(void) {
-    // Same host-account fallback used by the Moe sidebar reconstruction:
-    // TFNTwitter.sharedTwitter.activeAccount.
+static id XLGSidebarCurrentAccount(void) {
     Class twitterClass=NSClassFromString(@"TFNTwitter");
     SEL sharedSEL=NSSelectorFromString(@"sharedTwitter");
+    SEL activeSEL=NSSelectorFromString(@"activeAccount");
+
     if (twitterClass && [twitterClass respondsToSelector:sharedSEL]) {
         id twitter=((id(*)(id,SEL))objc_msgSend)(twitterClass,sharedSEL);
-        SEL activeSEL=NSSelectorFromString(@"activeAccount");
         if (twitter && [twitter respondsToSelector:activeSEL]) {
             id account=((id(*)(id,SEL))objc_msgSend)(twitter,activeSEL);
             if (account) return account;
         }
     }
 
-    // Fallback: inspect the active navigation tree for an account accessor.
+    UIViewController *root=XLGSidebarActiveWindow().rootViewController;
     NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
-    UIViewController *root=XLGActiveWindow().rootViewController;
     if (root) [queue addObject:root];
 
     for (NSUInteger i=0;i<queue.count && i<128;i++) {
@@ -406,132 +389,139 @@ static id XLGCurrentAccount(void) {
 
 @implementation XLiquidGlassSidebarDrawerViewController
 
+- (instancetype)init {
+    self=[super initWithNibName:nil bundle:nil];
+    if (self) {
+        _progress=0.0;
+        self.modalPresentationStyle=UIModalPresentationOverFullScreen;
+        self.modalPresentationCapturesStatusBarAppearance=NO;
+    }
+    return self;
+}
+
+- (CGFloat)xlg_panelWidth {
+    CGFloat width=CGRectGetWidth(self.view.bounds);
+    if (width<=0.0) width=CGRectGetWidth(UIScreen.mainScreen.bounds);
+    return MIN(320.0,width*0.82);
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
-
     self.view.backgroundColor=UIColor.clearColor;
 
-    self.dimmingView=[[UIView alloc] initWithFrame:CGRectZero];
-    self.dimmingView.backgroundColor=[UIColor colorWithWhite:0 alpha:0.40];
+    self.dimmingView=[[UIView alloc] initWithFrame:self.view.bounds];
+    self.dimmingView.backgroundColor=UIColor.blackColor;
     self.dimmingView.alpha=0.0;
+    self.dimmingView.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.dimmingView];
 
-    UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                       action:@selector(xlg_didTapDimming:)];
+    UITapGestureRecognizer *tap=[[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(xlg_didTapDimmingView:)];
     [self.dimmingView addGestureRecognizer:tap];
 
     self.panelView=[[UIView alloc] initWithFrame:CGRectZero];
     self.panelView.backgroundColor=UIColor.systemBackgroundColor;
+    self.panelView.clipsToBounds=YES;
     [self.view addSubview:self.panelView];
 
-    self.panRecognizer=[[UIPanGestureRecognizer alloc] initWithTarget:self
-                                                               action:@selector(xlg_didPanPanel:)];
-    [self.panelView addGestureRecognizer:self.panRecognizer];
+    self.panRecognizer=[[UIPanGestureRecognizer alloc]
+        initWithTarget:self action:@selector(xlg_didPanPanel:)];
+    [self.view addGestureRecognizer:self.panRecognizer];
 
     if (self.dashViewController) {
         [self addChildViewController:self.dashViewController];
-        self.dashViewController.view.frame=self.panelView.bounds;
-        self.dashViewController.view.autoresizingMask=
-            UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         [self.panelView addSubview:self.dashViewController.view];
         [self.dashViewController didMoveToParentViewController:self];
     }
+
+    [self xlg_applyProgress];
 }
 
-- (CGFloat)xlg_panelWidth {
-    return MIN(320.0, self.view.bounds.size.width * 0.82);
+- (void)setDashViewController:(UIViewController *)dashViewController {
+    if (_dashViewController==dashViewController) return;
+
+    if (_dashViewController.parentViewController==self) {
+        [_dashViewController willMoveToParentViewController:nil];
+        [_dashViewController.view removeFromSuperview];
+        [_dashViewController removeFromParentViewController];
+    }
+
+    _dashViewController=dashViewController;
+
+    if (self.isViewLoaded && dashViewController) {
+        [self addChildViewController:dashViewController];
+        [self.panelView addSubview:dashViewController.view];
+        [dashViewController didMoveToParentViewController:self];
+        [self.view setNeedsLayout];
+    }
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     self.dimmingView.frame=self.view.bounds;
-
-    CGFloat width=[self xlg_panelWidth];
-    if (self.panelView.frame.size.width == 0) {
-        self.panelView.frame=CGRectMake(-width,0,width,self.view.bounds.size.height);
-    } else {
-        self.panelView.frame=CGRectMake(self.panelView.frame.origin.x,0,width,self.view.bounds.size.height);
-    }
+    [self xlg_applyProgress];
     self.dashViewController.view.frame=self.panelView.bounds;
 }
 
-- (void)xlg_showAnimated:(BOOL)animated {
-    [self.view layoutIfNeeded];
-    CGFloat width=[self xlg_panelWidth];
-    self.panelView.frame=CGRectMake(-width,0,width,self.view.bounds.size.height);
-
-    void (^changes)(void)=^{
-        self.dimmingView.alpha=1.0;
-        self.panelView.frame=CGRectMake(0,0,width,self.view.bounds.size.height);
-    };
-
-    if (animated) {
-        [UIView animateWithDuration:0.28
-                              delay:0
-             usingSpringWithDamping:0.92
-              initialSpringVelocity:0.0
-                            options:UIViewAnimationOptionCurveEaseOut
-                         animations:changes
-                         completion:nil];
-    } else {
-        changes();
-    }
+- (void)setProgress:(CGFloat)progress {
+    _progress=MAX(0.0,MIN(1.0,progress));
+    if (self.isViewLoaded) [self xlg_applyProgress];
 }
 
-- (void)xlg_hideAnimated:(BOOL)animated completion:(dispatch_block_t)completion {
+- (void)xlg_applyProgress {
     CGFloat width=[self xlg_panelWidth];
-    void (^changes)(void)=^{
-        self.dimmingView.alpha=0.0;
-        self.panelView.frame=CGRectMake(-width,0,width,self.view.bounds.size.height);
-    };
-    void (^done)(BOOL)=^(BOOL finished){
-        (void)finished;
-        if (completion) completion();
-    };
-
-    if (animated) {
-        [UIView animateWithDuration:0.22
-                         animations:changes
-                         completion:done];
-    } else {
-        changes();
-        done(YES);
-    }
+    CGFloat height=CGRectGetHeight(self.view.bounds);
+    CGFloat x=width*self.progress-width;
+    self.panelView.frame=CGRectMake(x,0,width,height);
+    self.dimmingView.alpha=0.40*self.progress;
+    self.dashViewController.view.frame=self.panelView.bounds;
 }
 
-- (void)xlg_didTapDimming:(id)sender {
+- (void)xlg_didTapDimmingView:(id)sender {
     (void)sender;
-    if (self.dismissRequestHandler) self.dismissRequestHandler();
+    if (self.dismissRequestHandler) self.dismissRequestHandler(YES);
 }
 
 - (void)xlg_didPanPanel:(UIPanGestureRecognizer *)gesture {
     CGFloat width=[self xlg_panelWidth];
+    if (width<=0.0) return;
 
-    if (gesture.state==UIGestureRecognizerStateBegan) {
-        self.panStartX=self.panelView.frame.origin.x;
-        return;
-    }
+    switch (gesture.state) {
+        case UIGestureRecognizerStateBegan:
+            self.panStartProgress=self.progress;
+            break;
 
-    if (gesture.state==UIGestureRecognizerStateChanged) {
-        CGFloat dx=[gesture translationInView:self.view].x;
-        CGFloat x=MIN(0.0,MAX(-width,self.panStartX+dx));
-        self.panelView.frame=CGRectMake(x,0,width,self.view.bounds.size.height);
-        self.dimmingView.alpha=MAX(0.0,MIN(1.0,1.0+x/width));
-        return;
-    }
-
-    if (gesture.state==UIGestureRecognizerStateEnded ||
-        gesture.state==UIGestureRecognizerStateCancelled) {
-        CGFloat velocity=[gesture velocityInView:self.view].x;
-        BOOL dismiss=(self.panelView.frame.origin.x < -width*0.35) || velocity < -500.0;
-        if (dismiss) {
-            if (self.dismissRequestHandler) self.dismissRequestHandler();
-        } else {
-            [UIView animateWithDuration:0.20 animations:^{
-                self.panelView.frame=CGRectMake(0,0,width,self.view.bounds.size.height);
-                self.dimmingView.alpha=1.0;
-            }];
+        case UIGestureRecognizerStateChanged: {
+            CGFloat dx=[gesture translationInView:self.view].x;
+            self.progress=self.panStartProgress+(dx/width);
+            break;
         }
+
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed: {
+            CGFloat velocity=[gesture velocityInView:self.view].x;
+            BOOL dismiss;
+            if (velocity < -200.0) dismiss=YES;
+            else if (velocity > 200.0) dismiss=NO;
+            else dismiss=self.progress<0.5;
+
+            if (dismiss) {
+                if (self.dismissRequestHandler) self.dismissRequestHandler(YES);
+            } else {
+                [UIView animateWithDuration:0.28
+                                      delay:0
+                     usingSpringWithDamping:1.0
+                      initialSpringVelocity:0.0
+                                    options:UIViewAnimationOptionCurveEaseOut
+                                 animations:^{ self.progress=1.0; }
+                                 completion:nil];
+            }
+            break;
+        }
+
+        default:
+            break;
     }
 }
 @end
@@ -541,9 +531,7 @@ static id XLGCurrentAccount(void) {
 + (instancetype)sharedCoordinator {
     static XLiquidGlassSidebarCoordinator *coordinator=nil;
     static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        coordinator=[XLiquidGlassSidebarCoordinator new];
-    });
+    dispatch_once(&onceToken,^{ coordinator=[XLiquidGlassSidebarCoordinator new]; });
     return coordinator;
 }
 
@@ -553,93 +541,103 @@ static id XLGCurrentAccount(void) {
     Class bridgeClass=NSClassFromString(@"T1URTNotificationsInteractionsTimelineBridge");
     Class contentClass=NSClassFromString(@"T1DashContentController");
     Class factoryClass=NSClassFromString(@"T1DashNavigationViewFactory");
+    if (!bridgeClass || !contentClass || !factoryClass) return nil;
 
-    if (!bridgeClass || !contentClass || !factoryClass) {
-        NSLog(@"[XLiquidGlass] Dash reconstruction classes are absent");
-        return nil;
+    id bridge=self.interactionsTimelineBridge;
+    if (!bridge) {
+        id alloc=((id(*)(id,SEL))objc_msgSend)(bridgeClass,@selector(alloc));
+        SEL initSEL=NSSelectorFromString(@"initWithAccount:");
+        if ([alloc respondsToSelector:initSEL]) {
+            bridge=((id(*)(id,SEL,id))objc_msgSend)(alloc,initSEL,account);
+        }
+        if (!bridge) bridge=((id(*)(id,SEL))objc_msgSend)(alloc,@selector(init));
+        self.interactionsTimelineBridge=bridge;
     }
+    if (!bridge) return nil;
 
-    id bridge=nil;
-    SEL bridgeInit=NSSelectorFromString(@"initWithAccount:");
-    id bridgeAlloc=((id(*)(id,SEL))objc_msgSend)(bridgeClass,@selector(alloc));
-    if ([bridgeAlloc respondsToSelector:bridgeInit]) {
-        bridge=((id(*)(id,SEL,id))objc_msgSend)(bridgeAlloc,bridgeInit,account);
-    } else {
-        bridge=((id(*)(id,SEL))objc_msgSend)(bridgeAlloc,@selector(init));
-    }
-
-    id content=nil;
-    SEL contentInit=NSSelectorFromString(@"initWithAccount:interactionsTimelineBridge:");
     id contentAlloc=((id(*)(id,SEL))objc_msgSend)(contentClass,@selector(alloc));
+    SEL contentInit=NSSelectorFromString(@"initWithAccount:interactionsTimelineBridge:");
+    id content=nil;
     if ([contentAlloc respondsToSelector:contentInit]) {
-        content=((id(*)(id,SEL,id,id))objc_msgSend)(contentAlloc,contentInit,account,bridge);
+        content=((id(*)(id,SEL,id,id))objc_msgSend)(
+            contentAlloc,contentInit,account,bridge);
     }
+    if (!content) return nil;
 
-    if (!content) {
-        NSLog(@"[XLiquidGlass] Could not construct T1DashContentController");
-        return nil;
-    }
+    self.dashContentController=content;
 
     SEL presenterSEL=NSSelectorFromString(@"presenter");
+    SEL delegateSEL=NSSelectorFromString(@"setDelegate:");
     if ([content respondsToSelector:presenterSEL]) {
         id presenter=((id(*)(id,SEL))objc_msgSend)(content,presenterSEL);
-        SEL delegateSEL=NSSelectorFromString(@"setDelegate:");
         if (presenter && [presenter respondsToSelector:delegateSEL]) {
             ((void(*)(id,SEL,id))objc_msgSend)(presenter,delegateSEL,self);
         }
     }
 
-    SEL buildSEL=NSSelectorFromString(@"buildDashViewControllerForAccount:dashContentController:");
-    UIViewController *dash=nil;
-    if ([factoryClass respondsToSelector:buildSEL]) {
-        id result=((id(*)(id,SEL,id,id))objc_msgSend)(factoryClass,buildSEL,account,content);
-        if ([result isKindOfClass:UIViewController.class]) dash=result;
-    }
+    SEL buildSEL=NSSelectorFromString(
+        @"buildDashViewControllerForAccount:dashContentController:");
+    if (![factoryClass respondsToSelector:buildSEL]) return nil;
 
-    if (!dash) {
-        NSLog(@"[XLiquidGlass] T1DashNavigationViewFactory returned no controller");
-        return nil;
-    }
-
-    self.account=account;
-    self.interactionsTimelineBridge=bridge;
-    self.dashContentController=content;
-    return dash;
+    id result=((id(*)(id,SEL,id,id))objc_msgSend)(
+        factoryClass,buildSEL,account,content);
+    return [result isKindOfClass:UIViewController.class] ? result : nil;
 }
 
-- (void)xlg_presentAnimated:(BOOL)animated {
-    if (!XLGEnabled() || self.presenting) return;
-
-    id account=XLGCurrentAccount();
-    if (!account) {
-        NSLog(@"[XLiquidGlass] No signed-in account for sidebar");
-        return;
-    }
+- (XLiquidGlassSidebarDrawerViewController *)xlg_makeDrawer {
+    id account=XLGSidebarCurrentAccount();
+    if (!account) return nil;
 
     UIViewController *dash=[self xlg_buildDashViewControllerForAccount:account];
-    if (!dash) return;
+    if (!dash) return nil;
 
-    XLiquidGlassSidebarDrawerViewController *drawer=[XLiquidGlassSidebarDrawerViewController new];
-    drawer.modalPresentationStyle=UIModalPresentationOverFullScreen;
-    drawer.modalTransitionStyle=UIModalTransitionStyleCrossDissolve;
+    self.account=account;
+
+    XLiquidGlassSidebarDrawerViewController *drawer=
+        [XLiquidGlassSidebarDrawerViewController new];
     drawer.dashViewController=dash;
 
     __weak typeof(self) weakSelf=self;
-    drawer.dismissRequestHandler=^{
-        [weakSelf xlg_dismissAnimated:YES completion:nil];
+    drawer.dismissRequestHandler=^(BOOL animated) {
+        [weakSelf xlg_dismissAnimated:animated completion:nil];
     };
+    return drawer;
+}
 
-    UIViewController *presenter=XLGTopViewController();
-    if (!presenter) return;
+- (BOOL)xlg_presentAnimated:(BOOL)animated {
+    if (!XLGEnabled()) return NO;
+    if (self.drawer || self.presenting) return YES;
 
-    self.presenting=YES;
+    UIViewController *presenter=XLGSidebarPresenter();
+    if (!presenter) return NO;
+
+    XLiquidGlassSidebarDrawerViewController *drawer=[self xlg_makeDrawer];
+    if (!drawer) {
+        NSLog(@"[XLiquidGlass] Swipe sidebar could not build native Dash");
+        return NO;
+    }
+
     self.drawer=drawer;
+    self.presenting=YES;
 
     [presenter presentViewController:drawer animated:NO completion:^{
-        [drawer xlg_showAnimated:animated];
         self.presenting=NO;
-        NSLog(@"[XLiquidGlass] Presented reconstructed Liquid Glass account sidebar");
+        void (^open)(void)=^{ drawer.progress=1.0; };
+        if (animated) {
+            [UIView animateWithDuration:0.28
+                                  delay:0
+                 usingSpringWithDamping:1.0
+                  initialSpringVelocity:0.0
+                                options:UIViewAnimationOptionCurveEaseOut
+                             animations:open
+                             completion:nil];
+        } else {
+            open();
+        }
+        NSLog(@"[XLiquidGlass] Moe-style left-edge sidebar presented");
     }];
+
+    return YES;
 }
 
 - (void)xlg_dismissAnimated:(BOOL)animated completion:(dispatch_block_t)completion {
@@ -649,23 +647,28 @@ static id XLGCurrentAccount(void) {
         return;
     }
 
-    [drawer xlg_hideAnimated:animated completion:^{
+    void (^finish)(void)=^{
         [drawer dismissViewControllerAnimated:NO completion:^{
             self.drawer=nil;
             self.dashContentController=nil;
-            self.interactionsTimelineBridge=nil;
             self.account=nil;
             if (completion) completion();
         }];
-    }];
-}
+    };
 
-- (void)xlg_didTapSidebarButton:(id)sender {
-    (void)sender;
-    [self xlg_presentAnimated:YES];
+    if (animated) {
+        [UIView animateWithDuration:0.22
+                         animations:^{ drawer.progress=0.0; }
+                         completion:^(__unused BOOL finished){ finish(); }];
+    } else {
+        drawer.progress=0.0;
+        finish();
+    }
 }
 
 - (void)xlg_didRecognizeEdgePan:(UIScreenEdgePanGestureRecognizer *)gesture {
+    // Exact Moe behavior: presentation starts as soon as the left-edge
+    // recognizer enters Began.
     if (gesture.state==UIGestureRecognizerStateBegan) {
         [self xlg_presentAnimated:YES];
     }
@@ -677,16 +680,17 @@ static id XLGCurrentAccount(void) {
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
- shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+ shouldRecognizeSimultaneouslyWithGestureRecognizer:
+    (UIGestureRecognizer *)otherGestureRecognizer {
     (void)gestureRecognizer;
     (void)otherGestureRecognizer;
     return YES;
 }
 
-// T1DashContentPresenter delegate routing used by the reconstructed host Dash.
 - (void)dashContentPresenterDismissDashAnimated:(BOOL)animated completion:(id)completion {
-    dispatch_block_t block=[completion isKindOfClass:NSClassFromString(@"NSBlock")] ? completion : nil;
-    [self xlg_dismissAnimated:animated completion:block];
+    [self xlg_dismissAnimated:animated completion:^{
+        if (completion) ((void(^)(void))completion)();
+    }];
 }
 
 - (void)dashContentPresenterDismissViewControllerAnimated:(BOOL)animated {
@@ -697,7 +701,7 @@ static id XLGCurrentAccount(void) {
                                         dismissDashBlock:(id)dismissDashBlock {
     (void)dismissDashBlock;
     [self xlg_dismissAnimated:YES completion:^{
-        UIViewController *presenter=XLGTopViewController();
+        UIViewController *presenter=XLGSidebarPresenter();
         if ([presenter isKindOfClass:UINavigationController.class]) {
             [(UINavigationController *)presenter pushViewController:viewController animated:YES];
         } else if (presenter.navigationController) {
@@ -712,7 +716,9 @@ static id XLGCurrentAccount(void) {
                                       dismissDashBlock:(id)dismissDashBlock {
     (void)dismissDashBlock;
     [self xlg_dismissAnimated:YES completion:^{
-        [XLGTopViewController() presentViewController:viewController animated:YES completion:nil];
+        [XLGSidebarPresenter() presentViewController:viewController
+                                           animated:YES
+                                         completion:nil];
     }];
 }
 
@@ -725,103 +731,31 @@ static id XLGCurrentAccount(void) {
 }
 @end
 
-static void XLGWireDashBarButtonItem(UIBarButtonItem *item,id account) {
-    if (!item) return;
-
-    XLiquidGlassSidebarCoordinator *coordinator=[XLiquidGlassSidebarCoordinator sharedCoordinator];
-    SEL targetSEL=NSSelectorFromString(@"setTarget:action:for:");
-
-    if ([item respondsToSelector:targetSEL]) {
-        ((void(*)(id,SEL,id,SEL,NSUInteger))objc_msgSend)(
-            item,targetSEL,coordinator,@selector(xlg_didTapSidebarButton:),64
-        );
-    } else {
-        item.target=coordinator;
-        item.action=@selector(xlg_didTapSidebarButton:);
-    }
-
-    SEL setAccountSEL=NSSelectorFromString(@"setAccount:");
-    if (account && [item respondsToSelector:setAccountSEL]) {
-        ((void(*)(id,SEL,id))objc_msgSend)(item,setAccountSEL,account);
-    }
-    item.accessibilityLabel=@"Account";
-}
-
-static void XLGInstallLeadingAccountButton(UIViewController *viewController) {
-    if (!XLGEnabled() || !viewController) return;
-
-    id account=XLGCurrentAccount();
-    if (!account) return;
-
-    UIBarButtonItem *existing=viewController.navigationItem.leftBarButtonItem;
-    Class dashItemClass=NSClassFromString(@"T1DashBarButtonItem");
-
-    // If X already rendered its avatar item but the Liquid Glass path left the
-    // action inert, preserve its image/account and repair only the target/action.
-    if (existing && dashItemClass && [existing isKindOfClass:dashItemClass]) {
-        XLGWireDashBarButtonItem(existing,account);
-        objc_setAssociatedObject(viewController,&kXLGSidebarButtonInstalledKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        return;
-    }
-
-    if ([objc_getAssociatedObject(viewController,&kXLGSidebarButtonInstalledKey) boolValue]) return;
-
-    UIBarButtonItem *item=nil;
-    if (dashItemClass) {
-        id allocated=((id(*)(id,SEL))objc_msgSend)(dashItemClass,@selector(alloc));
-        id initialized=((id(*)(id,SEL))objc_msgSend)(allocated,@selector(init));
-        if ([initialized isKindOfClass:UIBarButtonItem.class]) item=initialized;
-    }
-
-    if (!item) {
-        UIImage *image=[UIImage systemImageNamed:@"line.3.horizontal"];
-        item=[[UIBarButtonItem alloc] initWithImage:image
-                                              style:UIBarButtonItemStylePlain
-                                             target:nil
-                                             action:nil];
-    }
-
-    XLGWireDashBarButtonItem(item,account);
-    viewController.navigationItem.leftBarButtonItem=item;
-    objc_setAssociatedObject(viewController,&kXLGSidebarButtonInstalledKey,@YES,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    NSLog(@"[XLiquidGlass] Installed leading account button for Liquid Glass sidebar");
-}
-
 static void XLGInstallEdgeGesture(UIViewController *controller) {
-    if (!XLGEnabled() || !controller.view) return;
+    if (!XLGEnabled() || !controller || !controller.isViewLoaded) return;
     if (objc_getAssociatedObject(controller,&kXLGSidebarEdgePanKey)) return;
+
+    XLiquidGlassSidebarCoordinator *coordinator=
+        [XLiquidGlassSidebarCoordinator sharedCoordinator];
 
     UIScreenEdgePanGestureRecognizer *gesture=
         [[UIScreenEdgePanGestureRecognizer alloc]
-            initWithTarget:[XLiquidGlassSidebarCoordinator sharedCoordinator]
+            initWithTarget:coordinator
                     action:@selector(xlg_didRecognizeEdgePan:)];
+
+    // UIRectEdgeLeft == 2, exactly what Moe writes with setEdges:.
     gesture.edges=UIRectEdgeLeft;
-    gesture.delegate=[XLiquidGlassSidebarCoordinator sharedCoordinator];
-    gesture.cancelsTouchesInView=NO;
+    gesture.delegate=coordinator;
+
     [controller.view addGestureRecognizer:gesture];
+    objc_setAssociatedObject(
+        controller,
+        &kXLGSidebarEdgePanKey,
+        gesture,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC
+    );
 
-    objc_setAssociatedObject(controller,&kXLGSidebarEdgePanKey,gesture,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    NSLog(@"[XLiquidGlass] Installed left-edge account sidebar gesture");
-}
-
-static void XLGNavDidShow(id self,SEL cmd,id navigationController,id viewController,BOOL animated) {
-    if (gOrigNavDidShow) {
-        ((void(*)(id,SEL,id,id,BOOL))gOrigNavDidShow)(self,cmd,navigationController,viewController,animated);
-    }
-
-    if (![viewController isKindOfClass:UIViewController.class]) return;
-    UINavigationController *nav=[viewController navigationController];
-    UIViewController *first=nav.viewControllers.firstObject;
-    if (first==viewController) XLGInstallLeadingAccountButton(viewController);
-}
-
-static void XLGNavLayout(id self,SEL cmd) {
-    if (gOrigNavLayout) ((void(*)(id,SEL))gOrigNavLayout)(self,cmd);
-
-    if ([self isKindOfClass:UINavigationController.class]) {
-        UIViewController *first=((UINavigationController *)self).viewControllers.firstObject;
-        if (first) XLGInstallLeadingAccountButton(first);
-    }
+    NSLog(@"[XLiquidGlass] Moe-style left-edge swipe installed");
 }
 
 static void XLGTabLoad(id self,SEL cmd) {
@@ -835,19 +769,20 @@ static void XLGTabAppear(id self,SEL cmd,BOOL animated) {
 }
 
 static void XLGInstallSidebarFix(void) {
-    Class navClass=NSClassFromString(@"_TtC11XNavigation20NavigationController");
-    if (navClass) {
-        XLGHookMethod(navClass,
-                      NSSelectorFromString(@"navigationController:didShowViewController:animated:"),
-                      NO,(IMP)XLGNavDidShow,&gOrigNavDidShow);
-        XLGHookMethod(navClass,@selector(viewDidLayoutSubviews),NO,(IMP)XLGNavLayout,&gOrigNavLayout);
-    }
-
     Class tabClass=NSClassFromString(@"_TtC11XNavigation16TabBarController");
-    if (tabClass) {
-        XLGHookMethod(tabClass,@selector(viewDidLoad),NO,(IMP)XLGTabLoad,&gOrigTabLoad);
-        XLGHookMethod(tabClass,@selector(viewDidAppear:),NO,(IMP)XLGTabAppear,&gOrigTabAppear);
-    }
+    if (!tabClass) return;
+
+    XLGHookMethod(tabClass,
+                  @selector(viewDidLoad),
+                  NO,
+                  (IMP)XLGTabLoad,
+                  &gOrigTabLoad);
+
+    XLGHookMethod(tabClass,
+                  @selector(viewDidAppear:),
+                  NO,
+                  (IMP)XLGTabAppear,
+                  &gOrigTabAppear);
 }
 
 static void XLGInstallHooks(void) {
@@ -940,7 +875,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.2.0 standalone + NFB toggle + sidebar fix loaded");
+        NSLog(@"[XLiquidGlass] 1.3.0 standalone + NFB toggle + Moe-style swipe sidebar loaded");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
