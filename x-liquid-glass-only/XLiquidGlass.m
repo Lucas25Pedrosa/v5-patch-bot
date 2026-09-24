@@ -12,8 +12,6 @@ static IMP gOrigInstallGateForAccount = NULL;
 static IMP gOrigDummyFeature = NULL;
 static IMP gOrigNFBSetupSections = NULL;
 static IMP gOrigNFBViewWillAppear = NULL;
-static IMP gOrigCanPresentDash = NULL;
-static IMP gOrigDidTapDashButton = NULL;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -22,7 +20,6 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
-static BOOL gSidebarHooked = NO;
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
