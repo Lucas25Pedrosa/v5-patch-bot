@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.1 Beta 4
+#pragma mark - XLiquidGlass 1.9.1
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -5915,7 +5915,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.1 Beta 4 loaded: direct remote notification badge promotion + native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.1 stable loaded: direct remote notification badge promotion + native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
