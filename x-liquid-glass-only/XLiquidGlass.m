@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.5 Beta 14
+#pragma mark - XLiquidGlass 1.6.6 Beta 15
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -783,6 +783,122 @@ static BOOL XLGOpenTweetStatusNatively(long long statusID) {
 #pragma clang diagnostic pop
 }
 
+static NSString *XLGFoldedNotificationText(NSString *text) {
+    if (![text isKindOfClass:NSString.class] || !text.length) return @"";
+    return [[text stringByFoldingWithOptions:
+             (NSDiacriticInsensitiveSearch|NSCaseInsensitiveSearch)
+                                      locale:NSLocale.currentLocale]
+            lowercaseString] ?: @"";
+}
+
+static void XLGAppendNotificationViewText(UIView *view,
+                                          NSMutableString *output,
+                                          NSUInteger *visitedCount) {
+    if (!view || !output || !visitedCount || *visitedCount>=160) return;
+    (*visitedCount)++;
+
+    NSMutableArray<NSString *> *parts=[NSMutableArray array];
+
+    if ([view isKindOfClass:UILabel.class]) {
+        NSString *text=((UILabel *)view).text;
+        if (text.length) [parts addObject:text];
+    } else if ([view isKindOfClass:UITextView.class]) {
+        NSString *text=((UITextView *)view).text;
+        if (text.length) [parts addObject:text];
+    } else if ([view isKindOfClass:UIButton.class]) {
+        NSString *text=((UIButton *)view).titleLabel.text;
+        if (text.length) [parts addObject:text];
+    }
+
+    NSString *accessibility=view.accessibilityLabel;
+    if (accessibility.length) [parts addObject:accessibility];
+
+    for (NSString *part in parts) {
+        if (output.length) [output appendString:@" "];
+        [output appendString:part];
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        XLGAppendNotificationViewText(subview,output,visitedCount);
+    }
+}
+
+static BOOL XLGNotificationCellLooksLikeNewPostAggregate(id cell) {
+    if (![cell isKindOfClass:UIView.class]) return NO;
+
+    NSMutableString *raw=[NSMutableString string];
+    NSUInteger visited=0;
+    XLGAppendNotificationViewText((UIView *)cell,raw,&visited);
+
+    NSString *text=XLGFoldedNotificationText(raw);
+    if (!text.length) return NO;
+
+    // X localized copy seen in the grouped device-follow notification.
+    // Keep English variants too so the fix is not tied to pt-BR.
+    NSArray<NSString *> *needles=@[
+        @"novas notificacoes do post",
+        @"novas notificacoes de post",
+        @"new post notifications",
+        @"new posts from",
+        @"new tweet notifications",
+        @"new tweets from"
+    ];
+    for (NSString *needle in needles) {
+        if ([text containsString:needle]) return YES;
+    }
+
+    return NO;
+}
+
+static BOOL XLGOpenNewPostNotificationTimelineNatively(void) {
+    id appNavigation=XLGSidebarAppNavigation();
+
+    // Reverse-engineered X 12.28.1 mapping:
+    // 0 = device_follow
+    // 1 = subscriber_device_follow
+    // 2 = verified_device_follow
+    const long long timelineType=0;
+
+    SEL showSEL=NSSelectorFromString(
+        @"showNewTweetsNotificationTimelineWithSource:"
+         "timelineType:completion:");
+
+    if (appNavigation && [appNavigation respondsToSelector:showSEL]) {
+        typedef void (*ShowTimelineFn)(
+            id,SEL,long long,long long,id);
+        ((ShowTimelineFn)objc_msgSend)(
+            appNavigation,
+            showSEL,
+            0,
+            timelineType,
+            nil
+        );
+        return YES;
+    }
+
+    // Fallback to X's native factory if the appNavigation facade changes.
+    Class factory=NSClassFromString(
+        @"_TtC14T1TwitterSwift30URTNotificationTimelineFactory");
+    SEL factorySEL=NSSelectorFromString(
+        @"makeTweetNotificationViewControllerWithTimelineType:account:");
+    id account=XLGSidebarCurrentAccount();
+
+    if (factory && account && [factory respondsToSelector:factorySEL]) {
+        id controller=((id(*)(id,SEL,long long,id))objc_msgSend)(
+            factory,
+            factorySEL,
+            timelineType,
+            account
+        );
+        if ([controller isKindOfClass:UIViewController.class]) {
+            XLGRouteContentViewController((UIViewController *)controller);
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
 static BOOL XLGNotificationTapTouchIsInteractive(UIView *view,
                                                  UIView *cell) {
     UIView *cursor=view;
@@ -822,11 +938,15 @@ static void XLGNotificationCellHandleTap(id self,
     if (recognizer.state!=UIGestureRecognizerStateEnded) return;
 
     long long statusID=XLGStatusIDFromNotificationCell(self);
-    if (statusID<=0) return;
+    BOOL newPostAggregate=
+        statusID<=0 && XLGNotificationCellLooksLikeNewPostAggregate(self);
+
+    if (statusID<=0 && !newPostAggregate) return;
 
     // Keep the original X touch path alive (cancelsTouchesInView=NO). If X
-    // navigates successfully on its own, do nothing. Otherwise use Moe's
-    // native conversation route as a fallback.
+    // navigates successfully on its own, do nothing. Otherwise:
+    // - status notifications use Moe's native conversation route;
+    // - grouped "new post notifications" use X's device-follow timeline.
     UIViewController *beforePresenter=
         XLGSidebarContentPresentingViewController();
     UINavigationController *beforeNavigation=
@@ -851,7 +971,11 @@ static void XLGNotificationCellHandleTap(id self,
                 (afterPresented && afterPresented!=beforePresented);
 
             if (!nativeHandled) {
-                XLGOpenTweetStatusNatively(statusID);
+                if (statusID>0) {
+                    XLGOpenTweetStatusNatively(statusID);
+                } else if (newPostAggregate) {
+                    XLGOpenNewPostNotificationTimelineNatively();
+                }
             }
         });
 }
@@ -3371,7 +3495,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.5 Beta 14 loaded: Moe notification selection fix + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.6 Beta 15 loaded: grouped new-post notifications + Moe notification selection fix + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
