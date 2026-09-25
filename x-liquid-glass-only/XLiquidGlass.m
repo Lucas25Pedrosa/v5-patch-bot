@@ -1131,14 +1131,9 @@ static IMP gOrigXNavItemLayout = NULL;
 static IMP gOrigActiveAccountDidChange = NULL;
 static IMP gOrigAppBadgingSetCurrentUserID = NULL;
 static IMP gOrigAppBadgingSetUserIDsCurrentUserID = NULL;
-static IMP gOrigPushRouterSetBadgeCountsForUserID = NULL;
-static IMP gOrigPushRouterUpdateBadgeCountFromNotification = NULL;
-static IMP gOrigAppBadgingSetRemoteBadgeCountUserID = NULL;
 static IMP gOrigAppBadgingSetLocalUnseenDMCountUserIDDate = NULL;
 static IMP gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate = NULL;
-static IMP gOrigAppBadgingSetLocalActivityCountUserIDDate = NULL;
 static IMP gOrigTFNApplyRemoteBadgeCounts = NULL;
-static IMP gOrigRootBadgerUpdateBadgeCount = NULL;
 static id gXLGBadgeNotificationObserver = nil;
 static id gXLGDefaultsObserver = nil;
 static char kXLGBadgeLabelKey;
@@ -2583,12 +2578,6 @@ static void XLGActiveAccountDidChange(id self, SEL cmd, id argument) {
     XLGSetActiveBadgeUserID(userID, @"T1AppEventHandler._t1_activeAccountDidChange:");
 }
 
-static NSString *XLGMethodEncoding(Class cls, SEL selector) {
-    Method method = cls ? class_getInstanceMethod(cls, selector) : NULL;
-    const char *encoding = method ? method_getTypeEncoding(method) : NULL;
-    return encoding ? [NSString stringWithUTF8String:encoding] : @"-";
-}
-
 static BOOL XLGMethodIsVoidWithExtraArgs(Class cls,
                                               SEL selector,
                                               unsigned int extraArgs) {
@@ -2603,173 +2592,12 @@ static BOOL XLGMethodIsVoidWithExtraArgs(Class cls,
     return *p == 'v';
 }
 
-static NSString *XLGDescribeRawArgument(Class cls,
-                                             SEL selector,
-                                             unsigned int methodArgIndex,
-                                             uintptr_t raw) {
-    Method method = cls ? class_getInstanceMethod(cls, selector) : NULL;
-    if (!method) return [NSString stringWithFormat:@"raw=0x%llx",
-                         (unsigned long long)raw];
-
-    char type[64] = {0};
-    method_getArgumentType(method, methodArgIndex, type, sizeof(type));
-    const char *p = type;
-    while (*p && strchr("rnNoORV", *p)) p++;
-
-    if (*p == '@') {
-        id object = raw ? (__bridge id)((void *)raw) : nil;
-        NSString *desc = object ? [object description] : @"nil";
-        if (desc.length > 180) {
-            desc = [[desc substringToIndex:180] stringByAppendingString:@"…"];
-        }
-        return [NSString stringWithFormat:@"type=%s class=%@ value=%@",
-                p,
-                object ? NSStringFromClass([object class]) : @"nil",
-                desc ?: @"-"];
-    }
-
-    if (strchr("qQiIlLsScCB", *p)) {
-        return [NSString stringWithFormat:@"type=%s value=%llu",
-                p,
-                (unsigned long long)raw];
-    }
-
-    return [NSString stringWithFormat:@"type=%s raw=0x%llx",
-            p,
-            (unsigned long long)raw];
-}
-
-static void XLGLogBadgeObject(NSString *source,
-                                   NSString *userID,
-                                   id object) {
-    if (!object) {
-        XLGDiagLog(@"SOURCE_OBJECT source=%@ user=%@ object=nil",
-                      source ?: @"-",
-                      userID ?: @"-");
-        return;
-    }
-
-    NSInteger ntab = -1, dm = -1, xchat = -1, total = -1;
-    BOOL hasNtab = XLGReadNTabCount(object, &ntab);
-    BOOL hasDM = XLGReadDMCount(object, &dm);
-    BOOL hasXChat = XLGReadXChatCount(object, &xchat);
-    BOOL hasTotal = XLGReadTotalCount(object, &total);
-
-    XLGDiagLog(@"SOURCE_OBJECT source=%@ user=%@ class=%@ ntab=%@ dm=%@ xchat=%@ total=%@",
-                  source ?: @"-",
-                  userID ?: @"-",
-                  NSStringFromClass([object class]),
-                  hasNtab ? [@(ntab) stringValue] : @"?",
-                  hasDM ? [@(dm) stringValue] : @"?",
-                  hasXChat ? [@(xchat) stringValue] : @"?",
-                  hasTotal ? [@(total) stringValue] : @"?");
-}
-
-static void XLGLogBadgeMap(NSString *source, id candidate) {
-    NSDictionary *map = nil;
-    if ([candidate isKindOfClass:NSDictionary.class]) {
-        map = candidate;
-    } else {
-        id nested = XLGSafeValueForKey(candidate, @"badgeCountsForUserID");
-        if ([nested isKindOfClass:NSDictionary.class]) map = nested;
-    }
-
-    if (![map isKindOfClass:NSDictionary.class]) {
-        XLGDiagLog(@"SOURCE_MAP source=%@ mapClass=%@ valid=0",
-                      source ?: @"-",
-                      candidate ? NSStringFromClass([candidate class]) : @"nil");
-        return;
-    }
-
-    XLGDiagLog(@"SOURCE_MAP_BEGIN source=%@ entries=%lu active=%@ nav=%@",
-                  source ?: @"-",
-                  (unsigned long)map.count,
-                  XLGCurrentActiveUserID() ?: @"-",
-                  XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0) ?: @"-");
-
-    NSArray *keys = [[map allKeys]
-        sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
-            return [[a description] compare:[b description]];
-        }];
-
-    for (id key in keys) {
-        NSString *userID = XLGNormalizedUserID(key) ?: [key description];
-        XLGLogBadgeObject(source, userID, map[key]);
-    }
-
-    XLGDiagLog(@"SOURCE_MAP_END source=%@", source ?: @"-");
-}
-
-static void XLGPushRouterSetBadgeCountsForUserID(id self,
-                                                  SEL cmd,
-                                                  id argument) {
-    XLGDiagLog(@"SOURCE_CALL phase=before class=T1PushNotificationRouter selector=%@ argClass=%@",
-                  NSStringFromSelector(cmd),
-                  argument ? NSStringFromClass([argument class]) : @"nil");
-    XLGLogBadgeMap(@"T1PushNotificationRouter.setBadgeCountsForUserID:.arg",
-                        argument);
-
-    if (gOrigPushRouterSetBadgeCountsForUserID) {
-        ((void(*)(id,SEL,id))gOrigPushRouterSetBadgeCountsForUserID)(
-            self, cmd, argument);
-    }
-
-    XLGLogBadgeMap(@"T1PushNotificationRouter.setBadgeCountsForUserID:.self.after",
-                        self);
-}
-
-static void XLGPushRouterUpdateBadgeCountFromNotification(id self,
-                                                          SEL cmd,
-                                                          id argument) {
-    XLGDiagLog(@"SOURCE_CALL phase=before class=T1PushNotificationRouter selector=%@ argClass=%@",
-                  NSStringFromSelector(cmd),
-                  argument ? NSStringFromClass([argument class]) : @"nil");
-    XLGLogBadgeMap(@"T1PushNotificationRouter._updateBadgeCountFromNotification:.arg",
-                        argument);
-
-    if (gOrigPushRouterUpdateBadgeCountFromNotification) {
-        ((void(*)(id,SEL,id))gOrigPushRouterUpdateBadgeCountFromNotification)(
-            self, cmd, argument);
-    }
-
-    XLGLogBadgeMap(@"T1PushNotificationRouter._updateBadgeCountFromNotification:.self.after",
-                        self);
-}
-
-static void XLGAppBadgingSetRemoteBadgeCountUserID(id self,
-                                                    SEL cmd,
-                                                    uintptr_t arg1,
-                                                    uintptr_t arg2) {
-    Class cls = [self class];
-    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@}",
-                  NSStringFromClass(cls),
-                  NSStringFromSelector(cmd),
-                  XLGDescribeRawArgument(cls, cmd, 2, arg1),
-                  XLGDescribeRawArgument(cls, cmd, 3, arg2));
-
-    if (gOrigAppBadgingSetRemoteBadgeCountUserID) {
-        ((void(*)(id,SEL,uintptr_t,uintptr_t))
-         gOrigAppBadgingSetRemoteBadgeCountUserID)(self, cmd, arg1, arg2);
-    }
-
-    XLGLogBadgeMap(@"T1AppBadging.setRemoteBadgeCount:userID:.self.after",
-                        self);
-}
-
 static void XLGAppBadgingSetLocalUnseenDMCountUserIDDate(id self,
                                                          SEL cmd,
                                                          uintptr_t arg1,
                                                          uintptr_t arg2,
                                                          uintptr_t arg3) {
-    Class cls = [self class];
     XLGRememberLocalDMSource((unsigned long long)arg2, (NSInteger)arg1);
-    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
-                  NSStringFromClass(cls),
-                  NSStringFromSelector(cmd),
-                  XLGDescribeRawArgument(cls, cmd, 2, arg1),
-                  XLGDescribeRawArgument(cls, cmd, 3, arg2),
-                  XLGDescribeRawArgument(cls, cmd, 4, arg3));
-
     if (gOrigAppBadgingSetLocalUnseenDMCountUserIDDate) {
         ((void(*)(id,SEL,uintptr_t,uintptr_t,uintptr_t))
          gOrigAppBadgingSetLocalUnseenDMCountUserIDDate)(
@@ -2783,44 +2611,13 @@ static void XLGAppBadgingSetLocalUnseenXChatCountUserIDDate(id self,
                                                             uintptr_t arg1,
                                                             uintptr_t arg2,
                                                             uintptr_t arg3) {
-    Class cls = [self class];
     XLGRememberLocalXChatSource((unsigned long long)arg2, (NSInteger)arg1);
-    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
-                  NSStringFromClass(cls),
-                  NSStringFromSelector(cmd),
-                  XLGDescribeRawArgument(cls, cmd, 2, arg1),
-                  XLGDescribeRawArgument(cls, cmd, 3, arg2),
-                  XLGDescribeRawArgument(cls, cmd, 4, arg3));
-
     if (gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate) {
         ((void(*)(id,SEL,uintptr_t,uintptr_t,uintptr_t))
          gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate)(
             self, cmd, arg1, arg2, arg3);
     }
 
-}
-
-static void XLGAppBadgingSetLocalActivityCountUserIDDate(id self,
-                                                         SEL cmd,
-                                                         uintptr_t arg1,
-                                                         uintptr_t arg2,
-                                                         uintptr_t arg3) {
-    Class cls = [self class];
-    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
-                  NSStringFromClass(cls),
-                  NSStringFromSelector(cmd),
-                  XLGDescribeRawArgument(cls, cmd, 2, arg1),
-                  XLGDescribeRawArgument(cls, cmd, 3, arg2),
-                  XLGDescribeRawArgument(cls, cmd, 4, arg3));
-
-    if (gOrigAppBadgingSetLocalActivityCountUserIDDate) {
-        ((void(*)(id,SEL,uintptr_t,uintptr_t,uintptr_t))
-         gOrigAppBadgingSetLocalActivityCountUserIDDate)(
-            self, cmd, arg1, arg2, arg3);
-    }
-
-    XLGLogBadgeMap(@"T1AppBadging.setLocalActivityCount:userID:date:.self.after",
-                        self);
 }
 
 static void XLGTFNApplyRemoteBadgeCounts(id self,
@@ -2830,22 +2627,11 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
                                          uintptr_t xchat,
                                          uintptr_t total,
                                          uintptr_t dateRaw) {
-    Class cls = [self class];
     NSString *userID = XLGTryResolveUserID(self, 0) ?: @"-";
 
     if (![userID isEqualToString:@"-"]) {
         XLGRememberRemoteBadgeSource(userID, ntab, dm, xchat, total);
     }
-
-    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ user=%@ ntab={%@} dm={%@} xchat={%@} total={%@} date={%@}",
-                  NSStringFromClass(cls),
-                  NSStringFromSelector(cmd),
-                  userID,
-                  XLGDescribeRawArgument(cls, cmd, 2, ntab),
-                  XLGDescribeRawArgument(cls, cmd, 3, dm),
-                  XLGDescribeRawArgument(cls, cmd, 4, xchat),
-                  XLGDescribeRawArgument(cls, cmd, 5, total),
-                  XLGDescribeRawArgument(cls, cmd, 6, dateRaw));
 
     if (gOrigTFNApplyRemoteBadgeCounts) {
         ((void(*)(id,SEL,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t))
@@ -2853,49 +2639,6 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
             self, cmd, ntab, dm, xchat, total, dateRaw);
     }
 
-}
-
-static void XLGRootBadgerUpdateBadgeCount(id self,
-                                          SEL cmd,
-                                          NSInteger value) {
-    NSString *userID = XLGTryResolveUserID(XLGSafeValueForKey(self, @"account"), 0);
-    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ user=%@ value=%ld",
-                  NSStringFromClass([self class]),
-                  NSStringFromSelector(cmd),
-                  userID ?: @"-",
-                  (long)value);
-
-    if (gOrigRootBadgerUpdateBadgeCount) {
-        ((void(*)(id,SEL,NSInteger))gOrigRootBadgerUpdateBadgeCount)(
-            self, cmd, value);
-    }
-}
-
-static BOOL XLGInstallSourceProbeHook(Class cls,
-                                      NSString *selectorName,
-                                      unsigned int extraArgs,
-                                      IMP replacement,
-                                      IMP *originalOut) {
-    if (!cls || !selectorName.length || !replacement || !originalOut) return NO;
-    SEL selector = NSSelectorFromString(selectorName);
-    NSString *encoding = XLGMethodEncoding(cls, selector);
-
-    if (!XLGMethodIsVoidWithExtraArgs(cls, selector, extraArgs)) {
-        XLGDiagLog(@"SOURCE_HOOK class=%@ selector=%@ encoding=%@ installed=0 reason=incompatible-signature",
-                      NSStringFromClass(cls),
-                      selectorName,
-                      encoding);
-        return NO;
-    }
-
-    BOOL installed =
-        XLGHookMethod(cls, selector, NO, replacement, originalOut);
-    XLGDiagLog(@"SOURCE_HOOK class=%@ selector=%@ encoding=%@ installed=%d",
-                  NSStringFromClass(cls),
-                  selectorName,
-                  encoding,
-                  installed);
-    return installed;
 }
 
 static BOOL XLGInstallCheckedFunctionalHook(Class cls,
