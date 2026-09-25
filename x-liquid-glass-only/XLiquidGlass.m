@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.3 Final
+#pragma mark - XLiquidGlass 1.6.4 Final
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -1197,6 +1197,7 @@ static NSDictionary *gXLGLastBadgeCountsByUserID = nil;
 static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeStateByUserID = nil;
 static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeSourceStateByUserID = nil;
 static const NSTimeInterval kXLGBadgeReconcileWindow = 0.75;
+static const NSTimeInterval kXLGBadgeActivationGraceWindow = 1.00;
 static BOOL gXLGBadgePersistenceLoaded = NO;
 static IMP gOrigXNavItemLayout = NULL;
 static IMP gOrigActiveAccountDidChange = NULL;
@@ -1623,7 +1624,7 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         return YES;
     }
 
-    NSDictionary *source = XLGSourceStateForUserID(userID, NO);
+    NSMutableDictionary *source = XLGSourceStateForUserID(userID, NO);
     if (!source) return NO;
 
     NSInteger remoteNtab = XLGStateInteger(source, @"remoteNtab", -1);
@@ -1651,46 +1652,6 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         rawXChat == 0 &&
         rawTotal == 0;
 
-    // Final: once direct TFNTwitterAccount + local DM establish a trusted
-    // notifications-only state, aggregate AccountBadgesDidChange maps are not
-    // allowed to erase or relabel it. Trust has no arbitrary time expiry; only
-    // a new direct source/local category update can invalidate it.
-    if (trusted &&
-        XLGRemoteSourceLooksLikeNotificationsOnly(source) &&
-        localDM == 0 &&
-        (rawMisroute || rawZero)) {
-
-        NSString *active = XLGCurrentActiveUserID();
-        NSString *reason = rawMisroute
-            ? @"trusted-ntab-misroute"
-            : ([active isEqualToString:userID]
-                ? @"trusted-zero-active-no-new-source"
-                : @"trusted-zero-inactive-account");
-
-        XLGDiagLog(@"PRESERVE_TRUSTED user=%@ reason=%@ active=%@ raw(ntab=%ld dm=%ld xchat=%ld total=%ld) trusted(ntab=%ld dm=%ld xchat=%ld total=%ld) -> keep(ntab=%ld dm=0 xchat=0 total=%ld)",
-                       userID,
-                       reason,
-                       active ?: @"-",
-                       (long)rawNtab,
-                       (long)rawDM,
-                       (long)rawXChat,
-                       (long)rawTotal,
-                       (long)remoteNtab,
-                       (long)remoteDM,
-                       (long)remoteXChat,
-                       (long)remoteTotal,
-                       (long)remoteNtab,
-                       (long)remoteTotal);
-
-        *ntab = remoteNtab;
-        *dm = 0;
-        *xchat = 0;
-        *total = remoteTotal;
-        return YES;
-    }
-
-    // Beta 10 short-window fallback remains for the brief interval before the
-    // persistent trust lock is fully established.
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     NSTimeInterval remoteTimestamp =
         [source[@"remoteTimestamp"] respondsToSelector:@selector(doubleValue)]
@@ -1699,6 +1660,85 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
     NSTimeInterval remoteAge =
         remoteTimestamp > 0 ? now - remoteTimestamp : DBL_MAX;
 
+    NSTimeInterval activeTimestamp =
+        [source[@"activeTimestamp"] respondsToSelector:@selector(doubleValue)]
+            ? [source[@"activeTimestamp"] doubleValue]
+            : 0;
+    NSTimeInterval activeAge =
+        activeTimestamp > 0 ? now - activeTimestamp : DBL_MAX;
+
+    // 1.6.4:
+    // - misrouted ntab->DM remains protected while the direct source says
+    //   notifications-only;
+    // - zeros for an inactive account remain protected across account switches;
+    // - an all-zero map immediately after activating an account is treated as
+    //   X's transient switch state;
+    // - once the active account has settled, an all-zero map is accepted as a
+    //   legitimate "read/cleared" notification state and invalidates stale trust.
+    if (trusted &&
+        XLGRemoteSourceLooksLikeNotificationsOnly(source) &&
+        localDM == 0) {
+
+        NSString *active = XLGCurrentActiveUserID();
+        BOOL isActive = [active isEqualToString:userID];
+
+        if (rawMisroute) {
+            XLGDiagLog(@"PRESERVE_TRUSTED user=%@ reason=trusted-ntab-misroute active=%@",
+                       userID, active ?: @"-");
+            *ntab = remoteNtab;
+            *dm = 0;
+            *xchat = 0;
+            *total = remoteTotal;
+            return YES;
+        }
+
+        if (rawZero) {
+            BOOL remoteStillFresh =
+                remoteAge >= 0 && remoteAge <= kXLGBadgeReconcileWindow;
+            BOOL justActivated =
+                activeAge >= 0 && activeAge <= kXLGBadgeActivationGraceWindow;
+
+            if (!isActive || remoteStillFresh || justActivated) {
+                NSString *reason = !isActive
+                    ? @"trusted-zero-inactive-account"
+                    : (justActivated
+                        ? @"trusted-zero-account-activation"
+                        : @"trusted-zero-after-remote");
+
+                XLGDiagLog(@"PRESERVE_TRUSTED user=%@ reason=%@ active=%@ remoteAge=%.3f activeAge=%.3f",
+                           userID,
+                           reason,
+                           active ?: @"-",
+                           remoteAge,
+                           activeAge);
+
+                *ntab = remoteNtab;
+                *dm = 0;
+                *xchat = 0;
+                *total = remoteTotal;
+                return YES;
+            }
+
+            // The account is active and stable. At this point the aggregate
+            // zero is the best live signal that the notification badge was
+            // actually cleared by viewing/reading notifications.
+            XLGDiagLog(@"TRUST_INVALIDATED user=%@ reason=active-stable-zero-read remoteAge=%.3f activeAge=%.3f",
+                       userID,
+                       remoteAge,
+                       activeAge);
+
+            source[@"trustedNotifications"] = @NO;
+            source[@"remoteNtab"] = @0;
+            source[@"remoteDM"] = @0;
+            source[@"remoteXChat"] = @0;
+            source[@"remoteTotal"] = @0;
+            source[@"remoteTimestamp"] = @(now);
+            return NO;
+        }
+    }
+
+    // Beta 10 short-window fallback remains for the brief interval before the
+    // persistent trust lock is fully established.
     NSTimeInterval localDMTimestamp =
         [source[@"localDMTimestamp"] respondsToSelector:@selector(doubleValue)]
             ? [source[@"localDMTimestamp"] doubleValue]
@@ -2567,6 +2607,12 @@ static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
     BOOL changed = ![gXLGBadgeActiveUserID isEqualToString:userID];
     if (changed) {
         gXLGBadgeActiveUserID = [userID copy];
+
+        NSMutableDictionary *sourceState =
+            XLGSourceStateForUserID(userID, YES);
+        sourceState[@"activeTimestamp"] =
+            @(NSDate.date.timeIntervalSince1970);
+
         NSLog(@"[XLiquidGlass] active badge account=%@ source=%@",
               userID, source ?: @"-");
         XLGDiagLog(@"LIFECYCLE active=%@ source=%@",
@@ -2999,7 +3045,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.3 Final loaded: native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.4 Final loaded: live-read badge clearing + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
