@@ -1114,6 +1114,20 @@ static NSInteger XLGChatDisplayCount(void) {
     return -1;
 }
 
+static NSInteger XLGNotificationDisplayCount(void) {
+    NSInteger canonical = gXLGNTabCount;
+    NSInteger chat = XLGChatDisplayCount();
+    NSInteger derived = -1;
+
+    if (gXLGTotalCount >= 0 && chat >= 0 && gXLGTotalCount >= chat) {
+        derived = gXLGTotalCount - chat;
+    }
+
+    if (canonical < 0) return derived;
+    if (derived > canonical) return derived;
+    return canonical;
+}
+
 static NSArray<UIWindow *> *XLGVisibleWindows(void) {
     NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
