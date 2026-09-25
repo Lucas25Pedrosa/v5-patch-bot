@@ -1256,11 +1256,9 @@ static void XLGToastBridgeHandleCompositionDidSend(
             }
 
             XLGToastBridgeLog(
-                @"COMPOSITION_TOAST_CREATED toast=%p status=%p isReply=%@ message=%@ presenter=%@",
+                @"COMPOSITION_TOAST_CREATED toast=%p status=%p message=%@ presenter=%@",
                 toast,
                 strongStatus,
-                [[XLGToastBridgeValueBySelector(
-                    strongStatus,@"isReply") description] ?: @"-"],
                 XLGToastBridgeValueBySelector(
                     toast,@"messageText") ?: @"-",
                 NSStringFromClass(presenter.class));
