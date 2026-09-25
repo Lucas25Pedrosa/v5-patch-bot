@@ -30,6 +30,7 @@ static NSInteger XLGStateInteger(NSDictionary *state,
                                  NSInteger fallback);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
+static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
