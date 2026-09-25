@@ -43,6 +43,6 @@ jobs:
       - name: Upload standalone dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass-1.8.0-Beta2-LegacyContainerHost-X12.28.1-arm64
+          name: XLiquidGlass-1.8.0-Beta3-NativeGuideRouter-X12.28.1-arm64
           path: x-liquid-glass-only/artifacts/
           if-no-files-found: error
