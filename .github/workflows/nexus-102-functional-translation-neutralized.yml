@@ -92,9 +92,10 @@ jobs:
           PY2
           '''
 
-          if timing not in s:
-              raise RuntimeError("translation timing marker not found")
-          s = s.replace(timing, timing + neutralize, 1)
+          labels = 'python3 "$ROOT/nexus/patch_translation_labels.py" "$WORK/Translation.m"\n'
+          if labels not in s:
+              raise RuntimeError("translation labels marker not found")
+          s = s.replace(labels, labels + neutralize, 1)
 
           p.write_text(s, encoding="utf-8")
           PY
