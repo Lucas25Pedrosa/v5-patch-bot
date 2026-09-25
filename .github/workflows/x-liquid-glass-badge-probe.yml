@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Badge Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-badge-probe/**"
+      - ".github/workflows/x-liquid-glass-badge-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-badge-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Badge Probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassBadgeProbe.dylib ! -path '*/XLiquidGlassBadgeProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassBadgeProbe.dylib
+          file artifacts/XLiquidGlassBadgeProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassBadgeProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload Badge Probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassBadgeProbe-1.0.0-X12.28.1-arm64
+          path: x-liquid-glass-badge-probe/artifacts/
+          if-no-files-found: error
