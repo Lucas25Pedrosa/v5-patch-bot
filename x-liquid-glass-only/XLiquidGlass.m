@@ -1819,12 +1819,6 @@ static void XLGB8ProbeAppliedItem(UIView *item,
                   compactIdentity);
 }
 
-static NSInteger XLGBadgeCountForXNavItem(UIView *item) {
-    NSString *identity = XLGIdentityTextForXNavItem(item);
-    NSString *kind = XLGBadgeKindForIdentity(identity);
-    return XLGBadgeCountForKind(kind, XLGActiveBadgeState());
-}
-
 static void XLGApplyBadgeToXNavItem(UIView *item) {
     NSString *identity = XLGIdentityTextForXNavItem(item);
     NSString *kind = XLGBadgeKindForIdentity(identity);
