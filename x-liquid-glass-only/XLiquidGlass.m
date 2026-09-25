@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.1 Beta 2
+#pragma mark - XLiquidGlass 1.9.1 Beta 3
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -2936,10 +2936,114 @@ static IMP gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate = NULL;
 static IMP gOrigTFNApplyRemoteBadgeCounts = NULL;
 static IMP gOrigT1TabViewSetBadgeCountAnimated = NULL;
 static IMP gOrigT1TabViewSetBadgeCount = NULL;
+static IMP gOrigBadgeTimingT1AppEventBadgeCountDidUpdate = NULL;
+static IMP gOrigBadgeTimingUpdateBadgeCountFromNotification = NULL;
+static IMP gOrigBadgeTimingAccountBadgesDidChange = NULL;
+static IMP gOrigBadgeTimingSetRemoteBadgeCountUserID = NULL;
+static BOOL gXLGBadgeTimingBannerLogged = NO;
 static id gXLGBadgeNotificationObserver = nil;
 static id gXLGDefaultsObserver = nil;
 static char kXLGBadgeLabelKey;
 static char kXLGBadgeSignatureKey;
+
+static NSString *XLGBadgeTimingLogPath(void) {
+    NSString *documents=
+        NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents stringByAppendingPathComponent:
+        @"XLiquidGlass191Beta3BadgeTiming.log"];
+}
+
+static NSString *XLGBadgeTimingTimestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGBadgeTimingLog(NSString *format, ...) {
+    if (!format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=
+        [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGBadgeTimingTimestamp(),
+                    message ?: @"-"];
+    NSLog(@"[XLiquidGlass/BadgeTiming] %@",message ?: @"-");
+
+    NSString *path=XLGBadgeTimingLogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=
+                [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static NSString *XLGBadgeTimingObjectDescription(id object) {
+    if (!object) return @"nil";
+    @try {
+        if ([object isKindOfClass:NSNotification.class]) {
+            NSNotification *notification=(NSNotification *)object;
+            return [NSString stringWithFormat:
+                @"NSNotification{name=%@ objectClass=%@ userInfo=%@}",
+                notification.name ?: @"-",
+                notification.object
+                    ? NSStringFromClass([notification.object class]) : @"nil",
+                notification.userInfo ?: @{}];
+        }
+
+        NSString *description=[object description] ?: @"-";
+        if (description.length>700) {
+            description=[[description substringToIndex:700]
+                stringByAppendingString:@"…"];
+        }
+        return [NSString stringWithFormat:@"%@{%@}",
+                NSStringFromClass([object class]) ?: @"?",
+                description];
+    } @catch (__unused NSException *exception) {
+        return [NSString stringWithFormat:@"%@{description-error}",
+                NSStringFromClass([object class]) ?: @"?"];
+    }
+}
+
+static NSString *XLGBadgeTimingRawDescription(uintptr_t raw,
+                                               const char *type) {
+    if (!type || !*type) {
+        return [NSString stringWithFormat:@"0x%llx",
+                (unsigned long long)raw];
+    }
+
+    const char *p=type;
+    while (*p && strchr("rnNoORV",*p)) p++;
+
+    if ((*p=='@' || *p=='#') && raw) {
+        id object=(__bridge id)((void *)raw);
+        return XLGBadgeTimingObjectDescription(object);
+    }
+
+    return [NSString stringWithFormat:@"type=%c dec=%llu hex=0x%llx",
+            *p ?: '?',
+            (unsigned long long)raw,
+            (unsigned long long)raw];
+}
 
 static id XLGSafeValueForKey(id object, NSString *key) {
     if (!object || !key.length) return nil;
@@ -4634,6 +4738,15 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
                                          uintptr_t dateRaw) {
     NSString *userID = XLGTryResolveUserID(self, 0) ?: @"-";
 
+    XLGBadgeTimingLog(
+        @"EVENT TFNTwitterAccount._applyRemoteBadgeCounts user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld rawDate=0x%llx",
+        userID,
+        (long)XLGIntegerFromObjectPointer(ntab,-1),
+        (long)XLGIntegerFromObjectPointer(dm,-1),
+        (long)XLGIntegerFromObjectPointer(xchat,-1),
+        (long)XLGIntegerFromObjectPointer(total,-1),
+        (unsigned long long)dateRaw);
+
     if (![userID isEqualToString:@"-"]) {
         XLGRememberRemoteBadgeSource(userID, ntab, dm, xchat, total);
     }
@@ -4697,6 +4810,11 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
 
     if ([name isEqualToString:@"AppIconBadgeCountDidChange"]) {
         id value = notification.userInfo[@"AppIconBadgeCountDidChangeUpdatedValue"];
+        XLGBadgeTimingLog(
+            @"EVENT NSNotification AppIconBadgeCountDidChange value=%@ objectClass=%@",
+            value ?: @"nil",
+            notification.object
+                ? NSStringFromClass([notification.object class]) : @"nil");
         if ([value respondsToSelector:@selector(integerValue)]) {
             // Keep the root count for diagnostics only. It must not select an
             // account because multiple accounts can legitimately share totals.
@@ -4707,6 +4825,11 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
 
     if ([name isEqualToString:@"AccountBadgesDidChange"]) {
         id map = notification.userInfo[@"AccountBadgesDidChangeUpdatedValues"];
+        XLGBadgeTimingLog(
+            @"EVENT NSNotification AccountBadgesDidChange map=%@ objectClass=%@",
+            map ?: @"nil",
+            notification.object
+                ? NSStringFromClass([notification.object class]) : @"nil");
         XLGDiagLog(@"SOURCE_NOTIFICATION name=AccountBadgesDidChange objectClass=%@",
                       notification.object
                           ? NSStringFromClass([notification.object class])
@@ -4783,6 +4906,14 @@ static void XLGConsumeNativeT1TabBadgeSignal(id tabView,
         XLGTryResolveUserID(XLGSidebarCurrentAccount(),0);
     if (!userID.length) userID=XLGCurrentActiveUserID();
     if (!userID.length) return;
+
+    XLGBadgeTimingLog(
+        @"EVENT T1TabView.setBadgeCount identity=%@ user=%@ rawCount=%llu notifications=%@ chat=%@",
+        identity,
+        userID,
+        rawCount,
+        notifications ? @"YES" : @"NO",
+        chat ? @"YES" : @"NO");
 
     NSInteger count=(NSInteger)MIN(
         rawCount,(unsigned long long)NSIntegerMax);
@@ -4863,6 +4994,177 @@ static void XLGT1TabViewSetBadgeCount(id self,
                 self,cmd,count);
     }
     XLGConsumeNativeT1TabBadgeSignal(self,count);
+}
+
+static void XLGBadgeTimingT1AppEventBadgeCountDidUpdate(id self,
+                                                        SEL cmd,
+                                                        id argument) {
+    XLGBadgeTimingLog(
+        @"EVENT T1AppEventHandler._t1_badgeCountDidUpdate BEFORE arg=%@",
+        XLGBadgeTimingObjectDescription(argument));
+    if (gOrigBadgeTimingT1AppEventBadgeCountDidUpdate) {
+        ((void(*)(id,SEL,id))
+            gOrigBadgeTimingT1AppEventBadgeCountDidUpdate)(
+                self,cmd,argument);
+    }
+    XLGBadgeTimingLog(
+        @"EVENT T1AppEventHandler._t1_badgeCountDidUpdate AFTER");
+}
+
+static void XLGBadgeTimingUpdateBadgeCountFromNotification(id self,
+                                                           SEL cmd,
+                                                           id argument) {
+    XLGBadgeTimingLog(
+        @"EVENT T1AppBadging._updateBadgeCountFromNotification BEFORE arg=%@",
+        XLGBadgeTimingObjectDescription(argument));
+    if (gOrigBadgeTimingUpdateBadgeCountFromNotification) {
+        ((void(*)(id,SEL,id))
+            gOrigBadgeTimingUpdateBadgeCountFromNotification)(
+                self,cmd,argument);
+    }
+    XLGBadgeTimingLog(
+        @"EVENT T1AppBadging._updateBadgeCountFromNotification AFTER");
+}
+
+static void XLGBadgeTimingAccountBadgesDidChange(id self,
+                                                 SEL cmd,
+                                                 id argument) {
+    XLGBadgeTimingLog(
+        @"EVENT T1AppBadging.accountBadgesDidChange BEFORE arg=%@",
+        XLGBadgeTimingObjectDescription(argument));
+    if (gOrigBadgeTimingAccountBadgesDidChange) {
+        ((void(*)(id,SEL,id))
+            gOrigBadgeTimingAccountBadgesDidChange)(
+                self,cmd,argument);
+    }
+    XLGBadgeTimingLog(
+        @"EVENT T1AppBadging.accountBadgesDidChange AFTER");
+}
+
+static void XLGBadgeTimingSetRemoteBadgeCountUserID(id self,
+                                                    SEL cmd,
+                                                    uintptr_t arg1,
+                                                    uintptr_t arg2) {
+    Method method=class_getInstanceMethod([self class],cmd);
+    char type1[64]={0};
+    char type2[64]={0};
+    if (method) {
+        method_getArgumentType(method,2,type1,sizeof(type1));
+        method_getArgumentType(method,3,type2,sizeof(type2));
+    }
+
+    XLGBadgeTimingLog(
+        @"EVENT T1AppBadging.setRemoteBadgeCount:userID: BEFORE arg1=%@ arg2=%@ types=%s,%s",
+        XLGBadgeTimingRawDescription(arg1,type1),
+        XLGBadgeTimingRawDescription(arg2,type2),
+        type1[0] ? type1 : "-",
+        type2[0] ? type2 : "-");
+
+    if (gOrigBadgeTimingSetRemoteBadgeCountUserID) {
+        ((void(*)(id,SEL,uintptr_t,uintptr_t))
+            gOrigBadgeTimingSetRemoteBadgeCountUserID)(
+                self,cmd,arg1,arg2);
+    }
+
+    XLGBadgeTimingLog(
+        @"EVENT T1AppBadging.setRemoteBadgeCount:userID: AFTER");
+}
+
+static BOOL XLGBadgeTimingHookVoidOneObject(Class cls,
+                                            NSString *selectorName,
+                                            IMP replacement,
+                                            IMP *originalOut) {
+    if (!cls || !selectorName.length || !replacement || !originalOut ||
+        *originalOut) return NO;
+
+    SEL selector=NSSelectorFromString(selectorName);
+    Method method=class_getInstanceMethod(cls,selector);
+    if (!method || method_getNumberOfArguments(method)!=3) return NO;
+
+    char ret[16]={0};
+    char arg[32]={0};
+    method_getReturnType(method,ret,sizeof(ret));
+    method_getArgumentType(method,2,arg,sizeof(arg));
+
+    const char *r=ret;
+    while (*r && strchr("rnNoORV",*r)) r++;
+    const char *a=arg;
+    while (*a && strchr("rnNoORV",*a)) a++;
+
+    XLGBadgeTimingLog(
+        @"HOOK_CANDIDATE class=%@ selector=%@ types=%s arg=%s",
+        NSStringFromClass(cls),
+        selectorName,
+        method_getTypeEncoding(method) ?: "-",
+        arg[0] ? arg : "-");
+
+    if (*r!='v' || (*a!='@' && *a!='#')) return NO;
+    return XLGHookMethod(
+        cls,selector,NO,replacement,originalOut);
+}
+
+static void XLGInstallBadgeTimingProbeHooks(void) {
+    if (!gXLGBadgeTimingBannerLogged) {
+        gXLGBadgeTimingBannerLogged=YES;
+        XLGBadgeTimingLog(
+            @"========== XLiquidGlass 1.9.1 Beta 3 Badge Timing Probe ==========");
+        XLGBadgeTimingLog(
+            @"logPath=%@",XLGBadgeTimingLogPath() ?: @"-");
+    }
+
+    Class eventClass=NSClassFromString(@"T1AppEventHandler");
+    if (eventClass) {
+        XLGBadgeTimingHookVoidOneObject(
+            eventClass,
+            @"_t1_badgeCountDidUpdate:",
+            (IMP)XLGBadgeTimingT1AppEventBadgeCountDidUpdate,
+            &gOrigBadgeTimingT1AppEventBadgeCountDidUpdate);
+    }
+
+    Class appBadging=NSClassFromString(@"T1AppBadging");
+    if (!appBadging) return;
+
+    XLGBadgeTimingHookVoidOneObject(
+        appBadging,
+        @"_updateBadgeCountFromNotification:",
+        (IMP)XLGBadgeTimingUpdateBadgeCountFromNotification,
+        &gOrigBadgeTimingUpdateBadgeCountFromNotification);
+
+    XLGBadgeTimingHookVoidOneObject(
+        appBadging,
+        @"accountBadgesDidChange:",
+        (IMP)XLGBadgeTimingAccountBadgesDidChange,
+        &gOrigBadgeTimingAccountBadgesDidChange);
+
+    SEL remoteSEL=NSSelectorFromString(@"setRemoteBadgeCount:userID:");
+    Method remoteMethod=class_getInstanceMethod(appBadging,remoteSEL);
+    if (remoteMethod &&
+        method_getNumberOfArguments(remoteMethod)==4 &&
+        !gOrigBadgeTimingSetRemoteBadgeCountUserID) {
+        char ret[16]={0};
+        char arg1[32]={0};
+        char arg2[32]={0};
+        method_getReturnType(remoteMethod,ret,sizeof(ret));
+        method_getArgumentType(remoteMethod,2,arg1,sizeof(arg1));
+        method_getArgumentType(remoteMethod,3,arg2,sizeof(arg2));
+
+        XLGBadgeTimingLog(
+            @"HOOK_CANDIDATE class=T1AppBadging selector=setRemoteBadgeCount:userID: types=%s arg1=%s arg2=%s",
+            method_getTypeEncoding(remoteMethod) ?: "-",
+            arg1[0] ? arg1 : "-",
+            arg2[0] ? arg2 : "-");
+
+        const char *rr=ret;
+        while (*rr && strchr("rnNoORV",*rr)) rr++;
+        if (*rr=='v') {
+            XLGHookMethod(
+                appBadging,
+                remoteSEL,
+                NO,
+                (IMP)XLGBadgeTimingSetRemoteBadgeCountUserID,
+                &gOrigBadgeTimingSetRemoteBadgeCountUserID);
+        }
+    }
 }
 
 static void XLGInstallNativeT1TabBadgeBridge(void) {
@@ -5016,6 +5318,7 @@ static void XLGInstallGlobalTabBarFixes(void) {
 
     XLGInstallBadgeReconciliationHooks();
     XLGInstallNativeT1TabBadgeBridge();
+    XLGInstallBadgeTimingProbeHooks();
     XLGRefreshGlobalTabBar();
 }
 
@@ -5812,7 +6115,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.1 Beta 2 loaded: native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.1 Beta 3 loaded: Beta 2 native badge bridge + upstream badge timing probe + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
