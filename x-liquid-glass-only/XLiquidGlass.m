@@ -29,6 +29,8 @@ static NSMutableDictionary *XLGSourceStateForUserID(
 static NSInteger XLGStateInteger(NSDictionary *state,
                                  NSString *key,
                                  NSInteger fallback);
+static NSInteger XLGChatDisplayCountForState(NSDictionary *state);
+static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
