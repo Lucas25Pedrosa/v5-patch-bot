@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.7.2 Beta 21
+#pragma mark - XLiquidGlass 1.7.3 Beta 22
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -614,7 +614,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlassBeta21ProfileGuideProbe.log"];
+            @"XLiquidGlassBeta22ExploreProbe.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1247,7 +1247,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Inicie a captura. Teste Explorar > Notícias/Trending e a notificação 'seguiu você'. O swipe agora usa somente o gesto nativo: confirme visualmente se deixou de abrir duas vezes. Depois copie o relatório. Este probe não faz dump recursivo de objetos Swift.";
+    return @"Inicie a captura. Teste Explorar e, dentro dele, Notícias e uma Trending. Depois teste novamente uma notificação 'seguiu você' para validar o novo fallback de perfil. O swipe permanece somente nativo. Depois copie o relatório.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1307,7 +1307,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.7.2 Beta 21 Navigation Probe ==========");
+            @"========== XLiquidGlass 1.7.3 Beta 22 Navigation Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1319,7 +1319,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.7.2 Beta 21 Navigation Probe ==========");
+                @"========== XLiquidGlass 1.7.3 Beta 22 Navigation Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -1541,6 +1541,91 @@ static NSString *XLGNotifVisibleText(UIView *root) {
     return output;
 }
 
+static id XLGNotifFirstDisplayUserFromCell(id cell) {
+    if (!cell) return nil;
+
+    id viewModel=XLGNotifObjectIvar(cell,"viewModel");
+    if (!viewModel) {
+        @try {
+            viewModel=[cell valueForKey:@"viewModel"];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+    if (!viewModel) return nil;
+
+    id displayUsers=XLGNotifObjectGetter(viewModel,@"displayUsers");
+    if (!displayUsers) {
+        displayUsers=XLGNotifObjectIvar(viewModel,"displayUsers");
+    }
+
+    if ([displayUsers isKindOfClass:NSArray.class]) {
+        return [(NSArray *)displayUsers firstObject];
+    }
+
+    if ([displayUsers respondsToSelector:@selector(firstObject)]) {
+        @try {
+            return [displayUsers firstObject];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+
+    return nil;
+}
+
+static NSString *XLGNotifUsernameFromUser(id user) {
+    if (!user) return nil;
+    for (NSString *name in @[@"username",@"screenName",@"userName"]) {
+        id value=XLGNotifObjectGetter(user,name);
+        if ([value isKindOfClass:NSString.class] &&
+            [(NSString *)value length]) {
+            return value;
+        }
+    }
+    return nil;
+}
+
+static BOOL XLGNotifLooksLikeFollowCell(id cell) {
+    if (![cell isKindOfClass:UIView.class]) return NO;
+    NSString *text=
+        XLGNotifFoldedText(XLGNotifVisibleText((UIView *)cell));
+
+    return [text containsString:@"seguiu voce"] ||
+           [text containsString:@"followed you"];
+}
+
+static BOOL XLGNotifOpenProfileUser(id user) {
+    if (!user) return NO;
+
+    NSString *username=XLGNotifUsernameFromUser(user);
+    NSString *userIDString=XLGTryResolveUserID(user,0);
+    long long userID=[userIDString longLongValue];
+
+    if (!username.length && userID<=0) return NO;
+
+    id appNavigation=XLGSidebarAppNavigation();
+    if (!appNavigation) return NO;
+
+    SEL selector=NSSelectorFromString(
+        @"showProfileForUsername:orUserID:fromPanel:source:"
+         "sourceNavigationMetadata:completion:");
+    if (![appNavigation respondsToSelector:selector]) return NO;
+
+    typedef void (*ShowProfileFn)(
+        id,SEL,id,long long,long long,long long,id,id);
+
+    ((ShowProfileFn)objc_msgSend)(
+        appNavigation,
+        selector,
+        username,
+        userID,
+        0,
+        0,
+        nil,
+        nil);
+
+    return YES;
+}
+
 static BOOL XLGNotifIsGroupedNewPostCell(id cell) {
     if (![cell isKindOfClass:UIView.class]) return NO;
 
@@ -1713,6 +1798,9 @@ static void XLGOwnNotifHandleTap(
 
     long long statusID=XLGNotifStatusIDFromCell(self);
     BOOL grouped=(statusID<=0) && XLGNotifIsGroupedNewPostCell(self);
+    BOOL follow=(statusID<=0 && !grouped) &&
+        XLGNotifLooksLikeFollowCell(self);
+    id followUser=follow ? XLGNotifFirstDisplayUserFromCell(self) : nil;
 
     if (gXLGNavigationProbeActive) {
         id viewModel=XLGNotifObjectIvar(self,"viewModel");
@@ -1762,11 +1850,12 @@ static void XLGOwnNotifHandleTap(
                 ? XLGNotifVisibleText((UIView *)self)
                 : @"";
         XLGNavigationProbeLog(
-            @"NOTIFICATION_TAP cell=%@ ptr=%p statusID=%lld groupedNewPosts=%@ text=%@",
+            @"NOTIFICATION_TAP cell=%@ ptr=%p statusID=%lld groupedNewPosts=%@ follow=%@ text=%@",
             NSStringFromClass([self class]),
             self,
             statusID,
             grouped ? @"YES" : @"NO",
+            follow ? @"YES" : @"NO",
             visibleText.length ? visibleText : @"-");
 
         dispatch_after(
@@ -1778,7 +1867,7 @@ static void XLGOwnNotifHandleTap(
             });
     }
 
-    if (statusID<=0 && !grouped) return;
+    if (statusID<=0 && !grouped && !follow) return;
 
     UIViewController *beforePresenter=
         XLGSidebarContentPresentingViewController();
@@ -1805,6 +1894,8 @@ static void XLGOwnNotifHandleTap(
                 XLGNotifOpenConversation(statusID);
             } else if (grouped) {
                 XLGNotifOpenGroupedNewPosts();
+            } else if (follow && followUser) {
+                XLGNotifOpenProfileUser(followUser);
             }
         });
 }
@@ -4521,7 +4612,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.7.2 Beta 21 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.7.3 Beta 22 loaded: follow profile fix + explore probe + native swipe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
