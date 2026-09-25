@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.9 Beta 18
+#pragma mark - XLiquidGlass 1.7.0 Beta 19
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -43,6 +43,14 @@ static IMP gOrigNFBViewWillAppear = NULL;
 static IMP gOrigAppearanceUpdateVisibleToggles = NULL;
 static IMP gOrigAppearanceViewWillAppear = NULL;
 static IMP gOrigNotificationsViewDidAppear = NULL;
+static IMP gOrigNavProbePushViewController = NULL;
+static IMP gOrigNavProbePresentViewController = NULL;
+static IMP gOrigNavProbeOpenURL = NULL;
+static IMP gOrigNavProbeT1OpenURL = NULL;
+static IMP gOrigNavProbeTrendingFactoryCreate = NULL;
+static NSMutableDictionary<NSString *, NSValue *> *gXLGNavProbeViewAppearOriginals = nil;
+static BOOL gXLGNavigationProbeActive = NO;
+static BOOL gXLGNavigationProbeHooksInstalled = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -153,6 +161,9 @@ static void XLGSyncCompatibilityGate(void) {
     }
 }
 
+@interface XLiquidGlassNavigationProbeViewController : UITableViewController
+@end
+
 @interface XLiquidGlassSettingsViewController : UITableViewController
 @end
 
@@ -177,7 +188,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -188,8 +199,6 @@ static void XLGSyncCompatibilityGate(void) {
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    (void)indexPath;
-
     static NSString *identifier = @"XLiquidGlassToggleCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) {
@@ -197,7 +206,19 @@ static void XLGSyncCompatibilityGate(void) {
                                       reuseIdentifier:identifier];
     }
 
-    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.text=nil;
+    cell.detailTextLabel.text=nil;
+    cell.accessoryView=nil;
+    cell.accessoryType=UITableViewCellAccessoryNone;
+    cell.selectionStyle=UITableViewCellSelectionStyleNone;
+
+    if (indexPath.row == 2) {
+        cell.textLabel.text = @"Navigation Probe";
+        cell.detailTextLabel.text = @"Diagnóstico passivo de Trending e X Premium.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -219,6 +240,17 @@ static void XLGSyncCompatibilityGate(void) {
 
     cell.accessoryView = toggle;
     return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 2) return;
+
+    XLiquidGlassNavigationProbeViewController *probe =
+        [[XLiquidGlassNavigationProbeViewController alloc]
+            initWithStyle:UITableViewStyleInsetGrouped];
+    [self.navigationController pushViewController:probe animated:YES];
 }
 
 - (void)xlgToggleChanged:(UISwitch *)sender {
@@ -570,6 +602,598 @@ static UINavigationController *XLGNavigationControllerForPresenter(
     }
     return presenter.navigationController;
 }
+
+#pragma mark - XLiquidGlass Beta 19 passive navigation probe
+
+static NSString *XLGNavigationProbeLogPath(void) {
+    NSString *documents=
+        NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents
+        stringByAppendingPathComponent:
+            @"XLiquidGlassBeta19NavigationProbe.log"];
+}
+
+static NSString *XLGNavigationProbeTimestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGNavigationProbeLog(NSString *format, ...) {
+    if (!gXLGNavigationProbeActive || !format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=
+        [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGNavigationProbeTimestamp(),
+                    message ?: @"-"];
+    NSLog(@"[XLiquidGlass/NavProbe] %@",message ?: @"-");
+
+    NSString *path=XLGNavigationProbeLogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=
+                [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static NSString *XLGNavigationProbeRead(void) {
+    NSString *path=XLGNavigationProbeLogPath();
+    if (!path.length) return @"";
+    NSData *data=[NSData dataWithContentsOfFile:path];
+    if (!data.length) return @"";
+    return [[NSString alloc] initWithData:data
+                                encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+static void XLGNavigationProbeClear(void) {
+    NSString *path=XLGNavigationProbeLogPath();
+    if (!path.length) return;
+    [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+}
+
+static NSString *XLGNavigationProbeTypeEncodingForSelector(
+    id object,
+    NSString *selectorName) {
+    if (!object || !selectorName.length) return @"-";
+    SEL selector=NSSelectorFromString(selectorName);
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method) return @"-";
+    const char *types=method_getTypeEncoding(method);
+    return types ? [NSString stringWithUTF8String:types] : @"-";
+}
+
+static NSString *XLGNavigationProbeStackDescription(
+    UINavigationController *navigation) {
+    if (!navigation) return @"-";
+    NSMutableArray<NSString *> *names=[NSMutableArray array];
+    for (UIViewController *vc in navigation.viewControllers ?: @[]) {
+        [names addObject:NSStringFromClass(vc.class) ?: @"?"];
+    }
+    return [names componentsJoinedByString:@" -> "];
+}
+
+static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
+    if (!gXLGNavigationProbeActive) return;
+
+    id appNavigation=XLGSidebarAppNavigation();
+    id account=XLGSidebarCurrentAccount();
+    UIViewController *presenter=XLGSidebarContentPresentingViewController();
+    UINavigationController *navigation=
+        XLGNavigationControllerForPresenter(presenter);
+
+    XLGNavigationProbeLog(
+        @"========== RUNTIME %@ ==========",reason ?: @"snapshot");
+    XLGNavigationProbeLog(
+        @"liquidGlass=%@ appNavigationClass=%@ ptr=%p accountClass=%@ userID=%@",
+        XLGEnabled() ? @"ON" : @"OFF",
+        appNavigation ? NSStringFromClass([appNavigation class]) : @"nil",
+        appNavigation,
+        account ? NSStringFromClass([account class]) : @"nil",
+        XLGTryResolveUserID(account,0) ?: @"-");
+    XLGNavigationProbeLog(
+        @"presenterClass=%@ ptr=%p navigationClass=%@ ptr=%p top=%@ presented=%@",
+        presenter ? NSStringFromClass(presenter.class) : @"nil",
+        presenter,
+        navigation ? NSStringFromClass(navigation.class) : @"nil",
+        navigation,
+        navigation.topViewController
+            ? NSStringFromClass(navigation.topViewController.class)
+            : @"nil",
+        presenter.presentedViewController
+            ? NSStringFromClass(presenter.presentedViewController.class)
+            : @"nil");
+    XLGNavigationProbeLog(
+        @"stack=%@",XLGNavigationProbeStackDescription(navigation));
+
+    NSArray<NSString *> *selectors=@[
+        @"showAiTrendDetailsWithID:mode:account:source:completion:",
+        @"showTrendsWithSource:scribeContext:completion:",
+        @"showTrendsSettingsWithSource:completion:",
+        @"showPremiumHubWithSource:withCompletion:",
+        @"showPremiumHubAfterPurchaseWithSource:withCompletion:",
+        @"showPremiumHubPremiumSettingsWithSource:withCompletion:",
+        @"showPremiumPageWithReferringPage:tier:plan:source:paywallThresholdTier:withCompletion:",
+        @"showPremiumPageWithReferringPage:tier:plan:source:withCompletion:",
+        @"showPremiumPageWithReferringPage:tier:source:withCompletion:",
+        @"showSubscriptionsTab",
+        @"handlePremiumHubPanelKeyCommand",
+        @"currentPanelNavigationController",
+        @"presentPanelIfNeededWithPanelID:animated:successCompletion:"
+    ];
+
+    for (NSString *name in selectors) {
+        SEL selector=NSSelectorFromString(name);
+        BOOL responds=appNavigation &&
+            [appNavigation respondsToSelector:selector];
+        XLGNavigationProbeLog(
+            @"SELECTOR %@ responds=%@ types=%@",
+            name,
+            responds ? @"YES" : @"NO",
+            responds
+                ? XLGNavigationProbeTypeEncodingForSelector(
+                    appNavigation,name)
+                : @"-");
+    }
+
+    for (NSString *className in @[
+        @"T1TrendingPageViewControllerFactory",
+        @"T1TrendsLandingViewController",
+        @"_TtC14T1TwitterSwift26TrendingPageViewController",
+        @"_TtC14T1TwitterSwift27TrendURTUrlNavigationHelper",
+        @"_TtC14T1TwitterSwift33PremiumHubContainerViewController",
+        @"_TtC14T1TwitterSwift30PremiumHubNavigationController",
+        @"_TtC14T1TwitterSwift31PremiumHubAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift22T1PremiumHubNavigation",
+        @"T1PremiumSettingsViewController"
+    ]) {
+        Class cls=NSClassFromString(className);
+        XLGNavigationProbeLog(
+            @"CLASS %@ present=%@",
+            className,cls ? @"YES" : @"NO");
+    }
+
+    XLGNavigationProbeLog(@"========== END RUNTIME ==========");
+}
+
+static void XLGNavProbePushViewController(
+    id self,
+    SEL cmd,
+    UIViewController *viewController,
+    BOOL animated) {
+    if (gXLGNavigationProbeActive) {
+        UINavigationController *nav=
+            [self isKindOfClass:UINavigationController.class]
+                ? (UINavigationController *)self : nil;
+        XLGNavigationProbeLog(
+            @"PUSH nav=%@ ptr=%p from=%@ to=%@ ptr=%p animated=%@ stackBefore=%@",
+            NSStringFromClass([self class]),
+            self,
+            nav.topViewController
+                ? NSStringFromClass(nav.topViewController.class)
+                : @"nil",
+            viewController
+                ? NSStringFromClass(viewController.class)
+                : @"nil",
+            viewController,
+            animated ? @"YES" : @"NO",
+            XLGNavigationProbeStackDescription(nav));
+    }
+
+    if (gOrigNavProbePushViewController) {
+        ((void(*)(id,SEL,id,BOOL))gOrigNavProbePushViewController)(
+            self,cmd,viewController,animated);
+    }
+}
+
+static void XLGNavProbePresentViewController(
+    id self,
+    SEL cmd,
+    UIViewController *viewController,
+    BOOL animated,
+    id completion) {
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"PRESENT from=%@ ptr=%p to=%@ ptr=%p animated=%@",
+            NSStringFromClass([self class]),
+            self,
+            viewController
+                ? NSStringFromClass(viewController.class)
+                : @"nil",
+            viewController,
+            animated ? @"YES" : @"NO");
+    }
+
+    if (gOrigNavProbePresentViewController) {
+        ((void(*)(id,SEL,id,BOOL,id))gOrigNavProbePresentViewController)(
+            self,cmd,viewController,animated,completion);
+    }
+}
+
+static void XLGNavProbeOpenURL(
+    id self,
+    SEL cmd,
+    NSURL *url,
+    NSDictionary *options,
+    id completion) {
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"UIAPPLICATION_OPENURL url=%@ options=%@",
+            url.absoluteString ?: [url description] ?: @"-",
+            options ?: @{});
+    }
+
+    if (gOrigNavProbeOpenURL) {
+        ((void(*)(id,SEL,id,id,id))gOrigNavProbeOpenURL)(
+            self,cmd,url,options,completion);
+    }
+}
+
+static void XLGNavProbeT1OpenURL(
+    id self,
+    SEL cmd,
+    id url) {
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"T1_OPENURL owner=%@ urlClass=%@ value=%@",
+            NSStringFromClass([self class]),
+            url ? NSStringFromClass([url class]) : @"nil",
+            url ?: @"-");
+    }
+
+    if (gOrigNavProbeT1OpenURL) {
+        ((void(*)(id,SEL,id))gOrigNavProbeT1OpenURL)(
+            self,cmd,url);
+    }
+}
+
+static IMP XLGNavProbeOriginalViewDidAppear(id self) {
+    Class cls=[self class];
+    while (cls) {
+        NSValue *value=
+            gXLGNavProbeViewAppearOriginals[NSStringFromClass(cls)];
+        if (value) return [value pointerValue];
+        cls=class_getSuperclass(cls);
+    }
+    return NULL;
+}
+
+static void XLGNavProbeTargetViewDidAppear(
+    id self,
+    SEL cmd,
+    BOOL animated) {
+    IMP original=XLGNavProbeOriginalViewDidAppear(self);
+    if (original && original!=(IMP)XLGNavProbeTargetViewDidAppear) {
+        ((void(*)(id,SEL,BOOL))original)(self,cmd,animated);
+    }
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"TARGET_APPEAR class=%@ ptr=%p animated=%@ nav=%@",
+            NSStringFromClass([self class]),
+            self,
+            animated ? @"YES" : @"NO",
+            [self navigationController]
+                ? NSStringFromClass([[self navigationController] class])
+                : @"nil");
+        XLGNavigationProbeRuntimeSnapshot(@"target-appeared");
+    }
+}
+
+static id XLGNavProbeTrendingFactoryCreate(
+    id self,
+    SEL cmd,
+    id account,
+    long long trendID,
+    id mode) {
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"TREND_FACTORY before accountClass=%@ userID=%@ trendID=%lld modeClass=%@ mode=%@",
+            account ? NSStringFromClass([account class]) : @"nil",
+            XLGTryResolveUserID(account,0) ?: @"-",
+            trendID,
+            mode ? NSStringFromClass([mode class]) : @"nil",
+            mode ?: @"-");
+    }
+
+    id result=nil;
+    if (gOrigNavProbeTrendingFactoryCreate) {
+        result=((id(*)(id,SEL,id,long long,id))
+                gOrigNavProbeTrendingFactoryCreate)(
+                    self,cmd,account,trendID,mode);
+    }
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"TREND_FACTORY after resultClass=%@ ptr=%p",
+            result ? NSStringFromClass([result class]) : @"nil",
+            result);
+    }
+    return result;
+}
+
+static BOOL XLGNavProbeMethodMatchesTrendingFactory(
+    Class cls,
+    SEL selector) {
+    Method method=class_getClassMethod(cls,selector);
+    if (!method || method_getNumberOfArguments(method)!=5) return NO;
+
+    char ret[32]={0},a2[32]={0},a3[32]={0},a4[32]={0};
+    method_getReturnType(method,ret,sizeof(ret));
+    method_getArgumentType(method,2,a2,sizeof(a2));
+    method_getArgumentType(method,3,a3,sizeof(a3));
+    method_getArgumentType(method,4,a4,sizeof(a4));
+
+    const char *r=ret,*p2=a2,*p3=a3,*p4=a4;
+    while (*r && strchr("rnNoORV",*r)) r++;
+    while (*p2 && strchr("rnNoORV",*p2)) p2++;
+    while (*p3 && strchr("rnNoORV",*p3)) p3++;
+    while (*p4 && strchr("rnNoORV",*p4)) p4++;
+
+    BOOL integer=
+        *p3=='q' || *p3=='Q' || *p3=='l' || *p3=='L' ||
+        *p3=='i' || *p3=='I';
+    return (*r=='@' || *r=='#') &&
+           (*p2=='@' || *p2=='#') &&
+           integer &&
+           (*p4=='@' || *p4=='#');
+}
+
+static void XLGInstallNavigationProbeTargetViewHook(
+    NSString *className) {
+    Class cls=NSClassFromString(className);
+    if (!cls) return;
+
+    SEL selector=@selector(viewDidAppear:);
+    Method method=class_getInstanceMethod(cls,selector);
+    if (!method) return;
+
+    IMP current=class_getMethodImplementation(cls,selector);
+    if (!current || current==(IMP)XLGNavProbeTargetViewDidAppear) return;
+
+    if (!gXLGNavProbeViewAppearOriginals) {
+        gXLGNavProbeViewAppearOriginals=[NSMutableDictionary dictionary];
+    }
+    gXLGNavProbeViewAppearOriginals[className]=
+        [NSValue valueWithPointer:current];
+
+    class_replaceMethod(
+        cls,
+        selector,
+        (IMP)XLGNavProbeTargetViewDidAppear,
+        method_getTypeEncoding(method));
+}
+
+static void XLGInstallNavigationProbeHooks(void) {
+    if (gXLGNavigationProbeHooksInstalled) return;
+
+    Class navClass=UINavigationController.class;
+    if (!gOrigNavProbePushViewController) {
+        XLGHookMethod(
+            navClass,
+            @selector(pushViewController:animated:),
+            NO,
+            (IMP)XLGNavProbePushViewController,
+            &gOrigNavProbePushViewController);
+    }
+
+    Class vcClass=UIViewController.class;
+    if (!gOrigNavProbePresentViewController) {
+        XLGHookMethod(
+            vcClass,
+            @selector(presentViewController:animated:completion:),
+            NO,
+            (IMP)XLGNavProbePresentViewController,
+            &gOrigNavProbePresentViewController);
+    }
+
+    Class appClass=UIApplication.class;
+    SEL openSEL=
+        @selector(openURL:options:completionHandler:);
+    if (!gOrigNavProbeOpenURL &&
+        [appClass instancesRespondToSelector:openSEL]) {
+        XLGHookMethod(
+            appClass,
+            openSEL,
+            NO,
+            (IMP)XLGNavProbeOpenURL,
+            &gOrigNavProbeOpenURL);
+    }
+
+    Class eventClass=NSClassFromString(@"T1AppEventHandler");
+    SEL t1OpenSEL=NSSelectorFromString(@"_t1_openURL:");
+    Method t1OpenMethod=
+        eventClass ? class_getInstanceMethod(eventClass,t1OpenSEL) : NULL;
+    if (t1OpenMethod &&
+        method_getNumberOfArguments(t1OpenMethod)==3 &&
+        !gOrigNavProbeT1OpenURL) {
+        char ret[16]={0};
+        method_getReturnType(t1OpenMethod,ret,sizeof(ret));
+        const char *r=ret;
+        while (*r && strchr("rnNoORV",*r)) r++;
+        if (*r=='v') {
+            XLGHookMethod(
+                eventClass,
+                t1OpenSEL,
+                NO,
+                (IMP)XLGNavProbeT1OpenURL,
+                &gOrigNavProbeT1OpenURL);
+        }
+    }
+
+    for (NSString *className in @[
+        @"T1TrendsLandingViewController",
+        @"_TtC14T1TwitterSwift26TrendingPageViewController",
+        @"_TtC14T1TwitterSwift33PremiumHubContainerViewController",
+        @"_TtC14T1TwitterSwift30PremiumHubNavigationController",
+        @"T1PremiumSettingsViewController"
+    ]) {
+        XLGInstallNavigationProbeTargetViewHook(className);
+    }
+
+    Class trendFactory=
+        NSClassFromString(@"T1TrendingPageViewControllerFactory");
+    SEL createSEL=
+        NSSelectorFromString(@"createWithAccount:trendID:mode:");
+    if (trendFactory &&
+        XLGNavProbeMethodMatchesTrendingFactory(
+            trendFactory,createSEL) &&
+        !gOrigNavProbeTrendingFactoryCreate) {
+        XLGHookMethod(
+            trendFactory,
+            createSEL,
+            YES,
+            (IMP)XLGNavProbeTrendingFactoryCreate,
+            &gOrigNavProbeTrendingFactoryCreate);
+    }
+
+    gXLGNavigationProbeHooksInstalled=YES;
+}
+
+@implementation XLiquidGlassNavigationProbeViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"Navigation Probe";
+    self.tableView.backgroundColor=UIColor.systemBackgroundColor;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void)tableView;
+    return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+ numberOfRowsInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return 5;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+ titleForFooterInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return @"Inicie a captura, teste uma Trending e o X Premium, volte aqui e copie o relatório. Para comparar, faça uma captura com Liquid Glass e outra sem. Este probe não faz dump recursivo de objetos Swift.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier=@"XLGNavigationProbeCell";
+    UITableViewCell *cell=
+        [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) {
+        cell=[[UITableViewCell alloc]
+            initWithStyle:UITableViewCellStyleSubtitle
+          reuseIdentifier:identifier];
+    }
+
+    cell.accessoryType=UITableViewCellAccessoryNone;
+    cell.detailTextLabel.text=nil;
+
+    switch (indexPath.row) {
+        case 0:
+            cell.textLabel.text=
+                gXLGNavigationProbeActive
+                    ? @"Reiniciar captura"
+                    : @"Iniciar captura";
+            cell.detailTextLabel.text=
+                @"Limpa o relatório e registra o runtime inicial.";
+            break;
+        case 1:
+            cell.textLabel.text=@"Capturar runtime";
+            cell.detailTextLabel.text=
+                @"Somente classes, stack e assinaturas de seletores.";
+            break;
+        case 2:
+            cell.textLabel.text=@"Copiar relatório";
+            cell.detailTextLabel.text=
+                @"Copia todo o log para a área de transferência.";
+            break;
+        case 3:
+            cell.textLabel.text=@"Parar captura";
+            cell.detailTextLabel.text=
+                gXLGNavigationProbeActive
+                    ? @"A captura está ativa."
+                    : @"A captura já está parada.";
+            break;
+        default:
+            cell.textLabel.text=@"Limpar relatório";
+            cell.detailTextLabel.text=
+                @"Apaga somente o arquivo do probe.";
+            break;
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+    if (indexPath.row==0) {
+        XLGNavigationProbeClear();
+        gXLGNavigationProbeActive=YES;
+        XLGNavigationProbeLog(
+            @"========== XLiquidGlass 1.7.0 Beta 19 Navigation Probe ==========");
+        XLGNavigationProbeLog(
+            @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
+        XLGNavigationProbeRuntimeSnapshot(@"capture-start");
+        [tableView reloadData];
+        return;
+    }
+
+    if (indexPath.row==1) {
+        if (!gXLGNavigationProbeActive) {
+            gXLGNavigationProbeActive=YES;
+            XLGNavigationProbeLog(
+                @"========== XLiquidGlass 1.7.0 Beta 19 Navigation Probe ==========");
+        }
+        XLGNavigationProbeRuntimeSnapshot(@"manual");
+        [tableView reloadData];
+        return;
+    }
+
+    if (indexPath.row==2) {
+        NSString *report=XLGNavigationProbeRead();
+        UIPasteboard.generalPasteboard.string=
+            report.length ? report : @"Sem relatório.";
+        return;
+    }
+
+    if (indexPath.row==3) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeRuntimeSnapshot(@"capture-stop");
+            XLGNavigationProbeLog(@"========== CAPTURE STOP ==========");
+        }
+        gXLGNavigationProbeActive=NO;
+        [tableView reloadData];
+        return;
+    }
+
+    XLGNavigationProbeClear();
+}
+
+@end
 
 #pragma mark - XLiquidGlass native notification router
 
@@ -3609,6 +4233,7 @@ static void XLGInstallHooks(void) {
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
+    XLGInstallNavigationProbeHooks();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -3624,7 +4249,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.9 Beta 18 loaded: read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.7.0 Beta 19 loaded: passive navigation probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
