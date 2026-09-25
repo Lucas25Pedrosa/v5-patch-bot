@@ -1050,6 +1050,7 @@ static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
             if (!strongController) return;
             XLGInvalidateLiquidGlassCompactBadge(strongController);
             XLGNormalizeLiquidGlassBadges(strongController);
+            XLGApplyLiquidGlassTabBarVisualFixes(strongController);
         }
     );
 
@@ -1060,6 +1061,7 @@ static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
             if (!strongController) return;
             XLGInvalidateLiquidGlassCompactBadge(strongController);
             XLGNormalizeLiquidGlassBadges(strongController);
+            XLGApplyLiquidGlassTabBarVisualFixes(strongController);
         }
     );
 }
@@ -1456,6 +1458,7 @@ static void XLGLGBadgeViewDidAppear(id self,SEL cmd,BOOL animated) {
 
     XLGInvalidateLiquidGlassCompactBadge(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
     XLGScheduleLiquidGlassBadgeRefresh(self);
 }
 
@@ -1465,6 +1468,7 @@ static void XLGLGBadgeSetTabViews(id self,SEL cmd,id tabViews) {
 
     XLGInvalidateLiquidGlassCompactBadge(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
     XLGScheduleLiquidGlassBadgeRefresh(self);
 }
 
@@ -1474,6 +1478,7 @@ static void XLGLGBadgeSyncTabBarItems(id self,SEL cmd) {
 
     XLGInvalidateLiquidGlassCompactBadge(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
     XLGScheduleLiquidGlassBadgeRefresh(self);
 }
 
