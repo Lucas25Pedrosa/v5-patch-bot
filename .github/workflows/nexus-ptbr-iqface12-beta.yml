@@ -1,0 +1,124 @@
+name: Build Nexus 1.0.2 PT-BR iQFace 1.2 Beta
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nexus/prepare_settings_iqface12.py"
+      - "nexus/NexusSettings.m"
+      - "nexus/NexusAvatarFix.m"
+      - "nexus/prepare_cache.py"
+      - "nexus/prepare_icons.py"
+      - "nexus/prepare_oled.py"
+      - "nexus-en-visible/prepare_enhancer.py"
+      - "nexus-en-visible/prepare_makefile.py"
+      - ".github/workflows/nexus-ptbr-iqface12-beta.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Prepare Nexus for iQFace 1.2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          WORK="$RUNNER_TEMP/nexus-ptbr-iqface12-beta"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/blobs/636fea8908d802e4189e61fb292c9f42ad668973" \
+            | python3 -c 'import sys,json,base64; d=json.load(sys.stdin); sys.stdout.buffer.write(base64.b64decode(d["content"]))' \
+            > "$WORK/EnhancerTweak.m"
+
+          # Safety for the first iQFace 1.2 validation: keep the native iQFace launcher visible.
+          python3 nexus-en-visible/prepare_enhancer.py "$WORK/EnhancerTweak.m"
+          cp iqface-enhancer-wordmark-beta/WordmarkActivation.m "$WORK/WordmarkActivation.m"
+
+          # PT-BR Nexus-owned modules. There is intentionally no Translation.m.
+          python3 nexus/prepare_cache.py iqface-cache/Tweak.m "$WORK/CacheTweak.m"
+          python3 nexus/prepare_icons.py iqface-icons/Tweak.m "$WORK/IconsTweak.m"
+          cp iqface-icons/IconPicker.m "$WORK/IconsPicker.m"
+
+          cp iqface-oled/Tweak.m "$WORK/Tweak.m"
+          (
+            cd "$WORK"
+            python3 "$ROOT/iqface-oled/prepare_oled.py"
+            python3 "$ROOT/iqface-oled/prepare_separator.py"
+            python3 "$ROOT/iqface-oled/finalize_020.py"
+            python3 "$ROOT/iqface-oled/adapt_iqface11.py"
+            python3 "$ROOT/iqface-oled/adapt_iqface11_native_icon_switches.py"
+          )
+          python3 nexus/prepare_oled.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
+          rm "$WORK/Tweak.m"
+
+          cp nexus/NexusSettings.m "$WORK/NexusSettings.m"
+          python3 nexus/patch_presentation_v2.py "$WORK/NexusSettings.m"
+          python3 nexus/prepare_settings_iqface12.py "$WORK/NexusSettings.m"
+          python3 nexus-en-visible/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
+
+          ! grep -F 'Translation.m' "$WORK/Makefile"
+          ! grep -F 'HideButton11.m' "$WORK/Makefile"
+          ! grep -F 'NSClassFromString(@"IQFTweakSettings")' "$WORK/NexusSettings.m"
+          grep -F 'NSClassFromString(@"IQFSettingsViewController")' "$WORK/NexusSettings.m"
+          grep -F 'initWithTitle:sectionsBuilder:' "$WORK/NexusSettings.m"
+          grep -F 'initWithTitle:sections:' "$WORK/NexusSettings.m"
+          grep -F 'NexusVersion = @"1.0.2"' "$WORK/NexusSettings.m"
+          grep -F 'NexusAvatarFix.m' "$WORK/Makefile"
+
+      - name: Build Nexus iQFace 1.2 Beta
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          WORK="$RUNNER_TEMP/nexus-ptbr-iqface12-beta"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
+          mkdir -p "$ROOT/nexus/artifacts-iqface12-beta"
+          rm -f "$ROOT/nexus/artifacts-iqface12-beta"/*
+          DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
+          test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" "$ROOT/nexus/artifacts-iqface12-beta/Nexus.dylib"
+
+          cd "$ROOT"
+          shasum -a 256 nexus/artifacts-iqface12-beta/Nexus.dylib > nexus/artifacts-iqface12-beta/SHA256SUMS.txt
+          file nexus/artifacts-iqface12-beta/Nexus.dylib > nexus/artifacts-iqface12-beta/file.txt
+          strings -a nexus/artifacts-iqface12-beta/Nexus.dylib > nexus/artifacts-iqface12-beta/strings.txt || true
+          otool -D nexus/artifacts-iqface12-beta/Nexus.dylib > nexus/artifacts-iqface12-beta/install-name.txt
+
+          grep -F 'Mach-O 64-bit' nexus/artifacts-iqface12-beta/file.txt
+          grep -F 'arm64' nexus/artifacts-iqface12-beta/file.txt
+          grep -F '@rpath/Nexus.dylib' nexus/artifacts-iqface12-beta/install-name.txt
+          grep -F 'IQFSettingsViewController' nexus/artifacts-iqface12-beta/strings.txt
+          grep -F 'initWithTitle:sectionsBuilder:' nexus/artifacts-iqface12-beta/strings.txt
+          grep -F 'initWithTitle:sections:' nexus/artifacts-iqface12-beta/strings.txt
+          grep -F 'v1.0.2' nexus/artifacts-iqface12-beta/strings.txt
+          grep -F 'nexus_avatar_addSubview:' nexus/artifacts-iqface12-beta/strings.txt
+          grep -F 'nexus_avatar_setImage:' nexus/artifacts-iqface12-beta/strings.txt
+          if grep -F '1.1-core-ptbr' nexus/artifacts-iqface12-beta/strings.txt; then exit 1; fi
+          if grep -F 'IQFEnhancerLocalizationVersion' nexus/artifacts-iqface12-beta/strings.txt; then exit 1; fi
+
+      - name: Upload Nexus iQFace 1.2 Beta
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-1.0.2-PTBR-iQFace-1.2-Beta1-arm64
+          path: nexus/artifacts-iqface12-beta/
+          if-no-files-found: error
