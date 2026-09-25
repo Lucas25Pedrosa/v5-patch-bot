@@ -1,0 +1,48 @@
+name: Build XLiquidGlass 1.4.1 Badge Bridge
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-badge-bridge/**"
+      - ".github/workflows/x-liquid-glass-badge-bridge.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-badge-bridge
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XLiquidGlass
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlass.dylib ! -path '*/XLiquidGlass.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlass-1.4.1-XNavigationBadgeBridge-X12.28.1-arm64.dylib
+          file artifacts/XLiquidGlass-1.4.1-XNavigationBadgeBridge-X12.28.1-arm64.dylib
+          shasum -a 256 artifacts/XLiquidGlass-1.4.1-XNavigationBadgeBridge-X12.28.1-arm64.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass-1.4.1-XNavigationBadgeBridge-X12.28.1-arm64
+          path: x-liquid-glass-badge-bridge/artifacts/
+          if-no-files-found: error
