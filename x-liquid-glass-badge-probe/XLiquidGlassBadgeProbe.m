@@ -343,17 +343,6 @@ static NSArray<UIWindow *> *XBPAllWindows(void) {
     return windows;
 }
 
-static UIWindow *XBPActiveWindow(void) {
-    UIWindow *fallback = nil;
-
-    for (UIWindow *window in XBPAllWindows()) {
-        if (!fallback && !window.hidden) fallback = window;
-        if (window.isKeyWindow) return window;
-    }
-
-    return fallback;
-}
-
 static NSArray<UIViewController *> *XBPControllerHierarchy(void) {
     NSMutableArray<UIViewController *> *queue = [NSMutableArray array];
 
