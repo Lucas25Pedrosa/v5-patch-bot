@@ -1009,7 +1009,6 @@ static NSString *XLGCurrentActiveUserID(void) {
                   navigationUserID,
                   gXLGBadgeActiveUserID ?: @"-");
             gXLGBadgeActiveUserID = [navigationUserID copy];
-            XLGPersistBadgeStates();
         }
         return navigationUserID;
     }
