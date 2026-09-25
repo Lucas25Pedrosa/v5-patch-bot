@@ -6,7 +6,7 @@
 
 #pragma mark - XLiquidGlass 1.6.0 Final
 
-#define XLGDiagLog(...) do { } while (0)
+#define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
 static BOOL XLGApplyStartupHoldIfNeeded(
     NSString *userID,
