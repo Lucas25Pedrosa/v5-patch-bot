@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.8.0 Beta 3
+#pragma mark - XLiquidGlass 1.8.0 Beta 4
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -55,6 +55,8 @@ static BOOL gXLGNavigationProbeActive = NO;
 static BOOL gXLGNavigationProbeHooksInstalled = NO;
 static NSMutableDictionary<NSString *, NSValue *> *gXLGContainerProbeOriginals = nil;
 static BOOL gXLGContainerProbeHooksInstalled = NO;
+static char kXLGGuideBridgeNavigationKey;
+static char kXLGGuideBridgeMarkerKey;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -618,7 +620,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass180Beta3NativeGuideRouter.log"];
+            @"XLiquidGlass180Beta4GuideNavigationBridge.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -831,10 +833,11 @@ static void XLGNavProbePushViewController(
     SEL cmd,
     UIViewController *viewController,
     BOOL animated) {
+    UINavigationController *nav=
+        [self isKindOfClass:UINavigationController.class]
+            ? (UINavigationController *)self : nil;
+
     if (gXLGNavigationProbeActive) {
-        UINavigationController *nav=
-            [self isKindOfClass:UINavigationController.class]
-                ? (UINavigationController *)self : nil;
         XLGNavigationProbeLog(
             @"PUSH nav=%@ ptr=%p from=%@ to=%@ ptr=%p animated=%@ stackBefore=%@",
             NSStringFromClass([self class]),
@@ -848,6 +851,58 @@ static void XLGNavProbePushViewController(
             viewController,
             animated ? @"YES" : @"NO",
             XLGNavigationProbeStackDescription(nav));
+    }
+
+    // Beta 4: T1GuideNavigationController is still the native router used by
+    // Explore in the classic hierarchy. Under Liquid Glass we keep an
+    // off-screen native instance alive only for routing. If that router tries
+    // to push, forward the exact destination into the visible XNavigation
+    // controller instead of placing it on the detached legacy stack.
+    BOOL guideBridge=
+        XLGEnabled() &&
+        nav &&
+        [objc_getAssociatedObject(nav,&kXLGGuideBridgeMarkerKey) boolValue];
+
+    if (guideBridge && viewController) {
+        UIViewController *presenter=
+            XLGSidebarContentPresentingViewController();
+        UINavigationController *visibleNavigation=
+            XLGNavigationControllerForPresenter(presenter);
+
+        if (visibleNavigation &&
+            visibleNavigation!=nav &&
+            !viewController.parentViewController &&
+            !viewController.navigationController) {
+
+            if (gXLGNavigationProbeActive) {
+                XLGNavigationProbeLog(
+                    @"GUIDE_BRIDGE forward hiddenNav=%@ ptr=%p visibleNav=%@ ptr=%p destination=%@ ptr=%p visibleStack=%@",
+                    NSStringFromClass(nav.class),
+                    nav,
+                    NSStringFromClass(visibleNavigation.class),
+                    visibleNavigation,
+                    NSStringFromClass(viewController.class),
+                    viewController,
+                    XLGNavigationProbeStackDescription(visibleNavigation));
+            }
+
+            [visibleNavigation pushViewController:viewController
+                                         animated:animated];
+            return;
+        }
+
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"GUIDE_BRIDGE could-not-forward visibleNav=%@ destinationParent=%@ destinationNav=%@",
+                visibleNavigation
+                    ? NSStringFromClass(visibleNavigation.class) : @"nil",
+                viewController.parentViewController
+                    ? NSStringFromClass(viewController.parentViewController.class)
+                    : @"nil",
+                viewController.navigationController
+                    ? NSStringFromClass(viewController.navigationController.class)
+                    : @"nil");
+        }
     }
 
     if (gOrigNavProbePushViewController) {
@@ -1277,6 +1332,76 @@ static NSString *XLGContainerProbeControllerSummary(id object) {
         stack];
 }
 
+static UINavigationController *XLGEnsureGuideBridgeNavigation(id entry) {
+    if (!entry || !XLGEnabled()) return nil;
+
+    NSString *entryName=NSStringFromClass([entry class]);
+    if (![entryName containsString:@"GuideAppNavigationTabEntry"]) {
+        return nil;
+    }
+
+    UINavigationController *cached=
+        objc_getAssociatedObject(entry,&kXLGGuideBridgeNavigationKey);
+    if (cached) return cached;
+
+    SEL createSEL=NSSelectorFromString(@"createContentController");
+    IMP createIMP=XLGContainerProbeOriginalIMP(entry,createSEL);
+    if (!createIMP) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"GUIDE_BRIDGE setup failed=no-original-createContentController owner=%@",
+                entryName);
+        }
+        return nil;
+    }
+
+    id created=((id(*)(id,SEL))createIMP)(entry,createSEL);
+    if (![created isKindOfClass:UINavigationController.class]) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"GUIDE_BRIDGE setup failed=create-result-%@ owner=%@",
+                created ? NSStringFromClass([created class]) : @"nil",
+                entryName);
+        }
+        return nil;
+    }
+
+    UINavigationController *navigation=
+        (UINavigationController *)created;
+    if (![NSStringFromClass(navigation.class)
+            isEqualToString:@"T1GuideNavigationController"]) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"GUIDE_BRIDGE setup failed=unexpected-nav-%@",
+                NSStringFromClass(navigation.class));
+        }
+        return nil;
+    }
+
+    objc_setAssociatedObject(
+        navigation,
+        &kXLGGuideBridgeMarkerKey,
+        @YES,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    objc_setAssociatedObject(
+        entry,
+        &kXLGGuideBridgeNavigationKey,
+        navigation,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"GUIDE_BRIDGE ready owner=%@ hiddenNav=%@ ptr=%p stack=%@",
+            entryName,
+            NSStringFromClass(navigation.class),
+            navigation,
+            XLGNavigationProbeStackDescription(navigation));
+    }
+
+    return navigation;
+}
+
 static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
     IMP original=XLGContainerProbeOriginalIMP(self,cmd);
     id result=nil;
@@ -1284,13 +1409,52 @@ static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
         result=((id(*)(id,SEL))original)(self,cmd);
     }
 
-    // Beta 3 is passive here: do not replace rootTabViewController and do not
-    // rebuild the legacy Guide/Notifications navigation containers.
+    NSString *ownerName=NSStringFromClass([self class]);
+    BOOL guideEntry=[ownerName containsString:@"GuideAppNavigationTabEntry"];
+
+    // If X itself asks for the legacy content controller, remember that exact
+    // native T1GuideNavigationController as our bridge instead of creating a
+    // second instance.
+    if (XLGEnabled() &&
+        guideEntry &&
+        sel_isEqual(cmd,NSSelectorFromString(@"createContentController")) &&
+        [result isKindOfClass:UINavigationController.class] &&
+        [NSStringFromClass([result class])
+            isEqualToString:@"T1GuideNavigationController"]) {
+        objc_setAssociatedObject(
+            result,
+            &kXLGGuideBridgeMarkerKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(
+            self,
+            &kXLGGuideBridgeNavigationKey,
+            result,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"GUIDE_BRIDGE captured-native hiddenNav=%@ ptr=%p stack=%@",
+                NSStringFromClass([result class]),
+                result,
+                XLGNavigationProbeStackDescription(result));
+        }
+    }
+
+    // XTabbedAppNavigation normally skips createContentController. Prime the
+    // classic Guide router when its root is requested, but leave the returned
+    // root controller completely untouched for XNavigation to own.
+    if (XLGEnabled() &&
+        guideEntry &&
+        sel_isEqual(cmd,NSSelectorFromString(@"rootTabViewController"))) {
+        XLGEnsureGuideBridgeNavigation(self);
+    }
+
     if (gXLGNavigationProbeActive) {
         XLGNavigationProbeLog(
             @"CONTAINER %@ owner=%@ ptr=%p result={%@}",
             NSStringFromSelector(cmd),
-            NSStringFromClass([self class]),
+            ownerName,
             self,
             XLGContainerProbeControllerSummary(result));
     }
@@ -1570,7 +1734,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Beta 3 mantém XNavigation nativo e repara Trending/News somente quando o destino nativo é criado mas não entra na hierarquia. Inicie a captura, toque em Trending/Notícias no Explorar e copie o relatório. Procure por GUIDE_FACTORY e GUIDE_ROUTER.";
+    return @"Beta 4 mantém XNavigation visível e inicializa T1GuideNavigationController apenas como roteador oculto. Teste Explorar/Busca/Trending; o relatório deve mostrar GUIDE_BRIDGE ready e, ao navegar, GUIDE_BRIDGE forward.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1630,7 +1794,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.8.0 Beta 3 Native Guide Router Probe ==========");
+            @"========== XLiquidGlass 1.8.0 Beta 4 Guide Navigation Bridge Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1642,7 +1806,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.8.0 Beta 3 Native Guide Router Probe ==========");
+                @"========== XLiquidGlass 1.8.0 Beta 4 Guide Navigation Bridge Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -4845,7 +5009,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.8.0 Beta 3 loaded: native Guide router + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.8.0 Beta 4 loaded: Guide navigation bridge + native Guide router fallback + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
