@@ -1273,14 +1273,67 @@ static UILabel *XLGBadgeLabelForXNavItem(UIView *item) {
     return badge;
 }
 
-static NSInteger XLGBadgeCountForXNavItem(UIView *item) {
-    NSString *label = item.accessibilityLabel.lowercaseString ?: @"";
-    if ([label containsString:@"notifica"]) return gXLGNTabCount;
+static NSString *XLGIdentityTextForXNavItem(UIView *item) {
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
 
-    if ([label containsString:@"bate-papo"] ||
-        [label containsString:@"chat"] ||
-        [label containsString:@"mensag"] ||
-        [label containsString:@"messages"]) {
+    for (NSString *value in @[
+        item.accessibilityLabel ?: @"",
+        item.accessibilityIdentifier ?: @"",
+        item.accessibilityHint ?: @"",
+        item.accessibilityValue ?: @""
+    ]) {
+        if (value.length) [parts addObject:value];
+    }
+
+    UIImageView *imageView = XLGImageViewForXNavItem(item);
+    if (imageView.accessibilityLabel.length)
+        [parts addObject:imageView.accessibilityLabel];
+    if (imageView.accessibilityIdentifier.length)
+        [parts addObject:imageView.accessibilityIdentifier];
+
+    UIView *bar = XLGAncestorNamed(item, @"XNavigation.TabBarView");
+    id itemViews = XLGSafeValueForKey(bar, @"itemViews");
+    id tabs = XLGSafeValueForKey(bar, @"tabs");
+    if ([itemViews isKindOfClass:NSArray.class] &&
+        [tabs isKindOfClass:NSArray.class]) {
+        NSUInteger index = [(NSArray *)itemViews indexOfObjectIdenticalTo:item];
+        if (index != NSNotFound && index < [(NSArray *)tabs count]) {
+            id tab = ((NSArray *)tabs)[index];
+            for (NSString *key in @[@"identifier",
+                                     @"tabIdentifier",
+                                     @"title",
+                                     @"name",
+                                     @"accessibilityLabel"]) {
+                id value = XLGSafeValueForKey(tab, key);
+                if ([value isKindOfClass:NSString.class] &&
+                    [(NSString *)value length]) {
+                    [parts addObject:value];
+                }
+            }
+            NSString *description = [tab description];
+            if (description.length) [parts addObject:description];
+        }
+    }
+
+    return [[parts componentsJoinedByString:@" "] lowercaseString];
+}
+
+static NSInteger XLGBadgeCountForXNavItem(UIView *item) {
+    NSString *identity = XLGIdentityTextForXNavItem(item);
+
+    if ([identity containsString:@"notifica"] ||
+        [identity containsString:@"notification"] ||
+        [identity containsString:@"activity"] ||
+        [identity containsString:@"ntab"]) {
+        return XLGNotificationDisplayCount();
+    }
+
+    if ([identity containsString:@"bate-papo"] ||
+        [identity containsString:@"chat"] ||
+        [identity containsString:@"mensag"] ||
+        [identity containsString:@"message"] ||
+        [identity containsString:@"dm_tab"] ||
+        [identity containsString:@"dmtab"]) {
         return XLGChatDisplayCount();
     }
 
