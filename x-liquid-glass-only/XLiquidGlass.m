@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.1 Final
+#pragma mark - XLiquidGlass 1.6.2 Final
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -31,6 +31,8 @@ static IMP gOrigDummyFeature = NULL;
 static IMP gOrigNFBSetupSections = NULL;
 static IMP gOrigNFBViewWillAppear = NULL;
 static IMP gOrigNavigationPushViewController = NULL;
+static char kXLGAppearanceOriginalActionKey;
+static BOOL gXLGAwaitingAppearanceDestination = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -269,50 +271,58 @@ static void XLGReloadSettingsTable(id controller) {
     [tableView reloadData];
 }
 
-static void XLGRemoveLiquidGlassFromRoot(id controller) {
-    NSArray *sections=XLGSectionsForController(controller);
-    if (!sections) return;
-
-    NSMutableArray *updated=[NSMutableArray arrayWithCapacity:sections.count];
-    BOOL changed=NO;
-    for (id entry in sections) {
-        if ([entry isKindOfClass:NSDictionary.class] &&
-            [entry[@"action"] isEqualToString:@"showXLiquidGlassSettings"]) {
-            changed=YES;
-            continue;
-        }
-        [updated addObject:entry];
-    }
-
-    if (changed) {
-        XLGSetSectionsForController(controller,[updated copy]);
-    }
+static NSString *XLGFoldedSettingsText(id value) {
+    if (![value isKindOfClass:NSString.class]) return @"";
+    return [(NSString *)value
+        stringByFoldingWithOptions:
+            (NSDiacriticInsensitiveSearch|NSCaseInsensitiveSearch)
+                         locale:NSLocale.currentLocale].lowercaseString ?: @"";
 }
 
-static BOOL XLGControllerIsAppearance(id controller) {
+static BOOL XLGEntryIsAppearance(NSDictionary *entry) {
+    if (![entry isKindOfClass:NSDictionary.class]) return NO;
+
+    NSString *title=XLGFoldedSettingsText(entry[@"title"]);
+    NSString *action=XLGFoldedSettingsText(entry[@"action"]);
+    NSString *subtitle=XLGFoldedSettingsText(entry[@"subtitle"]);
+
+    if ([title isEqualToString:@"aparencia"] ||
+        [title isEqualToString:@"appearance"]) {
+        return YES;
+    }
+
+    if ([action containsString:@"appearance"] ||
+        [action containsString:@"aparencia"]) {
+        return YES;
+    }
+
+    // Fallback for localized/current NFB builds where the title/action changed
+    // but the description still advertises themes/icons/fonts.
+    BOOL theme=[subtitle containsString:@"tema"] ||
+               [subtitle containsString:@"theme"];
+    BOOL icon=[subtitle containsString:@"icone"] ||
+              [subtitle containsString:@"icon"];
+    BOOL font=[subtitle containsString:@"fonte"] ||
+              [subtitle containsString:@"font"];
+    return theme && (icon || font);
+}
+
+static void XLGShowSettings(id self, SEL _cmd);
+
+static BOOL XLGInjectLiquidGlassIntoAppearanceDestination(id controller) {
     if (![controller isKindOfClass:UIViewController.class]) return NO;
-    UIViewController *vc=(UIViewController *)controller;
-    NSString *title=vc.title ?: vc.navigationItem.title ?: @"";
-    NSString *folded=[title stringByFoldingWithOptions:
-                      (NSDiacriticInsensitiveSearch|NSCaseInsensitiveSearch)
-                                                   locale:NSLocale.currentLocale];
-    return [folded isEqualToString:@"aparencia"] ||
-           [folded isEqualToString:@"appearance"];
-}
-
-static void XLGInjectLiquidGlassIntoAppearance(id controller) {
-    if (!XLGControllerIsAppearance(controller)) return;
 
     NSArray *sections=XLGSectionsForController(controller);
-    if (!sections) return;
-    if (XLGSectionsContainAction(sections,@"showXLiquidGlassSettings")) return;
+    if (!sections) return NO;
+    if (XLGSectionsContainAction(sections,@"showXLiquidGlassSettings")) {
+        gXLGAwaitingAppearanceDestination=NO;
+        return YES;
+    }
 
-    Class cls=object_getClass(controller) ? [controller class] : Nil;
-    if (cls) {
-        SEL showSEL=NSSelectorFromString(@"showXLiquidGlassSettings");
-        if (![cls instancesRespondToSelector:showSEL]) {
-            class_addMethod(cls,showSEL,(IMP)XLGShowSettings,"v@:");
-        }
+    Class cls=[controller class];
+    SEL showSEL=NSSelectorFromString(@"showXLiquidGlassSettings");
+    if (![cls instancesRespondToSelector:showSEL]) {
+        class_addMethod(cls,showSEL,(IMP)XLGShowSettings,"v@:");
     }
 
     NSDictionary *entry=@{
@@ -327,6 +337,117 @@ static void XLGInjectLiquidGlassIntoAppearance(id controller) {
     [updated insertObject:entry atIndex:insertIndex];
     XLGSetSectionsForController(controller,[updated copy]);
     XLGReloadSettingsTable(controller);
+    gXLGAwaitingAppearanceDestination=NO;
+    return YES;
+}
+
+static UIViewController *XLGSettingsDestinationFromController(id controller) {
+    if (![controller isKindOfClass:UIViewController.class]) return nil;
+    UIViewController *vc=(UIViewController *)controller;
+
+    UINavigationController *nav=vc.navigationController;
+    if (nav.topViewController && nav.topViewController!=vc) {
+        return nav.topViewController;
+    }
+
+    UIViewController *presented=vc.presentedViewController;
+    if ([presented isKindOfClass:UINavigationController.class]) {
+        UIViewController *top=((UINavigationController *)presented).topViewController;
+        if (top) return top;
+    }
+    return presented;
+}
+
+static void XLGTryInjectPendingAppearance(id rootController) {
+    if (!gXLGAwaitingAppearanceDestination) return;
+    UIViewController *destination=
+        XLGSettingsDestinationFromController(rootController);
+    if (destination) {
+        XLGInjectLiquidGlassIntoAppearanceDestination(destination);
+    }
+}
+
+static void XLGShowAppearanceBridge(id self, SEL _cmd) {
+    (void)_cmd;
+    NSString *originalAction=
+        objc_getAssociatedObject(self,&kXLGAppearanceOriginalActionKey);
+    if (!originalAction.length) return;
+
+    SEL originalSEL=NSSelectorFromString(originalAction);
+    if (![self respondsToSelector:originalSEL]) return;
+
+    gXLGAwaitingAppearanceDestination=YES;
+    ((void(*)(id,SEL))objc_msgSend)(self,originalSEL);
+
+    XLGTryInjectPendingAppearance(self);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(0.05*NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        XLGTryInjectPendingAppearance(self);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(0.20*NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        XLGTryInjectPendingAppearance(self);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(0.50*NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        XLGTryInjectPendingAppearance(self);
+        gXLGAwaitingAppearanceDestination=NO;
+    });
+}
+
+static void XLGPrepareRootAppearanceBridge(id controller) {
+    NSArray *sections=XLGSectionsForController(controller);
+    if (!sections) return;
+
+    NSMutableArray *updated=[NSMutableArray arrayWithCapacity:sections.count];
+    BOOL changed=NO;
+
+    Class cls=[controller class];
+    SEL bridgeSEL=NSSelectorFromString(@"showXLiquidGlassAppearanceBridge");
+    if (![cls instancesRespondToSelector:bridgeSEL]) {
+        class_addMethod(cls,bridgeSEL,(IMP)XLGShowAppearanceBridge,"v@:");
+    }
+
+    for (id object in sections) {
+        if (![object isKindOfClass:NSDictionary.class]) {
+            [updated addObject:object];
+            continue;
+        }
+
+        NSDictionary *entry=(NSDictionary *)object;
+        NSString *action=entry[@"action"];
+
+        // Remove the old standalone Liquid Glass item from root.
+        if ([action isEqualToString:@"showXLiquidGlassSettings"]) {
+            changed=YES;
+            continue;
+        }
+
+        if (XLGEntryIsAppearance(entry)) {
+            if (![action isEqualToString:@"showXLiquidGlassAppearanceBridge"]) {
+                if ([action isKindOfClass:NSString.class] && action.length) {
+                    objc_setAssociatedObject(controller,
+                                             &kXLGAppearanceOriginalActionKey,
+                                             action,
+                                             OBJC_ASSOCIATION_COPY_NONATOMIC);
+                    NSMutableDictionary *bridged=[entry mutableCopy];
+                    bridged[@"action"]=@"showXLiquidGlassAppearanceBridge";
+                    [updated addObject:[bridged copy]];
+                    changed=YES;
+                    continue;
+                }
+            }
+        }
+
+        [updated addObject:entry];
+    }
+
+    if (changed) {
+        XLGSetSectionsForController(controller,[updated copy]);
+    }
 }
 
 static void XLGNavigationPushViewController(id self,
@@ -338,21 +459,22 @@ static void XLGNavigationPushViewController(id self,
          gOrigNavigationPushViewController)(self,_cmd,viewController,animated);
     }
 
-    if (!viewController) return;
+    if (!gXLGAwaitingAppearanceDestination || !viewController) return;
 
-    // NFB builds some settings sections during/just after viewDidLoad.
-    // Try immediately and twice on the next run-loop windows so the Appearance
-    // controller can finish populating its own sections first.
-    XLGInjectLiquidGlassIntoAppearance(viewController);
+    XLGInjectLiquidGlassIntoAppearanceDestination(viewController);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                  (int64_t)(0.05*NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        XLGInjectLiquidGlassIntoAppearance(viewController);
+        if (gXLGAwaitingAppearanceDestination) {
+            XLGInjectLiquidGlassIntoAppearanceDestination(viewController);
+        }
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                  (int64_t)(0.20*NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        XLGInjectLiquidGlassIntoAppearance(viewController);
+        if (gXLGAwaitingAppearanceDestination) {
+            XLGInjectLiquidGlassIntoAppearanceDestination(viewController);
+        }
     });
 }
 
@@ -360,14 +482,14 @@ static void XLGNFBSetupSections(id self, SEL _cmd) {
     if (gOrigNFBSetupSections) {
         ((void (*)(id, SEL))gOrigNFBSetupSections)(self, _cmd);
     }
-    XLGRemoveLiquidGlassFromRoot(self);
+    XLGPrepareRootAppearanceBridge(self);
 }
 
 static void XLGNFBViewWillAppear(id self, SEL _cmd, BOOL animated) {
     if (gOrigNFBViewWillAppear) {
         ((void (*)(id, SEL, BOOL))gOrigNFBViewWillAppear)(self, _cmd, animated);
     }
-    XLGRemoveLiquidGlassFromRoot(self);
+    XLGPrepareRootAppearanceBridge(self);
 
     UITableView *tableView = nil;
     @try {
@@ -3020,7 +3142,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.1 Final loaded: Liquid Glass inside Appearance + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.2 Final loaded: Appearance action bridge + Liquid Glass inside Appearance + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
