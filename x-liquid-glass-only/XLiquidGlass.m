@@ -966,6 +966,32 @@ static NSString *XLGTryResolveUserID(id object, NSUInteger depth) {
     return nil;
 }
 
+static NSString *XLGUserIDFromNotification(id argument) {
+    if (![argument isKindOfClass:NSNotification.class]) return nil;
+    NSNotification *notification = (NSNotification *)argument;
+    return XLGTryResolveUserID(notification.object, 0);
+}
+
+static NSString *XLGCurrentUserIDFromAppEventHandler(id handler) {
+    if (!handler) return nil;
+
+    SEL currentUserIDSEL = NSSelectorFromString(@"_t1_currentUserID");
+    if ([handler respondsToSelector:currentUserIDSEL]) {
+        id value = ((id(*)(id,SEL))objc_msgSend)(handler, currentUserIDSEL);
+        NSString *userID = XLGNormalizedUserID(value);
+        if (userID.length) return userID;
+    }
+
+    SEL currentAccountSEL = NSSelectorFromString(@"_t1_currentAccount");
+    if ([handler respondsToSelector:currentAccountSEL]) {
+        id account = ((id(*)(id,SEL))objc_msgSend)(handler, currentAccountSEL);
+        NSString *userID = XLGTryResolveUserID(account, 0);
+        if (userID.length) return userID;
+    }
+
+    return nil;
+}
+
 static NSString *XLGCurrentActiveUserID(void) {
     // Once the badge bridge has positively identified the active account,
     // keep that identity authoritative. The sidebar/appNavigation account can
@@ -1602,43 +1628,9 @@ static void XLGCacheAllBadgeAccountsFromMap(NSDictionary *dictionary) {
         changed |= XLGSetBadgeCountsFromObject(dictionary[key], userID);
     }
 
-    NSString *activeUserID = XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
-    if (activeUserID.length &&
-        ![gXLGBadgeActiveUserID isEqualToString:activeUserID]) {
-        gXLGBadgeActiveUserID = [activeUserID copy];
-        changed = YES;
-    }
-
+    // Badge maps are data only. They must never decide which account is active.
+    // The active account is sourced from X's account lifecycle instead.
     if (changed) {
-        XLGPersistBadgeStates();
-        XLGRefreshGlobalTabBar();
-    }
-}
-
-static void XLGResolveActiveBadgeUserFromRootCount(void) {
-    if (gXLGLastRootBadgeCount < 0 ||
-        ![gXLGLastBadgeCountsByUserID isKindOfClass:NSDictionary.class]) {
-        return;
-    }
-
-    // AppIconBadgeCountDidChange is account-scoped in X. Prefer an
-    // unambiguous root-count match over appNavigation.account because the
-    // latter can still point at the previous account during a switch.
-    NSString *matchedUserID = nil;
-    NSUInteger matches = 0;
-    for (id key in gXLGLastBadgeCountsByUserID) {
-        id object = gXLGLastBadgeCountsByUserID[key];
-        NSInteger total = -1;
-        if (XLGReadTotalCount(object, &total) &&
-            total == gXLGLastRootBadgeCount) {
-            matchedUserID = XLGNormalizedUserID(key);
-            matches++;
-        }
-    }
-
-    if (matches == 1 && matchedUserID.length &&
-        ![gXLGBadgeActiveUserID isEqualToString:matchedUserID]) {
-        gXLGBadgeActiveUserID = [matchedUserID copy];
         XLGPersistBadgeStates();
         XLGRefreshGlobalTabBar();
     }
@@ -1660,8 +1652,17 @@ static void XLGActiveAccountDidChange(id self, SEL cmd, id argument) {
         ((void(*)(id,SEL,id))gOrigActiveAccountDidChange)(self, cmd, argument);
     }
 
-    NSString *userID = XLGTryResolveUserID(argument, 0);
-    if (!userID.length) userID = XLGTryResolveUserID(self, 0);
+    // In X 12.28.1 this callback receives an NSNotification. The new
+    // TFNTwitterAccount is notification.object; the notification itself has no
+    // userID. Prefer that exact lifecycle object, then X's own current-user
+    // accessors. appNavigation/sidebar is startup fallback only.
+    NSString *userID = XLGUserIDFromNotification(argument);
+    if (!userID.length) {
+        userID = XLGCurrentUserIDFromAppEventHandler(self);
+    }
+    if (!userID.length) {
+        userID = XLGTryResolveUserID(argument, 0);
+    }
     if (!userID.length) {
         userID = XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
     }
@@ -1675,8 +1676,9 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
     if ([name isEqualToString:@"AppIconBadgeCountDidChange"]) {
         id value = notification.userInfo[@"AppIconBadgeCountDidChangeUpdatedValue"];
         if ([value respondsToSelector:@selector(integerValue)]) {
+            // Keep the root count for diagnostics only. It must not select an
+            // account because multiple accounts can legitimately share totals.
             gXLGLastRootBadgeCount = [value integerValue];
-            XLGResolveActiveBadgeUserFromRootCount();
         }
         return;
     }
@@ -1685,28 +1687,24 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
         id map = notification.userInfo[@"AccountBadgesDidChangeUpdatedValues"];
         if ([map isKindOfClass:NSDictionary.class]) {
             XLGCacheAllBadgeAccountsFromMap(map);
-            XLGResolveActiveBadgeUserFromRootCount();
         }
         return;
     }
 
+    if ([name isEqualToString:@"TFSAccountDidBecomeActive"]) {
+        NSString *userID = XLGTryResolveUserID(notification.object, 0);
+        XLGSetActiveBadgeUserID(userID, @"TFSAccountDidBecomeActive");
+        return;
+    }
+
+    // Other account notifications may describe inactive/background accounts.
+    // They can trigger a redraw, but they must never change badge ownership.
     NSString *lower = name.lowercaseString;
     if ([lower containsString:@"account"] &&
         ([lower containsString:@"change"] ||
          [lower containsString:@"active"] ||
          [lower containsString:@"switch"])) {
-        dispatch_after(
-            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
-            dispatch_get_main_queue(),
-            ^{
-                NSString *active =
-                    XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
-                if (active.length) {
-                    XLGSetActiveBadgeUserID(active, notification.name);
-                } else {
-                    XLGRefreshGlobalTabBar();
-                }
-            });
+        XLGRefreshGlobalTabBar();
     }
 }
 
@@ -1884,7 +1882,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 4 multi-account loaded: authoritative account switching + isolated badges + activation + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 5 multi-account loaded: native account lifecycle ownership + isolated badges + activation + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
