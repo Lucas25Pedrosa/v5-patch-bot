@@ -997,20 +997,28 @@ static NSString *XLGCurrentUserIDFromAppEventHandler(id handler) {
 static NSDictionary *XLGBadgeStateForUserID(NSString *userID);
 
 static NSString *XLGCurrentActiveUserID(void) {
-    // Prefer the account explicitly supplied by X's badging/account lifecycle.
-    // If persistence points to an account for which we have no state (for
-    // example after replacing an older beta), recover from appNavigation only
-    // as a fallback. We never let badge-map delivery itself choose the account.
+    // Beta 7: the account represented by the visible XNavigation/appNavigation
+    // is authoritative. T1AppBadging is global and can update background
+    // accounts, so it must never steal badge ownership from the visible bar.
+    id account = XLGSidebarCurrentAccount();
+    NSString *navigationUserID = XLGTryResolveUserID(account, 0);
+    if (navigationUserID.length &&
+        XLGBadgeStateForUserID(navigationUserID)) {
+        if (![gXLGBadgeActiveUserID isEqualToString:navigationUserID]) {
+            NSLog(@"[XLiquidGlass B7] OWNER navigation=%@ previous=%@ action=promote-navigation",
+                  navigationUserID,
+                  gXLGBadgeActiveUserID ?: @"-");
+            gXLGBadgeActiveUserID = [navigationUserID copy];
+            XLGPersistBadgeStates();
+        }
+        return navigationUserID;
+    }
+
+    // Lifecycle ownership remains the fallback for startup/transitional frames
+    // where appNavigation has not exposed an account yet.
     if (gXLGBadgeActiveUserID.length &&
         XLGBadgeStateForUserID(gXLGBadgeActiveUserID)) {
         return gXLGBadgeActiveUserID;
-    }
-
-    id account = XLGSidebarCurrentAccount();
-    NSString *userID = XLGTryResolveUserID(account, 0);
-    if (userID.length && XLGBadgeStateForUserID(userID)) {
-        gXLGBadgeActiveUserID = [userID copy];
-        return userID;
     }
 
     return gXLGBadgeActiveUserID.length ? gXLGBadgeActiveUserID : nil;
@@ -1544,8 +1552,42 @@ static void XLGApplyThemeToXNavItem(UIView *item) {
     }
 }
 
+static NSString *gXLGLastRenderProbeSignature = nil;
+
 static void XLGRefreshGlobalTabBar(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *activeUserID = XLGCurrentActiveUserID();
+        NSString *navigationUserID =
+            XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
+        NSDictionary *state = XLGBadgeStateForUserID(activeUserID);
+
+        NSInteger ntab = XLGStateInteger(state, @"ntab", -1);
+        NSInteger dm = XLGStateInteger(state, @"dm", -1);
+        NSInteger xchat = XLGStateInteger(state, @"xchat", -1);
+        NSInteger total = XLGStateInteger(state, @"total", -1);
+        NSInteger chat = XLGChatDisplayCountForState(state);
+        NSInteger notifications = XLGNotificationDisplayCountForState(state);
+
+        NSString *signature =
+            [NSString stringWithFormat:@"%@|%@|%ld|%ld|%ld|%ld|%ld|%ld",
+             activeUserID ?: @"-",
+             navigationUserID ?: @"-",
+             (long)ntab, (long)dm, (long)xchat, (long)total,
+             (long)chat, (long)notifications];
+
+        if (![gXLGLastRenderProbeSignature isEqualToString:signature]) {
+            gXLGLastRenderProbeSignature = [signature copy];
+            NSLog(@"[XLiquidGlass B7] RENDER active=%@ nav=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
+                  activeUserID ?: @"-",
+                  navigationUserID ?: @"-",
+                  (long)ntab,
+                  (long)dm,
+                  (long)xchat,
+                  (long)total,
+                  (long)chat,
+                  (long)notifications);
+        }
+
         for (UIWindow *window in XLGVisibleWindows()) {
             for (UIView *item in
                  XLGSubviewsMatchingClassName(window, @"XNavigation.TabBarItemView")) {
@@ -1667,8 +1709,13 @@ static void XLGAppBadgingSetCurrentUserID(id self, SEL cmd, unsigned long long u
             self, cmd, userID);
     }
 
-    XLGSetActiveBadgeUserID([@(userID) stringValue],
-                            @"T1AppBadging.setCurrentUserID:");
+    // Beta 7: advisory only. T1AppBadging owns global badge bookkeeping, not
+    // the identity of the XNavigation bar currently visible to the user.
+    NSString *reported = [@(userID) stringValue];
+    NSLog(@"[XLiquidGlass B7] ADVISORY source=T1AppBadging.setCurrentUserID reported=%@ active=%@",
+          reported,
+          gXLGBadgeActiveUserID ?: @"-");
+    XLGRefreshGlobalTabBar();
 }
 
 static void XLGAppBadgingSetUserIDsCurrentUserID(id self,
@@ -1680,11 +1727,11 @@ static void XLGAppBadgingSetUserIDsCurrentUserID(id self,
             self, cmd, userIDs, currentUserID);
     }
 
-    NSString *userID = XLGNormalizedUserID(currentUserID);
-    if (userID.length) {
-        XLGSetActiveBadgeUserID(userID,
-                                @"T1AppBadging.setUserIDs:currentUserID:");
-    }
+    NSString *reported = XLGNormalizedUserID(currentUserID);
+    NSLog(@"[XLiquidGlass B7] ADVISORY source=T1AppBadging.setUserIDs:currentUserID: reported=%@ active=%@",
+          reported ?: @"-",
+          gXLGBadgeActiveUserID ?: @"-");
+    XLGRefreshGlobalTabBar();
 }
 
 static void XLGActiveAccountDidChange(id self, SEL cmd, id argument) {
@@ -1946,7 +1993,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 6 multi-account loaded: T1AppBadging ownership + lifecycle fallback + isolated badges + activation + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 7 two-in-one loaded: navigation ownership + T1AppBadging advisory + integrated badge probe + isolated badges + activation + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
