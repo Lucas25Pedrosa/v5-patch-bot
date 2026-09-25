@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.5 Beta 14
+#pragma mark - XLiquidGlass 1.6.7 Beta 16
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -142,6 +142,90 @@ static void XLGSyncCompatibilityGate(void) {
     }
 }
 
+static NSString *const kXLGNotificationProbeFileName =
+    @"XLiquidGlassBeta16GroupedNotificationProbe.log";
+
+static NSString *XLGNotificationProbePath(void) {
+    NSString *documents =
+        NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                            NSUserDomainMask,
+                                            YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents stringByAppendingPathComponent:
+            kXLGNotificationProbeFileName];
+}
+
+static NSString *XLGNotificationProbeTimestamp(void) {
+    static NSDateFormatter *formatter=nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken,^{
+        formatter=[[NSDateFormatter alloc] init];
+        formatter.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    });
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGNotificationProbeLog(NSString *format, ...) {
+    if (!format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=[[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGNotificationProbeTimestamp(),
+                    message ?: @""];
+
+    NSLog(@"[XLiquidGlass Beta16 Probe] %@",message ?: @"");
+
+    NSString *path=XLGNotificationProbePath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.class) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            [[NSFileManager defaultManager] createFileAtPath:path
+                                                     contents:nil
+                                                   attributes:nil];
+        }
+        NSFileHandle *handle=[NSFileHandle fileHandleForWritingAtPath:path];
+        if (!handle) return;
+        @try {
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle synchronizeFile];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+            @try { [handle closeFile]; } @catch (__unused NSException *ignored) {}
+        }
+    }
+}
+
+static NSString *XLGNotificationProbeRead(void) {
+    NSString *path=XLGNotificationProbePath();
+    if (!path.length) return @"";
+    NSData *data=[NSData dataWithContentsOfFile:path];
+    if (!data.length) return @"";
+    return [[NSString alloc] initWithData:data
+                                 encoding:NSUTF8StringEncoding] ?: @"";
+}
+
+static void XLGNotificationProbeClear(void) {
+    NSString *path=XLGNotificationProbePath();
+    if (path.length) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
+}
+
+static void XLGNotificationProbeCaptureState(NSString *reason);
+static void XLGNotificationProbeRuntimeSnapshot(void);
+static void XLGInstallNotificationNavigationProbeHooks(void);
+
+@interface XLiquidGlassNotificationProbeViewController : UITableViewController
+@end
+
 @interface XLiquidGlassSettingsViewController : UITableViewController
 @end
 
@@ -166,7 +250,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -188,26 +272,49 @@ static void XLGSyncCompatibilityGate(void) {
 
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
-    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
+    cell.accessoryView=nil;
+    cell.accessoryType=UITableViewCellAccessoryNone;
 
     if (indexPath.row == 0) {
+        UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
         cell.textLabel.text = @"Ativar Liquid Glass";
         cell.detailTextLabel.text = @"Usa o redesign nativo presente no X.";
         toggle.on = XLGEnabled();
         [toggle addTarget:self
                    action:@selector(xlgToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
-    } else {
+        cell.accessoryView=toggle;
+        cell.selectionStyle=UITableViewCellSelectionStyleNone;
+    } else if (indexPath.row == 1) {
+        UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
         cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
         cell.detailTextLabel.text = @"Exibe rótulos nativos quando disponíveis.";
         toggle.on = XLGTabLabelsEnabled();
         [toggle addTarget:self
                    action:@selector(xlgTabLabelsToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView=toggle;
+        cell.selectionStyle=UITableViewCellSelectionStyleNone;
+    } else {
+        cell.textLabel.text=@"Grouped Notification Probe";
+        cell.detailTextLabel.text=
+            @"Diagnóstico da linha “Novas notificações do post”.";
+        cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle=UITableViewCellSelectionStyleDefault;
     }
 
-    cell.accessoryView = toggle;
     return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row!=2) return;
+
+    XLiquidGlassNotificationProbeViewController *probe =
+        [[XLiquidGlassNotificationProbeViewController alloc]
+            initWithStyle:UITableViewStyleInsetGrouped];
+    [self.navigationController pushViewController:probe animated:YES];
 }
 
 - (void)xlgToggleChanged:(UISwitch *)sender {
@@ -229,6 +336,102 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+@end
+
+@implementation XLiquidGlassNotificationProbeViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"Grouped Notification Probe";
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void)tableView;
+    return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+ numberOfRowsInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return 4;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+titleForFooterInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return
+        @"Abra Notificações, toque na linha “Novas notificações do post” "
+         "que não funciona, volte aqui e copie o relatório.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier=@"XLGGroupedNotificationProbeCell";
+    UITableViewCell *cell=
+        [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) {
+        cell=[[UITableViewCell alloc]
+            initWithStyle:UITableViewCellStyleSubtitle
+          reuseIdentifier:identifier];
+    }
+
+    NSArray *titles=@[
+        @"Capturar estado",
+        @"Probe de runtime",
+        @"Copiar relatório",
+        @"Limpar relatório"
+    ];
+    NSArray *details=@[
+        @"Registra conta, navegação e painel atual.",
+        @"Confere classes, seletores e instala hooks de rota.",
+        @"Copia o log completo para a área de transferência.",
+        @"Apaga o relatório atual."
+    ];
+
+    cell.textLabel.text=titles[(NSUInteger)indexPath.row];
+    cell.detailTextLabel.text=details[(NSUInteger)indexPath.row];
+    cell.accessoryType=UITableViewCellAccessoryNone;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+    NSString *message=nil;
+
+    if (indexPath.row==0) {
+        XLGNotificationProbeCaptureState(@"manual-capture");
+        message=@"Estado capturado.";
+    } else if (indexPath.row==1) {
+        XLGInstallNotificationNavigationProbeHooks();
+        XLGNotificationProbeRuntimeSnapshot();
+        message=@"Probe de runtime executado.";
+    } else if (indexPath.row==2) {
+        NSString *report=XLGNotificationProbeRead();
+        UIPasteboard.generalPasteboard.string=
+            report.length ? report : @"(relatório vazio)";
+        message=report.length
+            ? @"Relatório copiado."
+            : @"O relatório ainda está vazio.";
+    } else if (indexPath.row==3) {
+        XLGNotificationProbeClear();
+        message=@"Relatório limpo.";
+    }
+
+    UIAlertController *alert=
+        [UIAlertController alertControllerWithTitle:@"Grouped Notification Probe"
+                                            message:message ?: @""
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -419,6 +622,11 @@ static void XLGInstallNFBSettingsIntegration(void) {
 static IMP gOrigTabLoad = NULL;
 static IMP gOrigTabAppear = NULL;
 static IMP gOrigNotificationCellDidMoveToWindow = NULL;
+static IMP gOrigProbeShowNewTweetsTimeline = NULL;
+static IMP gOrigProbeShowNotificationDetailTimeline = NULL;
+static IMP gOrigProbeShowNotifications = NULL;
+static IMP gOrigProbeAppEventOpenURL = NULL;
+static Class gXLGProbeAppNavigationClass = Nil;
 static char kXLGSidebarEdgePanKey;
 static char kXLGNotificationTapRecognizerKey;
 static BOOL gXLGNotificationSelectionHooked = NO;
@@ -783,6 +991,480 @@ static BOOL XLGOpenTweetStatusNatively(long long statusID) {
 #pragma clang diagnostic pop
 }
 
+static NSString *XLGNotificationProbeSafeDescription(id object) {
+    if (!object) return @"<nil>";
+    NSString *description=nil;
+    @try {
+        description=[object description];
+    } @catch (__unused NSException *exception) {
+        description=@"<description threw>";
+    }
+    if (!description) description=@"<no description>";
+    if (description.length>800) {
+        description=[[description substringToIndex:800]
+                     stringByAppendingString:@"…"];
+    }
+    return description;
+}
+
+static BOOL XLGNotificationProbeInterestingName(NSString *name) {
+    NSString *lower=name.lowercaseString;
+    if (!lower.length) return NO;
+    for (NSString *needle in @[
+        @"notification", @"target", @"status", @"tweet", @"url",
+        @"link", @"timeline", @"entry", @"identifier", @"context",
+        @"action", @"type", @"model", @"object", @"user", @"rich",
+        @"showall", @"id"
+    ]) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static void XLGNotificationProbeDumpObjectRecursive(
+    id object,
+    NSString *path,
+    NSUInteger depth,
+    NSHashTable *visited,
+    NSUInteger *nodeCount) {
+
+    if (!object || !path.length || !visited || !nodeCount) return;
+    if (depth>3 || *nodeCount>=180) return;
+    if ([visited containsObject:object]) return;
+    [visited addObject:object];
+    (*nodeCount)++;
+
+    XLGNotificationProbeLog(
+        @"OBJ depth=%lu path=%@ class=%@ ptr=%p desc=%@",
+        (unsigned long)depth,
+        path,
+        NSStringFromClass([object class]) ?: @"-",
+        object,
+        XLGNotificationProbeSafeDescription(object));
+
+    if ([object isKindOfClass:NSString.class] ||
+        [object isKindOfClass:NSNumber.class] ||
+        [object isKindOfClass:NSURL.class]) {
+        return;
+    }
+
+    if ([object isKindOfClass:NSArray.class]) {
+        NSArray *array=(NSArray *)object;
+        NSUInteger limit=MIN((NSUInteger)12,array.count);
+        for (NSUInteger i=0;i<limit;i++) {
+            XLGNotificationProbeDumpObjectRecursive(
+                array[i],
+                [path stringByAppendingFormat:@"[%lu]",(unsigned long)i],
+                depth+1,
+                visited,
+                nodeCount);
+        }
+        return;
+    }
+
+    if ([object isKindOfClass:NSDictionary.class]) {
+        NSDictionary *dictionary=(NSDictionary *)object;
+        NSUInteger count=0;
+        for (id key in dictionary) {
+            if (count++>=16) break;
+            id value=dictionary[key];
+            XLGNotificationProbeDumpObjectRecursive(
+                value,
+                [path stringByAppendingFormat:@"[%@]",key],
+                depth+1,
+                visited,
+                nodeCount);
+        }
+        return;
+    }
+
+    for (NSString *key in @[
+        @"viewModel",
+        @"targetStatusModel",
+        @"targetStatus",
+        @"targetStatusIDNumber",
+        @"statusIDNumber",
+        @"statusIDString",
+        @"statusID",
+        @"notification",
+        @"notificationID",
+        @"notificationId",
+        @"notificationUrl",
+        @"notificationURL",
+        @"url",
+        @"deepLink",
+        @"link",
+        @"entryID",
+        @"identifier",
+        @"timelineType",
+        @"type",
+        @"additionalContext",
+        @"showAllLinkText",
+        @"targetObjects",
+        @"fromUsers",
+        @"richText",
+        @"socialContext",
+        @"notificationSocialContext",
+        @"template"
+    ]) {
+        id value=nil;
+        @try {
+            value=[object valueForKey:key];
+        } @catch (__unused NSException *exception) {
+            value=nil;
+        }
+        if (value) {
+            XLGNotificationProbeLog(
+                @"KVC path=%@ key=%@ valueClass=%@ value=%@",
+                path,
+                key,
+                NSStringFromClass([value class]) ?: @"-",
+                XLGNotificationProbeSafeDescription(value));
+            XLGNotificationProbeDumpObjectRecursive(
+                value,
+                [path stringByAppendingFormat:@".%@",key],
+                depth+1,
+                visited,
+                nodeCount);
+        }
+    }
+
+    for (Class cls=[object class];
+         cls && cls!=NSObject.class && depth<3;
+         cls=class_getSuperclass(cls)) {
+        unsigned int count=0;
+        Ivar *ivars=class_copyIvarList(cls,&count);
+        if (!ivars) continue;
+
+        for (unsigned int i=0;i<count;i++) {
+            Ivar ivar=ivars[i];
+            const char *nameC=ivar_getName(ivar);
+            const char *typeC=ivar_getTypeEncoding(ivar);
+            if (!nameC || !typeC) continue;
+
+            NSString *name=[NSString stringWithUTF8String:nameC] ?: @"";
+            if (!XLGNotificationProbeInterestingName(name)) continue;
+
+            const char *type=typeC;
+            while (*type=='r' || *type=='n' || *type=='N' ||
+                   *type=='o' || *type=='O' || *type=='R' || *type=='V') {
+                type++;
+            }
+
+            XLGNotificationProbeLog(
+                @"IVAR path=%@ owner=%@ name=%@ type=%s",
+                path,
+                NSStringFromClass(cls) ?: @"-",
+                name,
+                typeC);
+
+            if (*type=='@') {
+                id value=nil;
+                @try {
+                    value=object_getIvar(object,ivar);
+                } @catch (__unused NSException *exception) {
+                    value=nil;
+                }
+                if (value) {
+                    XLGNotificationProbeLog(
+                        @"IVAR_VALUE path=%@.%@ class=%@ value=%@",
+                        path,
+                        name,
+                        NSStringFromClass([value class]) ?: @"-",
+                        XLGNotificationProbeSafeDescription(value));
+                    XLGNotificationProbeDumpObjectRecursive(
+                        value,
+                        [path stringByAppendingFormat:@".%@",name],
+                        depth+1,
+                        visited,
+                        nodeCount);
+                }
+            }
+        }
+
+        free(ivars);
+    }
+}
+
+static void XLGNotificationProbeDumpCell(id cell, NSString *phase) {
+    if (!cell) return;
+
+    XLGNotificationProbeLog(
+        @"========== CELL %@ ==========",phase ?: @"-");
+    XLGNotificationProbeLog(
+        @"cellClass=%@ ptr=%p window=%p",
+        NSStringFromClass([cell class]) ?: @"-",
+        cell,
+        [cell isKindOfClass:UIView.class] ? ((UIView *)cell).window : nil);
+
+    long long statusID=XLGStatusIDFromNotificationCell(cell);
+    XLGNotificationProbeLog(@"derivedStatusID=%lld",statusID);
+
+    id viewModel=XLGObjectIvarValue(cell,"viewModel");
+    XLGNotificationProbeLog(
+        @"viewModelClass=%@ ptr=%p desc=%@",
+        viewModel ? NSStringFromClass([viewModel class]) : @"-",
+        viewModel,
+        XLGNotificationProbeSafeDescription(viewModel));
+
+    if ([cell isKindOfClass:UIView.class]) {
+        NSMutableString *text=[NSMutableString string];
+        __block NSUInteger visitedViews=0;
+
+        void (^collect)(UIView *)=^(UIView *root) {
+            NSMutableArray<UIView *> *queue=[NSMutableArray arrayWithObject:root];
+            for (NSUInteger i=0;
+                 i<queue.count && i<180;
+                 i++) {
+                UIView *view=queue[i];
+                visitedViews++;
+                NSString *piece=nil;
+                if ([view isKindOfClass:UILabel.class]) {
+                    piece=((UILabel *)view).text;
+                } else if ([view isKindOfClass:UITextView.class]) {
+                    piece=((UITextView *)view).text;
+                } else if ([view isKindOfClass:UIButton.class]) {
+                    piece=((UIButton *)view).titleLabel.text;
+                }
+                if (!piece.length) piece=view.accessibilityLabel;
+                if (piece.length) {
+                    if (text.length) [text appendString:@" | "];
+                    [text appendString:piece];
+                }
+                for (UIView *subview in view.subviews ?: @[]) {
+                    if (![queue containsObject:subview]) {
+                        [queue addObject:subview];
+                    }
+                }
+            }
+        };
+        collect((UIView *)cell);
+        XLGNotificationProbeLog(
+            @"visibleText(%lu)=%@",
+            (unsigned long)visitedViews,
+            text.length ? text : @"<none>");
+    }
+
+    NSHashTable *visited=[NSHashTable weakObjectsHashTable];
+    NSUInteger nodeCount=0;
+    XLGNotificationProbeDumpObjectRecursive(
+        viewModel ?: cell,
+        @"cell.viewModel",
+        0,
+        visited,
+        &nodeCount);
+    XLGNotificationProbeLog(
+        @"========== END CELL %@ nodes=%lu ==========",
+        phase ?: @"-",
+        (unsigned long)nodeCount);
+}
+
+static void XLGProbeShowNewTweetsTimeline(
+    id self, SEL _cmd,
+    long long source,
+    long long timelineType,
+    id completion) {
+    XLGNotificationProbeLog(
+        @"ROUTE showNewTweetsNotificationTimeline source=%lld timelineType=%lld class=%@",
+        source,
+        timelineType,
+        NSStringFromClass([self class]) ?: @"-");
+    if (gOrigProbeShowNewTweetsTimeline) {
+        ((void(*)(id,SEL,long long,long long,id))
+         gOrigProbeShowNewTweetsTimeline)(
+            self,_cmd,source,timelineType,completion);
+    }
+}
+
+static void XLGProbeShowNotificationDetailTimeline(
+    id self, SEL _cmd,
+    long long source,
+    id notificationID,
+    id title,
+    id subtitle,
+    id completion) {
+    XLGNotificationProbeLog(
+        @"ROUTE showNotificationDetailTimeline source=%lld notificationID=%@ title=%@ subtitle=%@ class=%@",
+        source,
+        XLGNotificationProbeSafeDescription(notificationID),
+        XLGNotificationProbeSafeDescription(title),
+        XLGNotificationProbeSafeDescription(subtitle),
+        NSStringFromClass([self class]) ?: @"-");
+    if (gOrigProbeShowNotificationDetailTimeline) {
+        ((void(*)(id,SEL,long long,id,id,id,id))
+         gOrigProbeShowNotificationDetailTimeline)(
+            self,_cmd,source,notificationID,title,subtitle,completion);
+    }
+}
+
+static void XLGProbeShowNotifications(
+    id self, SEL _cmd,
+    long long source,
+    id completion) {
+    XLGNotificationProbeLog(
+        @"ROUTE showNotifications source=%lld class=%@",
+        source,
+        NSStringFromClass([self class]) ?: @"-");
+    if (gOrigProbeShowNotifications) {
+        ((void(*)(id,SEL,long long,id))
+         gOrigProbeShowNotifications)(self,_cmd,source,completion);
+    }
+}
+
+static void XLGProbeAppEventOpenURL(id self, SEL _cmd, id url) {
+    XLGNotificationProbeLog(
+        @"ROUTE T1AppEventHandler._t1_openURL urlClass=%@ url=%@",
+        url ? NSStringFromClass([url class]) : @"-",
+        XLGNotificationProbeSafeDescription(url));
+    if (gOrigProbeAppEventOpenURL) {
+        ((void(*)(id,SEL,id))gOrigProbeAppEventOpenURL)(self,_cmd,url);
+    }
+}
+
+static void XLGInstallNotificationNavigationProbeHooks(void) {
+    id appNavigation=XLGSidebarAppNavigation();
+    if (appNavigation) {
+        Class cls=[appNavigation class];
+        if (cls && gXLGProbeAppNavigationClass!=cls) {
+            gXLGProbeAppNavigationClass=cls;
+
+            SEL newTweetsSEL=NSSelectorFromString(
+                @"showNewTweetsNotificationTimelineWithSource:"
+                 "timelineType:completion:");
+            SEL detailSEL=NSSelectorFromString(
+                @"showNotificationDetailTimelineWithSource:"
+                 "notificationID:title:subtitle:completion:");
+            SEL notificationsSEL=NSSelectorFromString(
+                @"showNotificationsWithSource:completion:");
+
+            if ([cls instancesRespondToSelector:newTweetsSEL] &&
+                !gOrigProbeShowNewTweetsTimeline) {
+                XLGHookMethod(
+                    cls,
+                    newTweetsSEL,
+                    NO,
+                    (IMP)XLGProbeShowNewTweetsTimeline,
+                    &gOrigProbeShowNewTweetsTimeline);
+            }
+
+            if ([cls instancesRespondToSelector:detailSEL] &&
+                !gOrigProbeShowNotificationDetailTimeline) {
+                XLGHookMethod(
+                    cls,
+                    detailSEL,
+                    NO,
+                    (IMP)XLGProbeShowNotificationDetailTimeline,
+                    &gOrigProbeShowNotificationDetailTimeline);
+            }
+
+            if ([cls instancesRespondToSelector:notificationsSEL] &&
+                !gOrigProbeShowNotifications) {
+                XLGHookMethod(
+                    cls,
+                    notificationsSEL,
+                    NO,
+                    (IMP)XLGProbeShowNotifications,
+                    &gOrigProbeShowNotifications);
+            }
+        }
+    }
+
+    Class eventHandler=NSClassFromString(@"T1AppEventHandler");
+    SEL openURLSEL=NSSelectorFromString(@"_t1_openURL:");
+    if (eventHandler &&
+        [eventHandler instancesRespondToSelector:openURLSEL] &&
+        !gOrigProbeAppEventOpenURL) {
+        XLGHookMethod(
+            eventHandler,
+            openURLSEL,
+            NO,
+            (IMP)XLGProbeAppEventOpenURL,
+            &gOrigProbeAppEventOpenURL);
+    }
+}
+
+static void XLGNotificationProbeCaptureState(NSString *reason) {
+    XLGInstallNotificationNavigationProbeHooks();
+
+    id appNavigation=XLGSidebarAppNavigation();
+    id account=XLGSidebarCurrentAccount();
+    UIViewController *panel=XLGSidebarContentPresentingViewController();
+    UINavigationController *navigation=
+        XLGNavigationControllerForPresenter(panel);
+
+    NSString *userID=@"-";
+    for (NSString *selectorName in @[@"userID",@"accountID"]) {
+        SEL selector=NSSelectorFromString(selectorName);
+        if (account && [account respondsToSelector:selector]) {
+            id value=((id(*)(id,SEL))objc_msgSend)(account,selector);
+            if (value) {
+                userID=[value description] ?: @"-";
+                break;
+            }
+        }
+    }
+
+    XLGNotificationProbeLog(
+        @"========== STATE reason=%@ ==========",reason ?: @"-");
+    XLGNotificationProbeLog(
+        @"appNavigation class=%@ ptr=%p",
+        appNavigation ? NSStringFromClass([appNavigation class]) : @"-",
+        appNavigation);
+    XLGNotificationProbeLog(
+        @"account class=%@ ptr=%p userID=%@",
+        account ? NSStringFromClass([account class]) : @"-",
+        account,
+        userID);
+    XLGNotificationProbeLog(
+        @"panel class=%@ ptr=%p nav=%@ navPtr=%p top=%@ topPtr=%p",
+        panel ? NSStringFromClass([panel class]) : @"-",
+        panel,
+        navigation ? NSStringFromClass([navigation class]) : @"-",
+        navigation,
+        navigation.topViewController
+            ? NSStringFromClass([navigation.topViewController class])
+            : @"-",
+        navigation.topViewController);
+
+    for (NSString *selectorName in @[
+        @"showNewTweetsNotificationTimelineWithSource:timelineType:completion:",
+        @"showNotificationDetailTimelineWithSource:notificationID:title:subtitle:completion:",
+        @"showNotificationsWithSource:completion:",
+        @"showConversationViewControllerForViewModel:statusID:account:statusNavigationContext:scribeContext:sourceNavigationMetadata:fromViewController:animated:",
+        @"currentPanelNavigationController"
+    ]) {
+        SEL selector=NSSelectorFromString(selectorName);
+        XLGNotificationProbeLog(
+            @"selector %@ responds=%@",
+            selectorName,
+            (appNavigation && [appNavigation respondsToSelector:selector])
+                ? @"YES" : @"NO");
+    }
+    XLGNotificationProbeLog(
+        @"probePath=%@",XLGNotificationProbePath() ?: @"-");
+    XLGNotificationProbeLog(@"========== END STATE ==========");
+}
+
+static void XLGNotificationProbeRuntimeSnapshot(void) {
+    XLGNotificationProbeCaptureState(@"runtime-snapshot");
+
+    for (NSString *className in @[
+        @"T1URTTimelineNotificationCell",
+        @"T1URTNotificationsInteractionsTimelineBridge",
+        @"T1NotificationsViewController",
+        @"TFSURTNotification",
+        @"_TtC14T1TwitterSwift30URTNotificationTimelineFactory",
+        @"T1AppEventHandler"
+    ]) {
+        Class cls=NSClassFromString(className);
+        XLGNotificationProbeLog(
+            @"CLASS %@ present=%@ runtimeClass=%@",
+            className,
+            cls ? @"YES" : @"NO",
+            cls ? NSStringFromClass(cls) : @"-");
+    }
+}
+
 static BOOL XLGNotificationTapTouchIsInteractive(UIView *view,
                                                  UIView *cell) {
     UIView *cursor=view;
@@ -810,8 +1492,21 @@ static BOOL XLGNotificationCellShouldReceiveTouch(id self,
     (void)_cmd;
     (void)gesture;
     UIView *view=touch.view;
-    if (!view) return YES;
-    return !XLGNotificationTapTouchIsInteractive(view,(UIView *)self);
+    if (!view) {
+        XLGNotificationProbeLog(
+            @"TOUCH shouldReceive cell=%@ view=<nil> decision=YES",
+            NSStringFromClass([self class]) ?: @"-");
+        return YES;
+    }
+    BOOL interactive=
+        XLGNotificationTapTouchIsInteractive(view,(UIView *)self);
+    XLGNotificationProbeLog(
+        @"TOUCH shouldReceive cell=%@ touched=%@ interactive=%@ decision=%@",
+        NSStringFromClass([self class]) ?: @"-",
+        NSStringFromClass([view class]) ?: @"-",
+        interactive ? @"YES" : @"NO",
+        interactive ? @"NO" : @"YES");
+    return !interactive;
 }
 
 static void XLGNotificationCellHandleTap(id self,
@@ -821,8 +1516,21 @@ static void XLGNotificationCellHandleTap(id self,
     if (!XLGEnabled()) return;
     if (recognizer.state!=UIGestureRecognizerStateEnded) return;
 
+    XLGInstallNotificationNavigationProbeHooks();
+    XLGNotificationProbeDumpCell(self,@"tap");
+
     long long statusID=XLGStatusIDFromNotificationCell(self);
-    if (statusID<=0) return;
+    if (statusID<=0) {
+        XLGNotificationProbeLog(
+            @"TAP no-statusID: leaving original X behavior untouched for diagnosis");
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(0.25*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                XLGNotificationProbeCaptureState(@"post-zero-status-tap-250ms");
+            });
+        return;
+    }
 
     // Keep the original X touch path alive (cancelsTouchesInView=NO). If X
     // navigates successfully on its own, do nothing. Otherwise use Moe's
@@ -863,6 +1571,8 @@ static void XLGNotificationCellDidMoveToWindow(id self, SEL _cmd) {
 
     if (!XLGEnabled()) return;
     if (![self isKindOfClass:UIView.class]) return;
+
+    XLGInstallNotificationNavigationProbeHooks();
 
     UIView *cell=(UIView *)self;
     if (!cell.window) return;
@@ -3356,6 +4066,7 @@ static void XLGInstallHooks(void) {
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
     XLGInstallNotificationSelectionFix();
+    XLGInstallNotificationNavigationProbeHooks();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -3371,7 +4082,11 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.5 Beta 14 loaded: Moe notification selection fix + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.7 Beta 16 loaded: grouped notification probe + Moe notification selection fix + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        XLGNotificationProbeLog(
+            @"========== XLiquidGlass 1.6.7 Beta 16 Grouped Notification Probe loaded ==========");
+        XLGNotificationProbeLog(
+            @"probePath=%@",XLGNotificationProbePath() ?: @"-");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
