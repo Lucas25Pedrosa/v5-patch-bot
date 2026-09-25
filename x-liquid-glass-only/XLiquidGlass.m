@@ -919,6 +919,8 @@ static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeStateByU
 static BOOL gXLGBadgePersistenceLoaded = NO;
 static IMP gOrigXNavItemLayout = NULL;
 static IMP gOrigActiveAccountDidChange = NULL;
+static IMP gOrigAppBadgingSetCurrentUserID = NULL;
+static IMP gOrigAppBadgingSetUserIDsCurrentUserID = NULL;
 static id gXLGBadgeNotificationObserver = nil;
 static id gXLGDefaultsObserver = nil;
 static char kXLGBadgeLabelKey;
@@ -993,19 +995,23 @@ static NSString *XLGCurrentUserIDFromAppEventHandler(id handler) {
 }
 
 static NSString *XLGCurrentActiveUserID(void) {
-    // Once the badge bridge has positively identified the active account,
-    // keep that identity authoritative. The sidebar/appNavigation account can
-    // lag behind briefly during an account switch and was causing the old
-    // account to overwrite the newly selected badge state on every layout.
-    if (gXLGBadgeActiveUserID.length) return gXLGBadgeActiveUserID;
+    // Prefer the account explicitly supplied by X's badging/account lifecycle.
+    // If persistence points to an account for which we have no state (for
+    // example after replacing an older beta), recover from appNavigation only
+    // as a fallback. We never let badge-map delivery itself choose the account.
+    if (gXLGBadgeActiveUserID.length &&
+        XLGBadgeStateForUserID(gXLGBadgeActiveUserID)) {
+        return gXLGBadgeActiveUserID;
+    }
 
     id account = XLGSidebarCurrentAccount();
     NSString *userID = XLGTryResolveUserID(account, 0);
-    if (userID.length) {
+    if (userID.length && XLGBadgeStateForUserID(userID)) {
         gXLGBadgeActiveUserID = [userID copy];
         return userID;
     }
-    return nil;
+
+    return gXLGBadgeActiveUserID.length ? gXLGBadgeActiveUserID : nil;
 }
 
 static BOOL XLGReadIntegerGetter(id object, NSString *selectorName, NSInteger *valueOut) {
@@ -1629,22 +1635,54 @@ static void XLGCacheAllBadgeAccountsFromMap(NSDictionary *dictionary) {
     }
 
     // Badge maps are data only. They must never decide which account is active.
-    // The active account is sourced from X's account lifecycle instead.
+    // Always redraw even if the values equal the persisted cache: account
+    // switches create fresh XNavigation.TabBarItemView instances.
     if (changed) {
         XLGPersistBadgeStates();
-        XLGRefreshGlobalTabBar();
     }
+    XLGRefreshGlobalTabBar();
 }
 
 static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
     if (!userID.length) return;
-    if ([gXLGBadgeActiveUserID isEqualToString:userID]) return;
 
-    gXLGBadgeActiveUserID = [userID copy];
-    NSLog(@"[XLiquidGlass] active badge account=%@ source=%@",
-          userID, source ?: @"-");
-    XLGPersistBadgeStates();
+    BOOL changed = ![gXLGBadgeActiveUserID isEqualToString:userID];
+    if (changed) {
+        gXLGBadgeActiveUserID = [userID copy];
+        NSLog(@"[XLiquidGlass] active badge account=%@ source=%@",
+              userID, source ?: @"-");
+        XLGPersistBadgeStates();
+    }
+
+    // A same-account callback can arrive after X rebuilt the Liquid Glass bar,
+    // so redraw even when the numeric userID itself did not change.
     XLGRefreshGlobalTabBar();
+}
+
+static void XLGAppBadgingSetCurrentUserID(id self, SEL cmd, unsigned long long userID) {
+    if (gOrigAppBadgingSetCurrentUserID) {
+        ((void(*)(id,SEL,unsigned long long))gOrigAppBadgingSetCurrentUserID)(
+            self, cmd, userID);
+    }
+
+    XLGSetActiveBadgeUserID([@(userID) stringValue],
+                            @"T1AppBadging.setCurrentUserID:");
+}
+
+static void XLGAppBadgingSetUserIDsCurrentUserID(id self,
+                                                 SEL cmd,
+                                                 id userIDs,
+                                                 id currentUserID) {
+    if (gOrigAppBadgingSetUserIDsCurrentUserID) {
+        ((void(*)(id,SEL,id,id))gOrigAppBadgingSetUserIDsCurrentUserID)(
+            self, cmd, userIDs, currentUserID);
+    }
+
+    NSString *userID = XLGNormalizedUserID(currentUserID);
+    if (userID.length) {
+        XLGSetActiveBadgeUserID(userID,
+                                @"T1AppBadging.setUserIDs:currentUserID:");
+    }
 }
 
 static void XLGActiveAccountDidChange(id self, SEL cmd, id argument) {
@@ -1733,6 +1771,30 @@ static void XLGInstallGlobalTabBarFixes(void) {
                       NO,
                       (IMP)XLGActiveAccountDidChange,
                       &gOrigActiveAccountDidChange);
+    }
+
+    Class appBadgingClass = NSClassFromString(@"T1AppBadging");
+    if (appBadgingClass) {
+        SEL setCurrentUserIDSEL = NSSelectorFromString(@"setCurrentUserID:");
+        if ([appBadgingClass instancesRespondToSelector:setCurrentUserIDSEL] &&
+            !gOrigAppBadgingSetCurrentUserID) {
+            XLGHookMethod(appBadgingClass,
+                          setCurrentUserIDSEL,
+                          NO,
+                          (IMP)XLGAppBadgingSetCurrentUserID,
+                          &gOrigAppBadgingSetCurrentUserID);
+        }
+
+        SEL setUserIDsCurrentSEL =
+            NSSelectorFromString(@"setUserIDs:currentUserID:");
+        if ([appBadgingClass instancesRespondToSelector:setUserIDsCurrentSEL] &&
+            !gOrigAppBadgingSetUserIDsCurrentUserID) {
+            XLGHookMethod(appBadgingClass,
+                          setUserIDsCurrentSEL,
+                          NO,
+                          (IMP)XLGAppBadgingSetUserIDsCurrentUserID,
+                          &gOrigAppBadgingSetUserIDsCurrentUserID);
+        }
     }
 
     Class itemClass = NSClassFromString(@"XNavigation.TabBarItemView");
@@ -1882,7 +1944,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 5 multi-account loaded: native account lifecycle ownership + isolated badges + activation + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 6 multi-account loaded: T1AppBadging ownership + lifecycle fallback + isolated badges + activation + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
