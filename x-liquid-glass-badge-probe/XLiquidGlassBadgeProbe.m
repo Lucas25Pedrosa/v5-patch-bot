@@ -129,25 +129,26 @@ static UIWindow *XBPActiveWindow(void) {
     return fallback;
 }
 
-static id XBPFindLiquidGlassController(void) {
-    Class target = NSClassFromString(@"T1LiquidGlassTabBarController");
-    if (!target) return nil;
-
+static NSArray<UIViewController *> *XBPControllerHierarchy(void) {
     UIViewController *root = XBPActiveWindow().rootViewController;
-    if (!root) return nil;
+    if (!root) return @[];
 
     NSMutableArray<UIViewController *> *queue = [NSMutableArray arrayWithObject:root];
+    NSMutableArray<UIViewController *> *result = [NSMutableArray array];
     NSMutableSet<NSValue *> *seen = [NSMutableSet set];
 
-    for (NSUInteger i = 0; i < queue.count && i < 256; i++) {
+    for (NSUInteger i = 0; i < queue.count && i < 512; i++) {
         UIViewController *vc = queue[i];
+        if (!vc) continue;
+
         NSValue *key = [NSValue valueWithNonretainedObject:vc];
         if ([seen containsObject:key]) continue;
         [seen addObject:key];
-
-        if ([vc isKindOfClass:target]) return vc;
+        [result addObject:vc];
 
         if (vc.presentedViewController) [queue addObject:vc.presentedViewController];
+        if (vc.presentingViewController) [queue addObject:vc.presentingViewController];
+        if (vc.parentViewController) [queue addObject:vc.parentViewController];
         [queue addObjectsFromArray:vc.childViewControllers ?: @[]];
 
         if ([vc isKindOfClass:UINavigationController.class]) {
@@ -157,6 +158,98 @@ static id XBPFindLiquidGlassController(void) {
             [queue addObjectsFromArray:((UITabBarController *)vc).viewControllers ?: @[]];
         }
     }
+
+    return result;
+}
+
+static BOOL XBPControllerLooksRelevant(UIViewController *vc) {
+    if (!vc) return NO;
+
+    NSString *name = NSStringFromClass(vc.class);
+    NSString *lower = name.lowercaseString;
+
+    if ([lower containsString:@"liquid"] ||
+        [lower containsString:@"tabbar"] ||
+        [lower containsString:@"xnavigation"]) {
+        return YES;
+    }
+
+    if ([vc respondsToSelector:NSSelectorFromString(@"tabBar")] ||
+        [vc respondsToSelector:NSSelectorFromString(@"tabViews")] ||
+        [vc respondsToSelector:NSSelectorFromString(@"syncBadges")] ||
+        [vc respondsToSelector:NSSelectorFromString(@"_t1_layoutBadgeViewMaximized")] ||
+        [vc respondsToSelector:NSSelectorFromString(@"_t1_layoutBadgeViewMinimized")]) {
+        return YES;
+    }
+
+    return NO;
+}
+
+static void XBPDumpControllerHierarchy(void) {
+    NSArray<UIViewController *> *controllers = XBPControllerHierarchy();
+    XBPLog(@"VC_SCAN_BEGIN count=%lu", (unsigned long)controllers.count);
+
+    NSUInteger index = 0;
+    for (UIViewController *vc in controllers) {
+        NSString *name = NSStringFromClass(vc.class);
+        BOOL relevant = XBPControllerLooksRelevant(vc);
+
+        if (relevant) {
+            XBPLog(@"VC[%lu] class=%@ relevant=1 loaded=%d parent=%@ nav=%@ presented=%@ selectors(tabBar=%d tabViews=%d syncBadges=%d max=%d min=%d)",
+                   (unsigned long)index,
+                   name,
+                   vc.isViewLoaded,
+                   NSStringFromClass(vc.parentViewController.class),
+                   NSStringFromClass(vc.navigationController.class),
+                   NSStringFromClass(vc.presentedViewController.class),
+                   [vc respondsToSelector:NSSelectorFromString(@"tabBar")],
+                   [vc respondsToSelector:NSSelectorFromString(@"tabViews")],
+                   [vc respondsToSelector:NSSelectorFromString(@"syncBadges")],
+                   [vc respondsToSelector:NSSelectorFromString(@"_t1_layoutBadgeViewMaximized")],
+                   [vc respondsToSelector:NSSelectorFromString(@"_t1_layoutBadgeViewMinimized")]);
+        }
+
+        index++;
+    }
+
+    XBPLog(@"VC_SCAN_END");
+}
+
+static id XBPFindLiquidGlassController(void) {
+    NSArray<UIViewController *> *controllers = XBPControllerHierarchy();
+
+    Class liquid = NSClassFromString(@"T1LiquidGlassTabBarController");
+    Class xnav = NSClassFromString(@"_TtC11XNavigation16TabBarController");
+
+    // 1. Exact Liquid Glass controller, if it is actually attached.
+    for (UIViewController *vc in controllers) {
+        if (liquid && [vc isKindOfClass:liquid]) return vc;
+    }
+
+    // 2. XNavigation.TabBarController used by the redesign.
+    for (UIViewController *vc in controllers) {
+        if (xnav && [vc isKindOfClass:xnav]) return vc;
+    }
+
+    // 3. Any active controller that exposes both a tab container and badge-related API.
+    for (UIViewController *vc in controllers) {
+        BOOL hasTabContainer =
+            [vc respondsToSelector:NSSelectorFromString(@"tabBar")] ||
+            [vc respondsToSelector:NSSelectorFromString(@"tabViews")];
+
+        BOOL hasBadgeAPI =
+            [vc respondsToSelector:NSSelectorFromString(@"syncBadges")] ||
+            [vc respondsToSelector:NSSelectorFromString(@"_t1_layoutBadgeViewMaximized")] ||
+            [vc respondsToSelector:NSSelectorFromString(@"_t1_layoutBadgeViewMinimized")];
+
+        if (hasTabContainer && hasBadgeAPI) return vc;
+    }
+
+    // 4. Last-resort active tab controller.
+    for (UIViewController *vc in controllers) {
+        if ([vc respondsToSelector:NSSelectorFromString(@"tabBar")]) return vc;
+    }
+
     return nil;
 }
 
@@ -350,13 +443,24 @@ static void XBPCaptureController(id controller, NSString *event) {
 
     SEL tabBarSEL = NSSelectorFromString(@"tabBar");
     if (![controller respondsToSelector:tabBarSEL]) {
-        XBPLog(@"controller has no tabBar selector");
+        XBPLog(@"controller has no tabBar selector; dumping controller.view instead");
+        if ([controller isKindOfClass:UIViewController.class] &&
+            ((UIViewController *)controller).isViewLoaded) {
+            NSMutableSet<NSString *> *seenClasses = [NSMutableSet set];
+            UIView *rootView = ((UIViewController *)controller).view;
+            XBPDumpViewTree(rootView, rootView, 0, @"controller.view", seenClasses);
+        }
         return;
     }
 
     id object = ((id(*)(id,SEL))objc_msgSend)(controller, tabBarSEL);
     if (![object isKindOfClass:UITabBar.class]) {
-        XBPLog(@"tabBar object class=%@", NSStringFromClass([object class]));
+        XBPLog(@"tabBar object class=%@; dumping object if it is a UIView",
+               NSStringFromClass([object class]));
+        if ([object isKindOfClass:UIView.class]) {
+            NSMutableSet<NSString *> *seenClasses = [NSMutableSet set];
+            XBPDumpViewTree((UIView *)object, (UIView *)object, 0, @"tabBarObject", seenClasses);
+        }
         return;
     }
 
@@ -568,8 +672,14 @@ static void XBPInstallTabBarItemHook(void) {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
     if (indexPath.row == 0) {
+        XBPDumpControllerHierarchy();
+        XBPDumpExactRuntimeSelectors();
+
         id controller = XBPFindLiquidGlassController();
+        XBPLog(@"MANUAL_SELECTED_CONTROLLER class=%@",
+               controller ? NSStringFromClass([controller class]) : @"nil");
         XBPCaptureController(controller, @"manual");
+
         [tableView reloadData];
         return;
     }
@@ -710,7 +820,7 @@ static void XBPScheduleInstall(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassBadgeProbeInit(void) {
     @autoreleasepool {
-        XBPLog(@"========== XLiquidGlass Badge Probe 1.0.0 loaded ==========");
+        XBPLog(@"========== XLiquidGlass Badge Probe 1.0.1 loaded ==========");
         XBPLog(@"logPath=%@", XBPLogPath());
         XBPLog(@"Probe does not change badge values, colors, frames or visibility.");
 
