@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2 Beta 2
+#pragma mark - XLiquidGlass 1.9.2 Beta 3
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -91,6 +91,8 @@ static IMP gOrigToastBridgeTweetSentInit = NULL;
 static BOOL gXLGToastBridgeInstalled = NO;
 static id gXLGToastBridgeToaster = nil;
 static UIWindow *gXLGToastBridgeWindow = nil;
+static NSMutableArray *gXLGCompositionProbeObserverTokens = nil;
+static BOOL gXLGCompositionProbeInstalled = NO;
 static char kXLGToastBridgePushedKey;
 static char kXLGToastBridgeScheduledKey;
 
@@ -663,7 +665,7 @@ static NSString *XLGToastBridgeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass192Beta2ToastBridge.log"];
+        @"XLiquidGlass192Beta3CompositionSendProbe.log"];
 }
 
 static NSString *XLGToastBridgeTimestamp(void) {
@@ -1113,6 +1115,188 @@ static id XLGToastBridgeTweetSentInit(
     return result;
 }
 
+
+static NSString *XLGResolveNSStringConstant(const char *symbol,
+                                            NSString *fallback) {
+    if (symbol && *symbol) {
+        void *raw=dlsym(RTLD_DEFAULT,symbol);
+        if (raw) {
+            @try {
+                id value=*(__unsafe_unretained id *)raw;
+                if ([value isKindOfClass:NSString.class] &&
+                    [value length]) {
+                    return value;
+                }
+            } @catch (__unused NSException *exception) {
+            }
+        }
+    }
+    return fallback;
+}
+
+static NSString *XLGCompositionProbeDescribe(id object) {
+    if (!object) return @"nil";
+    @try {
+        NSString *description=[object description] ?: @"-";
+        if (description.length>1200) {
+            description=[[description substringToIndex:1200]
+                stringByAppendingString:@"…"];
+        }
+        return [NSString stringWithFormat:@"%@{%@}",
+                NSStringFromClass([object class]) ?: @"?",
+                description];
+    } @catch (__unused NSException *exception) {
+        return [NSString stringWithFormat:@"%@{description-error}",
+                NSStringFromClass([object class]) ?: @"?"];
+    }
+}
+
+static void XLGCompositionProbeLogInterestingValues(id object,
+                                                    NSString *prefix) {
+    if (!object) return;
+
+    NSArray<NSString *> *keys=@[
+        @"status",
+        @"tweet",
+        @"composition",
+        @"account",
+        @"accountID",
+        @"accountId",
+        @"userID",
+        @"userId",
+        @"text",
+        @"tweetText",
+        @"communityReference",
+        @"sendCount",
+        @"isStatusEditCreationEnabled",
+        @"isReply",
+        @"inReplyToStatusID",
+        @"inReplyToStatusId",
+        @"conversationID",
+        @"conversationId"
+    ];
+
+    for (NSString *key in keys) {
+        id value=XLGSafeValueForKey(object,key);
+        if (!value || value==NSNull.null) continue;
+        XLGToastBridgeLog(
+            @"COMPOSITION_VALUE %@.%@ = %@",
+            prefix ?: @"object",
+            key,
+            XLGCompositionProbeDescribe(value));
+    }
+}
+
+static void XLGCompositionProbeHandleNotification(
+    NSNotification *notification) {
+
+    NSString *statusKey=
+        XLGResolveNSStringConstant(
+            "TFNTwitterCompositionNotificationStatusKey",
+            @"TFNTwitterCompositionNotificationStatusKey");
+    NSString *accountIDKey=
+        XLGResolveNSStringConstant(
+            "TFNTwitterCompositionAccountIDUserInfoKey",
+            @"TFNTwitterCompositionAccountIDUserInfoKey");
+
+    NSDictionary *userInfo=
+        [notification.userInfo isKindOfClass:NSDictionary.class]
+            ? notification.userInfo : @{};
+
+    XLGToastBridgeLog(
+        @"COMPOSITION_NOTIFICATION name=%@ object=%@ userInfoCount=%lu",
+        notification.name ?: @"-",
+        XLGCompositionProbeDescribe(notification.object),
+        (unsigned long)userInfo.count);
+
+    for (id key in userInfo) {
+        id value=userInfo[key];
+        XLGToastBridgeLog(
+            @"COMPOSITION_USERINFO key=%@ keyClass=%@ value=%@",
+            key ?: @"nil",
+            key ? NSStringFromClass([key class]) : @"nil",
+            XLGCompositionProbeDescribe(value));
+    }
+
+    id status=userInfo[statusKey];
+    id accountID=userInfo[accountIDKey];
+
+    XLGToastBridgeLog(
+        @"COMPOSITION_RESOLVED statusKey=%@ status=%@ accountIDKey=%@ accountID=%@",
+        statusKey ?: @"-",
+        XLGCompositionProbeDescribe(status),
+        accountIDKey ?: @"-",
+        XLGCompositionProbeDescribe(accountID));
+
+    XLGCompositionProbeLogInterestingValues(
+        notification.object,@"notification.object");
+    XLGCompositionProbeLogInterestingValues(
+        status,@"status");
+
+    id currentAccount=XLGSidebarCurrentAccount();
+    XLGToastBridgeLog(
+        @"COMPOSITION_CONTEXT currentAccount=%@ currentUserID=%@ presenter=%@ appNavigation=%@",
+        XLGCompositionProbeDescribe(currentAccount),
+        XLGTryResolveUserID(currentAccount,0) ?: @"-",
+        XLGSidebarContentPresentingViewController()
+            ? NSStringFromClass(
+                [XLGSidebarContentPresentingViewController() class])
+            : @"nil",
+        XLGSidebarAppNavigation()
+            ? NSStringFromClass([XLGSidebarAppNavigation() class])
+            : @"nil");
+}
+
+static void XLGInstallCompositionSendProbe(void) {
+    if (gXLGCompositionProbeInstalled) return;
+
+    NSString *didSend=
+        XLGResolveNSStringConstant(
+            "TFNTwitterCompositionDidSendNotification",
+            @"TFNTwitterCompositionDidSendNotification");
+    NSString *didSendEdit=
+        XLGResolveNSStringConstant(
+            "TFNTwitterCompositionDidSendEditNotification",
+            @"TFNTwitterCompositionDidSendEditNotification");
+
+    if (!didSend.length && !didSendEdit.length) return;
+
+    gXLGCompositionProbeObserverTokens=
+        [NSMutableArray array];
+
+    NSNotificationCenter *center=
+        NSNotificationCenter.defaultCenter;
+
+    for (NSString *name in @[didSend ?: @"",
+                             didSendEdit ?: @""]) {
+        if (!name.length) continue;
+
+        id token=[center
+            addObserverForName:name
+                        object:nil
+                         queue:NSOperationQueue.mainQueue
+                    usingBlock:^(NSNotification *notification) {
+                        XLGCompositionProbeHandleNotification(notification);
+                    }];
+
+        if (token) {
+            [gXLGCompositionProbeObserverTokens addObject:token];
+        }
+
+        XLGToastBridgeLog(
+            @"COMPOSITION_OBSERVER name=%@ token=%p",
+            name,token);
+    }
+
+    gXLGCompositionProbeInstalled=
+        gXLGCompositionProbeObserverTokens.count>0;
+
+    XLGToastBridgeLog(
+        @"COMPOSITION_PROBE installed=%@ observers=%lu",
+        gXLGCompositionProbeInstalled ? @"YES" : @"NO",
+        (unsigned long)gXLGCompositionProbeObserverTokens.count);
+}
+
 static void XLGInstallToastBridge(void) {
     if (gXLGToastBridgeInstalled) return;
 
@@ -1167,7 +1351,7 @@ static void XLGInstallToastBridge(void) {
             [NSFileManager.defaultManager removeItemAtPath:path error:nil];
         }
         XLGToastBridgeLog(
-            @"========== XLiquidGlass 1.9.2 Beta 2 Toast Bridge ==========");
+            @"========== XLiquidGlass 1.9.2 Beta 3 Composition Send Probe ==========");
         XLGToastBridgeLog(
             @"liquidGlass=%@ appNavigation=%@",
             XLGEnabled() ? @"ON" : @"OFF",
@@ -6487,6 +6671,7 @@ static void XLGInstallHooks(void) {
     XLGInstallSearchBlurFix();
     XLGInstallGuideRouterHook();
     XLGInstallToastBridge();
+    XLGInstallCompositionSendProbe();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -6502,7 +6687,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 Beta 2 loaded: native tweet-sent toast bridge + 1.9.1 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.2 Beta 3 loaded: composition-send probe + Beta 2 toast host bridge + 1.9.1 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
