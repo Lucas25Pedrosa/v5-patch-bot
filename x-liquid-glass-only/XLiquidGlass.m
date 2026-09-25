@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.5 Beta 14
+#pragma mark - XLiquidGlass 1.6.6 Beta 15
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -729,6 +729,86 @@ static long long XLGStatusIDFromNotificationCell(id cell) {
     return XLGStatusIDFromObject(cell);
 }
 
+static id XLGNotificationViewModel(id cell) {
+    if (!cell) return nil;
+    id viewModel=XLGObjectIvarValue(cell,"viewModel");
+    if (viewModel) return viewModel;
+    @try {
+        return [cell valueForKey:@"viewModel"];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static NSURL *XLGURLFromURTObject(id urtObject) {
+    if (!urtObject) return nil;
+
+    if ([urtObject isKindOfClass:NSURL.class]) {
+        return (NSURL *)urtObject;
+    }
+
+    if ([urtObject isKindOfClass:NSString.class]) {
+        return [NSURL URLWithString:(NSString *)urtObject];
+    }
+
+    id urlValue=XLGObjectValueForSelector(urtObject,@"url");
+    if (!urlValue) {
+        @try {
+            urlValue=[urtObject valueForKey:@"url"];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+
+    if ([urlValue isKindOfClass:NSURL.class]) {
+        return (NSURL *)urlValue;
+    }
+    if ([urlValue isKindOfClass:NSString.class]) {
+        return [NSURL URLWithString:(NSString *)urlValue];
+    }
+    return nil;
+}
+
+static NSURL *XLGURTDestinationFromNotificationCell(id cell) {
+    id viewModel=XLGNotificationViewModel(cell);
+    if (!viewModel) return nil;
+
+    // Aggregated notification cards use the Swift URT notification view model,
+    // whose "urtUrl" member points at the destination for the whole card.
+    id urtURL=XLGObjectValueForSelector(viewModel,@"urtUrl");
+    if (!urtURL) {
+        urtURL=XLGObjectValueForSelector(viewModel,@"urtURL");
+    }
+    if (!urtURL) {
+        urtURL=XLGObjectIvarValue(viewModel,"urtUrl");
+    }
+    if (!urtURL) {
+        urtURL=XLGObjectIvarValue(viewModel,"urtURL");
+    }
+
+    return XLGURLFromURTObject(urtURL);
+}
+
+static BOOL XLGOpenURTDestination(NSURL *url) {
+    if (!url) return NO;
+
+    UIApplication *application=UIApplication.sharedApplication;
+
+    // Let X/iOS feed its own deep-link router. This preserves internal URT
+    // destinations without guessing which aggregate-notification screen to build.
+    if ([application respondsToSelector:
+         @selector(openURL:options:completionHandler:)]) {
+        [application openURL:url
+                    options:@{}
+          completionHandler:nil];
+        return YES;
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [application openURL:url];
+#pragma clang diagnostic pop
+}
+
 static BOOL XLGOpenTweetStatusNatively(long long statusID) {
     if (statusID<=0) return NO;
 
@@ -822,11 +902,16 @@ static void XLGNotificationCellHandleTap(id self,
     if (recognizer.state!=UIGestureRecognizerStateEnded) return;
 
     long long statusID=XLGStatusIDFromNotificationCell(self);
-    if (statusID<=0) return;
+    NSURL *urtDestination=nil;
+    if (statusID<=0) {
+        urtDestination=XLGURTDestinationFromNotificationCell(self);
+    }
+    if (statusID<=0 && !urtDestination) return;
 
     // Keep the original X touch path alive (cancelsTouchesInView=NO). If X
-    // navigates successfully on its own, do nothing. Otherwise use Moe's
-    // native conversation route as a fallback.
+    // navigates successfully on its own, do nothing. Otherwise:
+    // - status notifications use Moe's native conversation route;
+    // - aggregate URT notifications route their own urtUrl destination.
     UIViewController *beforePresenter=
         XLGSidebarContentPresentingViewController();
     UINavigationController *beforeNavigation=
@@ -851,7 +936,11 @@ static void XLGNotificationCellHandleTap(id self,
                 (afterPresented && afterPresented!=beforePresented);
 
             if (!nativeHandled) {
-                XLGOpenTweetStatusNatively(statusID);
+                if (statusID>0) {
+                    XLGOpenTweetStatusNatively(statusID);
+                } else if (urtDestination) {
+                    XLGOpenURTDestination(urtDestination);
+                }
             }
         });
 }
@@ -3371,7 +3460,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.5 Beta 14 loaded: Moe notification selection fix + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.6 Beta 15 loaded: Moe notification selection + aggregate URT route + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
