@@ -41,7 +41,7 @@ jobs:
           p = Path("nexus/build.sh")
           s = p.read_text(encoding="utf-8")
 
-          # Reproduce run #52 exactly first.
+          # Reproduce the known-working run #52 pipeline.
           s = s.replace("grep -F 'Alterar ícone' \"$ARTIFACTS/strings.txt\"\n", "")
           needle = 'python3 "$ROOT/nexus/prepare_enhancer.py" "$WORK/EnhancerTweak.m" "$WORK/Translation.m"\n'
           sync = 'python3 "$ROOT/nexus/sync_translation_11.py" "$WORK/Translation.m" "$ROOT/iqface-enhancer-1.1/Localization11.m"\n'
@@ -51,65 +51,59 @@ jobs:
               raise RuntimeError("prepare_enhancer invocation not found")
           s = s.replace(needle, replacement, 1)
 
-          # Keep Translation.m linked, its constructor and lifecycle hooks intact,
-          # but neutralize only the translation table and PT-BR layout behavior.
+          # Keep Translation.m linked and keep its constructor/lifecycle hooks,
+          # but empty the actual translation table and neutralize the PT-BR-only
+          # label-width adjustment. This preserves the working load path.
           neutralize = r'''python3 - "$WORK/Translation.m" <<'PY2'
           from pathlib import Path
-          import re, sys
+          import sys
 
           p = Path(sys.argv[1])
           src = p.read_text(encoding="utf-8")
 
-          # Remove all English->Portuguese mappings while preserving the object,
-          # constructor, hooks and exported/runtime structure from the functional build.
-          pat = re.compile(
-              r'(static NSDictionary<NSString \\*, NSString \\*> \\*IQFPortugueseUIStrings\\(void\\) \\{.*?translations = @\\{)(.*?)(\\n        \\};)',
-              flags=re.S,
-          )
-          m = pat.search(src)
-          if not m:
-              raise SystemExit("translation dictionary not found")
-          src = src[:m.start(2)] + '' + src[m.end(2):]
+          func = "static NSDictionary<NSString *, NSString *> *IQFPortugueseUIStrings(void)"
+          fpos = src.find(func)
+          if fpos < 0:
+              raise SystemExit("translation function not found")
 
-          # Preserve the function call/site so object layout remains close to the
-          # functional build, but make the PT-BR-only width adjustment inert.
-          helper = re.compile(
-              r'static void IQFFixTranslatedListLabelWidth\\(UILabel \\*label\\) \\{.*?\\n\\}',
-              flags=re.S,
-          )
-          src, n = helper.subn(
-              'static void IQFFixTranslatedListLabelWidth(UILabel *label) {\\n    (void)label;\\n}',
-              src,
-              count=1,
-          )
-          if n != 1:
-              raise SystemExit("translation label helper not found")
+          marker = "translations = @{"
+          dstart = src.find(marker, fpos)
+          if dstart < 0:
+              raise SystemExit("translation dictionary start not found")
+          body_start = dstart + len(marker)
+          body_end = src.find("\n        };", body_start)
+          if body_end < 0:
+              raise SystemExit("translation dictionary end not found")
+          src = src[:body_start] + "\n" + src[body_end:]
+
+          helper = "static void IQFFixTranslatedListLabelWidth(UILabel *label) {"
+          hstart = src.find(helper)
+          if hstart < 0:
+              raise SystemExit("translation width helper not found")
+          hend_marker = "\n}\n\nstatic void IQFTranslateViewTree"
+          hend = src.find(hend_marker, hstart)
+          if hend < 0:
+              raise SystemExit("translation width helper end not found")
+          stub = "static void IQFFixTranslatedListLabelWidth(UILabel *label) {\n    (void)label;\n}"
+          src = src[:hstart] + stub + src[hend + 2:]
 
           p.write_text(src, encoding="utf-8")
-          print("Translation behavior neutralized; Translation.m object/hook lifecycle preserved")
+          print("Translation table neutralized; constructor and hook lifecycle preserved")
           PY2
           '''
 
-          marker = timing
-          if marker not in s:
+          if timing not in s:
               raise RuntimeError("translation timing marker not found")
-          s = s.replace(marker, marker + neutralize, 1)
+          s = s.replace(timing, timing + neutralize, 1)
 
-          # Original binary validations that specifically require PT-BR strings
-          # must now verify their absence instead.
-          s = s.replace("grep -F 'RECURSOS' \"$ARTIFACTS/strings.txt\"\n", "! grep -F 'RECURSOS' \"$ARTIFACTS/strings.txt\"\n")
-
-          # Keep the legacy marker because the Translation.m object itself remains
-          # linked intentionally to preserve the known-working load-time structure.
           p.write_text(s, encoding="utf-8")
           PY
 
           bash nexus/build.sh
 
-      - name: Verify exact functional structure minus visible translation
+      - name: Verify functional structure and no visible PT-BR translation table
         run: |
           set -euo pipefail
-          BIN="nexus/artifacts/Nexus.dylib"
           STR="nexus/artifacts/strings.txt"
 
           grep -F 'v1.0.2' "$STR"
@@ -123,7 +117,6 @@ jobs:
           grep -F 'nexus_avatar_addSubview:' "$STR"
           grep -F 'nexus_avatar_setImage:' "$STR"
 
-          # Representative old iQFace translation strings must be gone.
           ! grep -F 'Bloquear anúncios em vídeos' "$STR"
           ! grep -F 'Ocultar publicações sugeridas' "$STR"
           ! grep -F 'Modo fantasma nos stories' "$STR"
