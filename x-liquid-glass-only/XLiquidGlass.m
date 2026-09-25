@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.0 Beta 3
+#pragma mark - XLiquidGlass 1.9.0
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -180,9 +180,6 @@ static void XLGSyncCompatibilityGate(void) {
     }
 }
 
-@interface XLiquidGlassNavigationProbeViewController : UITableViewController
-@end
-
 @interface XLiquidGlassSettingsViewController : UITableViewController
 @end
 
@@ -207,7 +204,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 3;
+    return 2;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -231,14 +228,6 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
 
-    if (indexPath.row == 2) {
-        cell.textLabel.text = @"Navigation Probe";
-        cell.detailTextLabel.text = @"Diagnóstico passivo de Trending e X Premium.";
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        return cell;
-    }
-
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
     if (indexPath.row == 0) {
@@ -259,17 +248,6 @@ static void XLGSyncCompatibilityGate(void) {
 
     cell.accessoryView = toggle;
     return cell;
-}
-
-- (void)tableView:(UITableView *)tableView
- didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row != 2) return;
-
-    XLiquidGlassNavigationProbeViewController *probe =
-        [[XLiquidGlassNavigationProbeViewController alloc]
-            initWithStyle:UITableViewStyleInsetGrouped];
-    [self.navigationController pushViewController:probe animated:YES];
 }
 
 - (void)xlgToggleChanged:(UISwitch *)sender {
@@ -1725,131 +1703,6 @@ static void XLGInstallNavigationProbeHooks(void) {
 
     gXLGNavigationProbeHooksInstalled=YES;
 }
-
-@implementation XLiquidGlassNavigationProbeViewController
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.title=@"Navigation Probe";
-    self.tableView.backgroundColor=UIColor.systemBackgroundColor;
-}
-
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    (void)tableView;
-    return 1;
-}
-
-- (NSInteger)tableView:(UITableView *)tableView
- numberOfRowsInSection:(NSInteger)section {
-    (void)tableView;
-    (void)section;
-    return 5;
-}
-
-- (NSString *)tableView:(UITableView *)tableView
- titleForFooterInSection:(NSInteger)section {
-    (void)tableView;
-    (void)section;
-    return @"1.9.0 Beta 3 parte diretamente da Beta 1 validada. Aplicar tema usa T1DisplaySettingsViewController com o inicializador nativo initWithAccount:. O único blur fix continua sendo o TTSSearchContainerViewControllerV2 da Beta 1. Procure PREMIUM_ROUTER e SEARCH_BLUR no relatório.";
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView
-         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *identifier=@"XLGNavigationProbeCell";
-    UITableViewCell *cell=
-        [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (!cell) {
-        cell=[[UITableViewCell alloc]
-            initWithStyle:UITableViewCellStyleSubtitle
-          reuseIdentifier:identifier];
-    }
-
-    cell.accessoryType=UITableViewCellAccessoryNone;
-    cell.detailTextLabel.text=nil;
-
-    switch (indexPath.row) {
-        case 0:
-            cell.textLabel.text=
-                gXLGNavigationProbeActive
-                    ? @"Reiniciar captura"
-                    : @"Iniciar captura";
-            cell.detailTextLabel.text=
-                @"Limpa o relatório e registra o runtime inicial.";
-            break;
-        case 1:
-            cell.textLabel.text=@"Capturar runtime";
-            cell.detailTextLabel.text=
-                @"Somente classes, stack e assinaturas de seletores.";
-            break;
-        case 2:
-            cell.textLabel.text=@"Copiar relatório";
-            cell.detailTextLabel.text=
-                @"Copia todo o log para a área de transferência.";
-            break;
-        case 3:
-            cell.textLabel.text=@"Parar captura";
-            cell.detailTextLabel.text=
-                gXLGNavigationProbeActive
-                    ? @"A captura está ativa."
-                    : @"A captura já está parada.";
-            break;
-        default:
-            cell.textLabel.text=@"Limpar relatório";
-            cell.detailTextLabel.text=
-                @"Apaga somente o arquivo do probe.";
-            break;
-    }
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView
- didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-
-    if (indexPath.row==0) {
-        XLGNavigationProbeClear();
-        gXLGNavigationProbeActive=YES;
-        XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.9.0 Beta 3 Display Settings Router Probe ==========");
-        XLGNavigationProbeLog(
-            @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
-        XLGNavigationProbeRuntimeSnapshot(@"capture-start");
-        [tableView reloadData];
-        return;
-    }
-
-    if (indexPath.row==1) {
-        if (!gXLGNavigationProbeActive) {
-            gXLGNavigationProbeActive=YES;
-            XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.9.0 Beta 1 Premium + Search Visual Probe ==========");
-        }
-        XLGNavigationProbeRuntimeSnapshot(@"manual");
-        [tableView reloadData];
-        return;
-    }
-
-    if (indexPath.row==2) {
-        NSString *report=XLGNavigationProbeRead();
-        UIPasteboard.generalPasteboard.string=
-            report.length ? report : @"Sem relatório.";
-        return;
-    }
-
-    if (indexPath.row==3) {
-        if (gXLGNavigationProbeActive) {
-            XLGNavigationProbeRuntimeSnapshot(@"capture-stop");
-            XLGNavigationProbeLog(@"========== CAPTURE STOP ==========");
-        }
-        gXLGNavigationProbeActive=NO;
-        [tableView reloadData];
-        return;
-    }
-
-    XLGNavigationProbeClear();
-}
-
-@end
 
 #pragma mark - XLiquidGlass native notification router
 
@@ -5598,6 +5451,31 @@ static void XLGInstallSearchBlurFix(void) {
             &gOrigSearchContainerViewDidLayoutSubviews);
 }
 
+static BOOL gXLGGuideRouterHookInstalled = NO;
+
+static void XLGInstallGuideRouterHook(void) {
+    if (gXLGGuideRouterHookInstalled) return;
+
+    Class trendFactory=
+        NSClassFromString(@"T1TrendingPageViewControllerFactory");
+    SEL createSEL=
+        NSSelectorFromString(@"createWithAccount:trendID:mode:");
+
+    if (trendFactory &&
+        XLGNavProbeMethodMatchesTrendingFactory(
+            trendFactory,createSEL) &&
+        !gOrigNavProbeTrendingFactoryCreate) {
+
+        gXLGGuideRouterHookInstalled=
+            XLGHookMethod(
+                trendFactory,
+                createSEL,
+                YES,
+                (IMP)XLGNavProbeTrendingFactoryCreate,
+                &gOrigNavProbeTrendingFactoryCreate);
+    }
+}
+
 static void XLGInstallHooks(void) {
     Class cls = Nil;
 
@@ -5680,8 +5558,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppSearchRouter();
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
-    XLGInstallNavigationProbeHooks();
-    XLGInstallContainerProbeHooks();
+    XLGInstallGuideRouterHook();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -5697,7 +5574,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.0 Beta 3 loaded: native Display Settings initWithAccount route + Beta 1 validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.0 stable loaded: Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
