@@ -3,8 +3,9 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
+#import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.8.0
+#pragma mark - XLiquidGlass 1.9.0 Beta 1
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -60,6 +61,14 @@ static char kXLGGuideBridgeMarkerKey;
 static IMP gOrigXAppShowSearchResultsSource = NULL;
 static IMP gOrigXAppShowSearchResultsFromPanel = NULL;
 static BOOL gXLGXAppSearchRouterInstalled = NO;
+static IMP gOrigXAppPremiumProfileCustomization = NULL;
+static IMP gOrigXAppPremiumCustomizeNavigation = NULL;
+static IMP gOrigXAppPremiumAppIcon = NULL;
+static IMP gOrigXAppPremiumSettings = NULL;
+static BOOL gXLGXAppPremiumRouterInstalled = NO;
+static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
+static BOOL gXLGSearchBlurFixInstalled = NO;
+static char kXLGSearchBlurLoggedKey;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -623,7 +632,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass180.log"];
+            @"XLiquidGlass190Beta1.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1737,7 +1746,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"XLiquidGlass 1.8.0 estável. O roteador de busca redireciona as rotas showSearchResults do XTabbedAppNavigation para o caminho funcional do Liquid Glass. O probe permanece disponível para diagnóstico.";
+    return @"1.9.0 Beta 1 preserva o roteador de busca da 1.8.0, corrige rotas internas seguras do X Premium e remove o blur superior apenas do TTSSearchContainerViewControllerV2. Procure PREMIUM_ROUTER e SEARCH_BLUR no relatório.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1797,7 +1806,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.8.0 Navigation Probe ==========");
+            @"========== XLiquidGlass 1.9.0 Beta 1 Premium + Search Visual Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1809,7 +1818,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.8.0 Navigation Probe ==========");
+                @"========== XLiquidGlass 1.9.0 Beta 1 Premium + Search Visual Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -5070,6 +5079,436 @@ static void XLGInstallXAppSearchRouter(void) {
         sourceHooked || fromPanelHooked;
 }
 
+
+#pragma mark - XLiquidGlass 1.9.0 Beta 1 Premium routes
+
+static id XLGDynamicGlobalObject(const char *symbolName) {
+    if (!symbolName) return nil;
+    void *address=dlsym(RTLD_DEFAULT,symbolName);
+    if (!address) return nil;
+
+    id __unsafe_unretained *slot=(id __unsafe_unretained *)address;
+    return slot ? *slot : nil;
+}
+
+static id XLGPremiumScribeContext(void) {
+    Class scribeClass=NSClassFromString(@"TFSTwitterScribeContext");
+    SEL selector=NSSelectorFromString(
+        @"scribeContextWithPage:section:component:element:");
+    if (!scribeClass || ![scribeClass respondsToSelector:selector]) {
+        return nil;
+    }
+
+    id page=XLGDynamicGlobalObject("TFSTwitterScribePagePremiumHub");
+    id empty=XLGDynamicGlobalObject("TFSTwitterScribeSectionEmpty");
+
+    if (!page) page=@"premium_hub";
+    if (!empty) empty=@"";
+
+    return ((id(*)(id,SEL,id,id,id,id))objc_msgSend)(
+        scribeClass,selector,page,empty,empty,empty);
+}
+
+static BOOL XLGPremiumShouldAnimate(id appNavigation, long long source) {
+    SEL selector=NSSelectorFromString(
+        @"_shouldAnimatePresentationForSource:");
+    if (appNavigation &&
+        [appNavigation respondsToSelector:selector]) {
+        return ((BOOL(*)(id,SEL,long long))objc_msgSend)(
+            appNavigation,selector,source);
+    }
+    return YES;
+}
+
+static UIViewController *XLGPremiumCurrentPanelController(
+    id appNavigation) {
+    SEL selector=NSSelectorFromString(
+        @"currentPanelNavigationController");
+    if (appNavigation &&
+        [appNavigation respondsToSelector:selector]) {
+        id result=((id(*)(id,SEL))objc_msgSend)(
+            appNavigation,selector);
+        if ([result isKindOfClass:UIViewController.class]) {
+            return result;
+        }
+    }
+
+    return XLGSidebarContentPresentingViewController();
+}
+
+static BOOL XLGPremiumPresentController(
+    id appNavigation,
+    UIViewController *controller,
+    long long source,
+    id completion,
+    NSString *routeName) {
+
+    if (!controller) return NO;
+
+    UIViewController *fromController=
+        XLGPremiumCurrentPanelController(appNavigation);
+    if (!fromController) return NO;
+
+    BOOL animated=XLGPremiumShouldAnimate(appNavigation,source);
+    SEL presentSEL=NSSelectorFromString(
+        @"tfn_presentFromViewController:animated:completion:");
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"PREMIUM_ROUTER route=%@ destination=%@ ptr=%p from=%@ ptr=%p animated=%@",
+            routeName ?: @"-",
+            NSStringFromClass(controller.class),
+            controller,
+            NSStringFromClass(fromController.class),
+            fromController,
+            animated ? @"YES" : @"NO");
+    }
+
+    if ([controller respondsToSelector:presentSEL]) {
+        ((void(*)(id,SEL,id,BOOL,id))objc_msgSend)(
+            controller,presentSEL,fromController,animated,completion);
+        return YES;
+    }
+
+    UINavigationController *navigation=
+        XLGNavigationControllerForPresenter(fromController);
+    if (!navigation &&
+        [fromController isKindOfClass:UINavigationController.class]) {
+        navigation=(UINavigationController *)fromController;
+    }
+
+    if (!navigation) return NO;
+
+    [navigation pushViewController:controller animated:animated];
+    if (completion) {
+        ((void(^)(void))completion)();
+    }
+    return YES;
+}
+
+static UIViewController *XLGPremiumControllerWithAccountAndScribe(
+    NSString *className,
+    id account,
+    id scribeContext) {
+
+    Class cls=NSClassFromString(className);
+    if (!cls || !account) return nil;
+
+    id allocated=((id(*)(id,SEL))objc_msgSend)(
+        cls,@selector(alloc));
+    SEL initSEL=NSSelectorFromString(
+        @"initWithAccount:scribeContext:");
+    if (![allocated respondsToSelector:initSEL]) {
+        return nil;
+    }
+
+    id result=((id(*)(id,SEL,id,id))objc_msgSend)(
+        allocated,initSEL,account,scribeContext);
+    return [result isKindOfClass:UIViewController.class]
+        ? result : nil;
+}
+
+static UIViewController *XLGPremiumAppIconController(
+    id account,
+    id scribeContext) {
+
+    Class controllerClass=
+        NSClassFromString(@"T1AppIconSettingsViewController");
+    if (!controllerClass || !account) return nil;
+
+    id customizer=nil;
+    Class managerClass=
+        NSClassFromString(@"T1AppCustomizationManager");
+    SEL sharedSEL=NSSelectorFromString(@"sharedInstance");
+    if (managerClass &&
+        [managerClass respondsToSelector:sharedSEL]) {
+        customizer=((id(*)(id,SEL))objc_msgSend)(
+            managerClass,sharedSEL);
+    }
+
+    if (!customizer) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"PREMIUM_ROUTER app-icon failed=no-appIconCustomizer");
+        }
+        return nil;
+    }
+
+    id allocated=((id(*)(id,SEL))objc_msgSend)(
+        controllerClass,@selector(alloc));
+    SEL initSEL=NSSelectorFromString(
+        @"initWithAccount:scribeContext:appIconCustomizer:");
+    if (![allocated respondsToSelector:initSEL]) {
+        return nil;
+    }
+
+    id result=((id(*)(id,SEL,id,id,id))objc_msgSend)(
+        allocated,initSEL,account,scribeContext,customizer);
+    return [result isKindOfClass:UIViewController.class]
+        ? result : nil;
+}
+
+static BOOL XLGRoutePremiumDestination(
+    id appNavigation,
+    NSString *destinationClass,
+    long long source,
+    id completion,
+    NSString *routeName) {
+
+    if (!XLGEnabled()) return NO;
+
+    id account=XLGSidebarCurrentAccount();
+    id scribeContext=XLGPremiumScribeContext();
+    UIViewController *controller=
+        XLGPremiumControllerWithAccountAndScribe(
+            destinationClass,account,scribeContext);
+
+    if (!controller) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"PREMIUM_ROUTER route=%@ failed=controller-create class=%@ account=%@",
+                routeName ?: @"-",
+                destinationClass ?: @"-",
+                account ? NSStringFromClass([account class]) : @"nil");
+        }
+        return NO;
+    }
+
+    return XLGPremiumPresentController(
+        appNavigation,controller,source,completion,routeName);
+}
+
+static void XLGXAppPremiumProfileCustomization(
+    id self, SEL cmd, long long source, id completion) {
+
+    if (XLGRoutePremiumDestination(
+            self,
+            @"T1ProfileCustomizationSettingsViewController",
+            source,
+            completion,
+            @"profile-customization")) {
+        return;
+    }
+
+    if (gOrigXAppPremiumProfileCustomization) {
+        ((void(*)(id,SEL,long long,id))
+            gOrigXAppPremiumProfileCustomization)(
+                self,cmd,source,completion);
+    }
+}
+
+static void XLGXAppPremiumCustomizeNavigation(
+    id self, SEL cmd, long long source, id completion) {
+
+    if (XLGRoutePremiumDestination(
+            self,
+            @"T1TabCustomizationViewController",
+            source,
+            completion,
+            @"customize-navigation")) {
+        return;
+    }
+
+    if (gOrigXAppPremiumCustomizeNavigation) {
+        ((void(*)(id,SEL,long long,id))
+            gOrigXAppPremiumCustomizeNavigation)(
+                self,cmd,source,completion);
+    }
+}
+
+static void XLGXAppPremiumAppIcon(
+    id self, SEL cmd, long long source, id completion) {
+
+    if (XLGEnabled()) {
+        id account=XLGSidebarCurrentAccount();
+        id scribeContext=XLGPremiumScribeContext();
+        UIViewController *controller=
+            XLGPremiumAppIconController(account,scribeContext);
+
+        if (controller &&
+            XLGPremiumPresentController(
+                self,controller,source,completion,@"app-icon")) {
+            return;
+        }
+    }
+
+    if (gOrigXAppPremiumAppIcon) {
+        ((void(*)(id,SEL,long long,id))
+            gOrigXAppPremiumAppIcon)(
+                self,cmd,source,completion);
+    }
+}
+
+static void XLGXAppPremiumSettings(
+    id self, SEL cmd, long long source, id completion) {
+
+    if (XLGRoutePremiumDestination(
+            self,
+            @"T1PremiumSettingsViewController",
+            source,
+            completion,
+            @"premium-settings")) {
+        return;
+    }
+
+    if (gOrigXAppPremiumSettings) {
+        ((void(*)(id,SEL,long long,id))
+            gOrigXAppPremiumSettings)(
+                self,cmd,source,completion);
+    }
+}
+
+static void XLGInstallXAppPremiumRouter(void) {
+    if (gXLGXAppPremiumRouterInstalled) return;
+
+    Class cls=
+        NSClassFromString(@"_TtC14T1TwitterSwift20XTabbedAppNavigation");
+    if (!cls) return;
+
+    struct {
+        const char *selectorName;
+        IMP replacement;
+        IMP *original;
+    } hooks[] = {
+        {
+            "showPremiumHubProfileCustomizationWithSource:withCompletion:",
+            (IMP)XLGXAppPremiumProfileCustomization,
+            &gOrigXAppPremiumProfileCustomization
+        },
+        {
+            "showPremiumHubCustomizeNavigationWithSource:withCompletion:",
+            (IMP)XLGXAppPremiumCustomizeNavigation,
+            &gOrigXAppPremiumCustomizeNavigation
+        },
+        {
+            "showPremiumHubAppIconWithSource:withCompletion:",
+            (IMP)XLGXAppPremiumAppIcon,
+            &gOrigXAppPremiumAppIcon
+        },
+        {
+            "showPremiumHubPremiumSettingsWithSource:withCompletion:",
+            (IMP)XLGXAppPremiumSettings,
+            &gOrigXAppPremiumSettings
+        }
+    };
+
+    BOOL any=NO;
+    for (NSUInteger i=0;i<sizeof(hooks)/sizeof(hooks[0]);i++) {
+        SEL selector=NSSelectorFromString(
+            [NSString stringWithUTF8String:
+                hooks[i].selectorName]);
+        Method method=class_getInstanceMethod(cls,selector);
+        if (!method || method_getNumberOfArguments(method)!=4) {
+            continue;
+        }
+
+        BOOL hooked=XLGHookMethod(
+            cls,
+            selector,
+            NO,
+            hooks[i].replacement,
+            hooks[i].original);
+        any=any || hooked;
+    }
+
+    gXLGXAppPremiumRouterInstalled=any;
+}
+
+#pragma mark - XLiquidGlass 1.9.0 Beta 1 Search blur fix
+
+static NSUInteger XLGRemoveSearchBlurViews(
+    UIView *view,
+    UIView *root,
+    NSUInteger depth) {
+
+    if (!view || depth>40) return 0;
+
+    NSUInteger removed=0;
+    if ([view isKindOfClass:UIVisualEffectView.class]) {
+        UIVisualEffectView *effectView=
+            (UIVisualEffectView *)view;
+        CGRect frame=[effectView convertRect:effectView.bounds
+                                      toView:root];
+
+        BOOL nearTop=
+            CGRectGetMaxY(frame)>0.0 &&
+            CGRectGetMinY(frame)<240.0;
+
+        if (nearTop && effectView.effect!=nil) {
+            effectView.effect=nil;
+            effectView.backgroundColor=UIColor.clearColor;
+            removed++;
+        }
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        removed+=XLGRemoveSearchBlurViews(
+            subview,root,depth+1);
+    }
+    return removed;
+}
+
+static void XLGSearchContainerViewDidLayoutSubviews(
+    id self,
+    SEL cmd) {
+
+    if (gOrigSearchContainerViewDidLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigSearchContainerViewDidLayoutSubviews)(
+                self,cmd);
+    }
+
+    if (!XLGEnabled() ||
+        ![self isKindOfClass:UIViewController.class]) {
+        return;
+    }
+
+    UIViewController *controller=(UIViewController *)self;
+    UIView *root=controller.view;
+    if (!root) return;
+
+    NSUInteger removed=
+        XLGRemoveSearchBlurViews(root,root,0);
+
+    if (removed>0 &&
+        gXLGNavigationProbeActive &&
+        ![objc_getAssociatedObject(
+            controller,&kXLGSearchBlurLoggedKey) boolValue]) {
+
+        objc_setAssociatedObject(
+            controller,
+            &kXLGSearchBlurLoggedKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        XLGNavigationProbeLog(
+            @"SEARCH_BLUR removed=%lu controller=%@ ptr=%p",
+            (unsigned long)removed,
+            NSStringFromClass(controller.class),
+            controller);
+    }
+}
+
+static void XLGInstallSearchBlurFix(void) {
+    if (gXLGSearchBlurFixInstalled) return;
+
+    Class cls=NSClassFromString(
+        @"TTSSearchContainerViewControllerV2");
+    if (!cls) return;
+
+    SEL selector=@selector(viewDidLayoutSubviews);
+    Method method=class_getInstanceMethod(cls,selector);
+    if (!method) return;
+
+    gXLGSearchBlurFixInstalled=
+        XLGHookMethod(
+            cls,
+            selector,
+            NO,
+            (IMP)XLGSearchContainerViewDidLayoutSubviews,
+            &gOrigSearchContainerViewDidLayoutSubviews);
+}
+
 static void XLGInstallHooks(void) {
     Class cls = Nil;
 
@@ -5150,6 +5589,8 @@ static void XLGInstallHooks(void) {
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
     XLGInstallXAppSearchRouter();
+    XLGInstallXAppPremiumRouter();
+    XLGInstallSearchBlurFix();
     XLGInstallNavigationProbeHooks();
     XLGInstallContainerProbeHooks();
 }
@@ -5167,7 +5608,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.8.0 stable loaded: XTabbedAppNavigation search router + Guide navigation bridge + native Guide router fallback + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.0 Beta 1 loaded: Premium internal routes + Search blur fix + XTabbedAppNavigation search router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
