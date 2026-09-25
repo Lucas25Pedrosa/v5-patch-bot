@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Badge Bridge Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-badge-bridge-probe/**"
+      - ".github/workflows/x-liquid-glass-badge-bridge-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-badge-bridge-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build bridge probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassBadgeBridgeProbe.dylib ! -path '*/XLiquidGlassBadgeBridgeProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassBadgeBridgeProbe.dylib
+          file artifacts/XLiquidGlassBadgeBridgeProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassBadgeBridgeProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload bridge probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassBadgeBridgeProbe-0.1.0-X12.28.1-arm64
+          path: x-liquid-glass-badge-bridge-probe/artifacts/
+          if-no-files-found: error
