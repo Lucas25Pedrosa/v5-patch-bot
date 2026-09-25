@@ -12,6 +12,9 @@ static NSInteger gNTabCount = -1;
 static NSInteger gDMCount = -1;
 static NSInteger gXChatCount = -1;
 static NSInteger gTotalCount = -1;
+static NSInteger gLastRootBadgeCount = -1;
+static NSString *gActiveUserID = nil;
+static NSDictionary *gLastBadgeCountsByUserID = nil;
 static BOOL gLoadedPersistedCounts = NO;
 
 static IMP gOrigXNavItemLayout = NULL;
@@ -273,6 +276,93 @@ static BOOL XBBPReadIntegerGetter(id object,
     return NO;
 }
 
+
+static BOOL XBBPReadCountField(id object,
+                               NSString *baseName,
+                               NSInteger *valueOut) {
+    if (!object || !baseName.length || !valueOut) return NO;
+
+    NSString *numberGetter =
+        [baseName stringByAppendingString:@"Number"];
+
+    if (XBBPReadIntegerGetter(object, numberGetter, valueOut)) {
+        return YES;
+    }
+
+    return XBBPReadIntegerGetter(object, baseName, valueOut);
+}
+
+static NSString *XBBPNormalizedUserID(id value) {
+    if (!value || value == NSNull.null) return nil;
+
+    if ([value isKindOfClass:NSString.class]) {
+        return [(NSString *)value length] ? value : nil;
+    }
+
+    if ([value respondsToSelector:@selector(stringValue)]) {
+        NSString *s = [value stringValue];
+        return s.length ? s : nil;
+    }
+
+    NSString *s = [value description];
+    return s.length ? s : nil;
+}
+
+static NSString *XBBPTryResolveUserIDFromObject(id object) {
+    if (!object) return nil;
+
+    NSArray<NSString *> *keys = @[
+        @"userID", @"userId", @"restID", @"restId",
+        @"accountID", @"accountId", @"activeUserID",
+        @"activeAccountID", @"currentUserID", @"currentAccountID"
+    ];
+
+    for (NSString *key in keys) {
+        id value = XBBPSafeValueForKey(object, key);
+        NSString *resolved = XBBPNormalizedUserID(value);
+        if (resolved.length) return resolved;
+    }
+
+    for (NSString *key in @[@"account", @"currentAccount", @"activeAccount"]) {
+        id nested = XBBPSafeValueForKey(object, key);
+        if (!nested || nested == object) continue;
+
+        NSString *resolved = XBBPTryResolveUserIDFromObject(nested);
+        if (resolved.length) return resolved;
+    }
+
+    return nil;
+}
+
+static BOOL XBBPReadAllCounts(id object,
+                              NSInteger *ntab,
+                              BOOL *hasNtab,
+                              NSInteger *dm,
+                              BOOL *hasDM,
+                              NSInteger *xchat,
+                              BOOL *hasXChat,
+                              NSInteger *total,
+                              BOOL *hasTotal) {
+    if (!object) return NO;
+
+    if (hasNtab) *hasNtab =
+        XBBPReadCountField(object, @"ntabUnreadCount", ntab);
+
+    if (hasDM) *hasDM =
+        XBBPReadCountField(object, @"dmUnreadCount", dm);
+
+    if (hasXChat) *hasXChat =
+        XBBPReadCountField(object, @"xchatUnreadCount", xchat);
+
+    if (hasTotal) *hasTotal =
+        XBBPReadCountField(object, @"totalUnreadCount", total);
+
+    return (hasNtab && *hasNtab) ||
+           (hasDM && *hasDM) ||
+           (hasXChat && *hasXChat) ||
+           (hasTotal && *hasTotal);
+}
+
 #pragma mark - Counts / extraction
 
 static NSUserDefaults *XBBPDefaults(void) {
@@ -396,10 +486,146 @@ static void XBBPExtractCountsFromObject(id object,
                                         NSString *source,
                                         NSUInteger depth);
 
+static void XBBPSelectCountsForAccountMap(NSDictionary *dictionary,
+                                          NSString *source);
+
+
+static BOOL XBBPLooksLikeAccountBadgeMap(NSDictionary *dictionary) {
+    if (![dictionary isKindOfClass:NSDictionary.class] || dictionary.count == 0)
+        return NO;
+
+    NSUInteger badgeObjects = 0;
+    for (id key in dictionary) {
+        id value = dictionary[key];
+        if (XBBPClassLooksLikeBadgeCounts(value)) badgeObjects++;
+    }
+
+    return badgeObjects > 0 && badgeObjects == dictionary.count;
+}
+
+static void XBBPApplyCountsObjectForUser(id object,
+                                         NSString *userID,
+                                         NSString *source) {
+    NSInteger ntab = 0, dm = 0, xchat = 0, total = 0;
+    BOOL hasNtab = NO, hasDM = NO, hasXChat = NO, hasTotal = NO;
+
+    XBBPReadAllCounts(object,
+                      &ntab, &hasNtab,
+                      &dm, &hasDM,
+                      &xchat, &hasXChat,
+                      &total, &hasTotal);
+
+    XBBPLog(@"ACCOUNT_COUNTS_SELECT userID=%@ source=%@ class=%@ values(ntab=%ld/%d dm=%ld/%d xchat=%ld/%d total=%ld/%d)",
+            userID ?: @"-",
+            source ?: @"-",
+            NSStringFromClass([object class]),
+            (long)ntab, hasNtab,
+            (long)dm, hasDM,
+            (long)xchat, hasXChat,
+            (long)total, hasTotal);
+
+    if (userID.length) gActiveUserID = [userID copy];
+
+    XBBPSetCounts(ntab, hasNtab,
+                  dm, hasDM,
+                  xchat, hasXChat,
+                  total, hasTotal,
+                  source);
+}
+
+static void XBBPSelectCountsForAccountMap(NSDictionary *dictionary,
+                                          NSString *source) {
+    if (!XBBPLooksLikeAccountBadgeMap(dictionary)) return;
+
+    gLastBadgeCountsByUserID = [dictionary copy];
+
+    if (gActiveUserID.length) {
+        id exact = dictionary[gActiveUserID];
+        if (!exact) exact = dictionary[@(gActiveUserID.longLongValue)];
+
+        if (exact) {
+            XBBPApplyCountsObjectForUser(
+                exact,
+                gActiveUserID,
+                [source stringByAppendingString:@".activeUserID"]);
+            return;
+        }
+    }
+
+    if (gLastRootBadgeCount >= 0) {
+        id selectedObject = nil;
+        NSString *selectedUserID = nil;
+        NSUInteger matchCount = 0;
+
+        for (id key in dictionary) {
+            id object = dictionary[key];
+            NSInteger total = -1;
+            BOOL hasTotal =
+                XBBPReadCountField(object, @"totalUnreadCount", &total);
+
+            if (hasTotal && total == gLastRootBadgeCount) {
+                selectedObject = object;
+                selectedUserID = XBBPNormalizedUserID(key);
+                matchCount++;
+            }
+        }
+
+        if (matchCount == 1 && selectedObject) {
+            XBBPLog(@"ACCOUNT_MATCH_BY_ROOT_BADGE root=%ld userID=%@",
+                    (long)gLastRootBadgeCount,
+                    selectedUserID ?: @"-");
+
+            XBBPApplyCountsObjectForUser(
+                selectedObject,
+                selectedUserID,
+                [source stringByAppendingString:@".rootBadgeMatch"]);
+            return;
+        }
+
+        XBBPLog(@"ACCOUNT_MATCH_BY_ROOT_BADGE_AMBIGUOUS root=%ld matches=%lu",
+                (long)gLastRootBadgeCount,
+                (unsigned long)matchCount);
+    }
+
+    if (dictionary.count == 1) {
+        id key = dictionary.allKeys.firstObject;
+        id object = dictionary[key];
+
+        XBBPApplyCountsObjectForUser(
+            object,
+            XBBPNormalizedUserID(key),
+            [source stringByAppendingString:@".singleAccount"]);
+        return;
+    }
+
+    XBBPLog(@"ACCOUNT_SELECTION_PENDING source=%@ activeUserID=%@ rootBadge=%ld accounts=%lu",
+            source ?: @"-",
+            gActiveUserID ?: @"-",
+            (long)gLastRootBadgeCount,
+            (unsigned long)dictionary.count);
+}
+
 static void XBBPExtractCountsFromDictionary(NSDictionary *dictionary,
                                             NSString *source,
                                             NSUInteger depth) {
     if (!dictionary || depth > 4) return;
+
+    id appIconBadge = dictionary[@"AppIconBadgeCountDidChangeUpdatedValue"];
+    if ([appIconBadge respondsToSelector:@selector(integerValue)]) {
+        gLastRootBadgeCount = [appIconBadge integerValue];
+        XBBPLog(@"ROOT_BADGE_NOTIFICATION value=%ld", (long)gLastRootBadgeCount);
+
+        if (gLastBadgeCountsByUserID) {
+            XBBPSelectCountsForAccountMap(
+                gLastBadgeCountsByUserID,
+                [source stringByAppendingString:@".rootBadgeNotification"]);
+        }
+    }
+
+    if (XBBPLooksLikeAccountBadgeMap(dictionary)) {
+        XBBPSelectCountsForAccountMap(dictionary, source);
+        return;
+    }
 
     NSInteger ntab = 0, dm = 0, xchat = 0, total = 0;
     BOOL hasNtab = NO, hasDM = NO, hasXChat = NO, hasTotal = NO;
@@ -497,34 +723,23 @@ static void XBBPExtractCountsFromDictionary(NSDictionary *dictionary,
 static void XBBPExtractCountsFromBadgeCountsObject(id object,
                                                    NSString *source) {
     NSInteger ntab = 0, dm = 0, xchat = 0, total = 0;
+    BOOL hasNtab = NO, hasDM = NO, hasXChat = NO, hasTotal = NO;
 
-    BOOL hasNtab =
-        XBBPReadIntegerGetter(object, @"ntabUnreadCount", &ntab);
+    XBBPReadAllCounts(object,
+                      &ntab, &hasNtab,
+                      &dm, &hasDM,
+                      &xchat, &hasXChat,
+                      &total, &hasTotal);
 
-    BOOL hasDM =
-        XBBPReadIntegerGetter(object, @"dmUnreadCount", &dm);
-
-    BOOL hasXChat =
-        XBBPReadIntegerGetter(object, @"xchatUnreadCount", &xchat);
-
-    BOOL hasTotal =
-        XBBPReadIntegerGetter(object, @"totalUnreadCount", &total);
-
-    XBBPLog(@"BADGE_COUNTS_OBJECT source=%@ ptr=%p class=%@ desc=%@ getters(ntab=%d dm=%d xchat=%d total=%d)",
+    XBBPLog(@"BADGE_COUNTS_OBJECT source=%@ ptr=%p class=%@ desc=%@ values(ntab=%ld/%d dm=%ld/%d xchat=%ld/%d total=%ld/%d)",
             source,
             object,
             NSStringFromClass([object class]),
             XBBPText(object),
-            hasNtab,
-            hasDM,
-            hasXChat,
-            hasTotal);
-
-    XBBPSetCounts(ntab, hasNtab,
-                  dm, hasDM,
-                  xchat, hasXChat,
-                  total, hasTotal,
-                  source);
+            (long)ntab, hasNtab,
+            (long)dm, hasDM,
+            (long)xchat, hasXChat,
+            (long)total, hasTotal);
 }
 
 static void XBBPExtractCountsFromObject(id object,
@@ -841,6 +1056,24 @@ static void XBBPObjectArgumentHook(id self, SEL cmd, id argument) {
             argument ? NSStringFromClass([argument class]) : @"nil",
             XBBPText(argument));
 
+    NSString *resolvedUserID =
+        XBBPTryResolveUserIDFromObject(self);
+    if (!resolvedUserID.length)
+        resolvedUserID = XBBPTryResolveUserIDFromObject(argument);
+
+    if (resolvedUserID.length &&
+        ![resolvedUserID isEqualToString:gActiveUserID]) {
+        gActiveUserID = [resolvedUserID copy];
+        XBBPLog(@"ACTIVE_USER_RESOLVED source=%@ userID=%@",
+                event,
+                gActiveUserID);
+
+        if (gLastBadgeCountsByUserID)
+            XBBPSelectCountsForAccountMap(
+                gLastBadgeCountsByUserID,
+                [event stringByAppendingString:@".resolvedActiveUser"]);
+    }
+
     XBBPExtractCountsFromObject(argument,
                                 [event stringByAppendingString:@".arg"],
                                 0);
@@ -870,6 +1103,19 @@ static void XBBPIntegerArgumentHook(id self, SEL cmd, NSInteger value) {
             event,
             self,
             (long)value);
+
+    if ([NSStringFromSelector(cmd) isEqualToString:@"updateBadgeCount:"] &&
+        [NSStringFromClass([self class]) containsString:@"RootBadger"]) {
+        gLastRootBadgeCount = value;
+        XBBPLog(@"ROOT_BADGE_UPDATE class=%@ value=%ld",
+                NSStringFromClass([self class]),
+                (long)value);
+
+        if (gLastBadgeCountsByUserID)
+            XBBPSelectCountsForAccountMap(
+                gLastBadgeCountsByUserID,
+                [event stringByAppendingString:@".rootBadgeUpdate"]);
+    }
 
     IMP original = XBBPOriginalIntegerHook(self, cmd);
 
@@ -1220,11 +1466,12 @@ static void XBBPInstallNotificationObserver(void) {
         cell.textLabel.text = @"Estado atual";
         cell.detailTextLabel.text =
             [NSString stringWithFormat:
-                @"Notificações: %ld · DM: %ld · XChat: %ld · Total: %ld",
+                @"Notificações: %ld · DM: %ld · XChat: %ld · Total: %ld · Conta: %@",
                 (long)gNTabCount,
                 (long)gDMCount,
                 (long)gXChatCount,
-                (long)gTotalCount];
+                (long)gTotalCount,
+                gActiveUserID ?: @"?"];
     } else if (indexPath.row == 1) {
         cell.textLabel.text = @"Atualizar badges";
         cell.detailTextLabel.text =
@@ -1451,7 +1698,7 @@ static void XBBPRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassBadgeBridgeProbeInit(void) {
     @autoreleasepool {
-        XBBPLog(@"========== XLiquidGlass Badge Bridge Probe 0.1.0 loaded ==========");
+        XBBPLog(@"========== XLiquidGlass Badge Bridge Probe 0.1.1 loaded ==========");
         XBBPLog(@"logPath=%@", XBBPLogPath());
 
         XBBPLoadPersistedCounts();
