@@ -34,6 +34,7 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static NSString *XLGBadgeTimingLogPath(void);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -206,7 +207,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -229,6 +230,15 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryView=nil;
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
+
+    if (indexPath.row == 2) {
+        cell.textLabel.text = @"Copiar relatório de badges";
+        cell.detailTextLabel.text =
+            @"Copia o relatório de temporização desta beta.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -271,6 +281,38 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 2) return;
+
+    NSString *path=XLGBadgeTimingLogPath();
+    NSData *data=path.length
+        ? [NSData dataWithContentsOfFile:path]
+        : nil;
+    NSString *report=data.length
+        ? [[NSString alloc] initWithData:data
+                                encoding:NSUTF8StringEncoding]
+        : @"";
+
+    if (report.length) {
+        UIPasteboard.generalPasteboard.string=report;
+    }
+
+    UIAlertController *alert=
+        [UIAlertController
+            alertControllerWithTitle:@"Relatório de badges"
+                             message:report.length
+                                ? @"Relatório copiado para a área de transferência."
+                                : @"Ainda não há eventos registrados nesta execução."
+                      preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -5106,6 +5148,12 @@ static BOOL XLGBadgeTimingHookVoidOneObject(Class cls,
 static void XLGInstallBadgeTimingProbeHooks(void) {
     if (!gXLGBadgeTimingBannerLogged) {
         gXLGBadgeTimingBannerLogged=YES;
+        NSString *timingPath=XLGBadgeTimingLogPath();
+        if (timingPath.length) {
+            [NSFileManager.defaultManager
+                removeItemAtPath:timingPath
+                           error:nil];
+        }
         XLGBadgeTimingLog(
             @"========== XLiquidGlass 1.9.1 Beta 3 Badge Timing Probe ==========");
         XLGBadgeTimingLog(
