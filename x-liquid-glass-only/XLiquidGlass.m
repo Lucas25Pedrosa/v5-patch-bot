@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.8.0 Beta 5
+#pragma mark - XLiquidGlass 1.8.0
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -623,7 +623,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass180Beta5XAppSearchRouter.log"];
+            @"XLiquidGlass180.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1737,7 +1737,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Beta 5 corrige as rotas showSearchResults que o XTabbedAppNavigation deixa Unrouted, redirecionando o mesmo options para showSearchControllerWithOptions. Teste Explorar/Busca/Trending e procure XAPP_SEARCH_ROUTER seguido de PUSH para TTSSearchContainerViewControllerV2.";
+    return @"XLiquidGlass 1.8.0 estável. O roteador de busca redireciona as rotas showSearchResults do XTabbedAppNavigation para o caminho funcional do Liquid Glass. O probe permanece disponível para diagnóstico.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1797,7 +1797,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.8.0 Beta 5 XApp Search Router Probe ==========");
+            @"========== XLiquidGlass 1.8.0 Navigation Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1809,7 +1809,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.8.0 Beta 5 XApp Search Router Probe ==========");
+                @"========== XLiquidGlass 1.8.0 Navigation Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -5167,7 +5167,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.8.0 Beta 5 loaded: XTabbedAppNavigation search router + Guide navigation bridge + native Guide router fallback + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.8.0 stable loaded: XTabbedAppNavigation search router + Guide navigation bridge + native Guide router fallback + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
