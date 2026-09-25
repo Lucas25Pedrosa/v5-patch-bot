@@ -1406,12 +1406,14 @@ static NSString *XLGIdentityTextForXNavItem(UIView *item) {
 
 static NSInteger XLGBadgeCountForXNavItem(UIView *item) {
     NSString *identity = XLGIdentityTextForXNavItem(item);
+    NSDictionary *state = XLGActiveBadgeState();
+    if (!state) return -1;
 
     if ([identity containsString:@"notifica"] ||
         [identity containsString:@"notification"] ||
         [identity containsString:@"activity"] ||
         [identity containsString:@"ntab"]) {
-        return XLGNotificationDisplayCount();
+        return XLGNotificationDisplayCountForState(state);
     }
 
     if ([identity containsString:@"bate-papo"] ||
@@ -1420,7 +1422,7 @@ static NSInteger XLGBadgeCountForXNavItem(UIView *item) {
         [identity containsString:@"message"] ||
         [identity containsString:@"dm_tab"] ||
         [identity containsString:@"dmtab"]) {
-        return XLGChatDisplayCount();
+        return XLGChatDisplayCountForState(state);
     }
 
     return -1;
@@ -1515,50 +1517,60 @@ static void XLGRefreshGlobalTabBar(void) {
     });
 }
 
-static void XLGSetBadgeCountsFromObject(id object, NSString *userID) {
-    if (!object) return;
+static BOOL XLGSetBadgeCountsFromObject(id object, NSString *userID) {
+    if (!object || !userID.length) return NO;
 
     NSInteger ntab = 0, dm = 0, xchat = 0, total = 0;
     BOOL hasNtab = XLGReadNTabCount(object, &ntab);
     BOOL hasDM = XLGReadDMCount(object, &dm);
     BOOL hasXChat = XLGReadXChatCount(object, &xchat);
     BOOL hasTotal = XLGReadTotalCount(object, &total);
-    if (!hasNtab && !hasDM && !hasXChat && !hasTotal) return;
+    if (!hasNtab && !hasDM && !hasXChat && !hasTotal) return NO;
 
+    NSMutableDictionary *state =
+        XLGMutableBadgeStateForUserID(userID, YES);
     BOOL changed = NO;
-    if (hasNtab && gXLGNTabCount != MAX((NSInteger)0, ntab)) {
-        gXLGNTabCount = MAX((NSInteger)0, ntab);
-        changed = YES;
+
+    if (hasNtab) {
+        NSInteger value = MAX((NSInteger)0, ntab);
+        if (XLGStateInteger(state, @"ntab", -1) != value) {
+            state[@"ntab"] = @(value);
+            changed = YES;
+        }
     }
-    if (hasDM && gXLGDMCount != MAX((NSInteger)0, dm)) {
-        gXLGDMCount = MAX((NSInteger)0, dm);
-        changed = YES;
+    if (hasDM) {
+        NSInteger value = MAX((NSInteger)0, dm);
+        if (XLGStateInteger(state, @"dm", -1) != value) {
+            state[@"dm"] = @(value);
+            changed = YES;
+        }
     }
-    if (hasXChat && gXLGXChatCount != MAX((NSInteger)0, xchat)) {
-        gXLGXChatCount = MAX((NSInteger)0, xchat);
-        changed = YES;
+    if (hasXChat) {
+        NSInteger value = MAX((NSInteger)0, xchat);
+        if (XLGStateInteger(state, @"xchat", -1) != value) {
+            state[@"xchat"] = @(value);
+            changed = YES;
+        }
     }
-    if (hasTotal && gXLGTotalCount != MAX((NSInteger)0, total)) {
-        gXLGTotalCount = MAX((NSInteger)0, total);
-        changed = YES;
+    if (hasTotal) {
+        NSInteger value = MAX((NSInteger)0, total);
+        if (XLGStateInteger(state, @"total", -1) != value) {
+            state[@"total"] = @(value);
+            changed = YES;
+        }
     }
 
-    if (userID.length &&
-        ![gXLGBadgeActiveUserID isEqualToString:userID]) {
-        gXLGBadgeActiveUserID = [userID copy];
-        changed = YES;
-    }
+    state[@"timestamp"] = @(NSDate.date.timeIntervalSince1970);
 
     if (changed) {
-        XLGPersistBadgeCounts();
-        NSLog(@"[XLiquidGlass] badges user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld",
-              gXLGBadgeActiveUserID ?: @"-",
-              (long)gXLGNTabCount,
-              (long)gXLGDMCount,
-              (long)gXLGXChatCount,
-              (long)gXLGTotalCount);
-        XLGRefreshGlobalTabBar();
+        NSLog(@"[XLiquidGlass] badge-cache user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld",
+              userID,
+              (long)XLGStateInteger(state, @"ntab", -1),
+              (long)XLGStateInteger(state, @"dm", -1),
+              (long)XLGStateInteger(state, @"xchat", -1),
+              (long)XLGStateInteger(state, @"total", -1));
     }
+    return changed;
 }
 
 static BOOL XLGLooksLikeAccountBadgeMap(NSDictionary *dictionary) {
@@ -1574,46 +1586,62 @@ static BOOL XLGLooksLikeAccountBadgeMap(NSDictionary *dictionary) {
     return valid == dictionary.count;
 }
 
-static void XLGSelectBadgeAccountFromMap(NSDictionary *dictionary) {
+static void XLGCacheAllBadgeAccountsFromMap(NSDictionary *dictionary) {
     if (!XLGLooksLikeAccountBadgeMap(dictionary)) return;
     gXLGLastBadgeCountsByUserID = [dictionary copy];
 
-    NSString *activeUserID = XLGCurrentActiveUserID();
+    BOOL changed = NO;
+    for (id key in dictionary) {
+        NSString *userID = XLGNormalizedUserID(key);
+        if (!userID.length) continue;
+        changed |= XLGSetBadgeCountsFromObject(dictionary[key], userID);
+    }
+
+    NSString *activeUserID = XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
+    if (activeUserID.length &&
+        ![gXLGBadgeActiveUserID isEqualToString:activeUserID]) {
+        gXLGBadgeActiveUserID = [activeUserID copy];
+        changed = YES;
+    }
+
+    if (changed) {
+        XLGPersistBadgeStates();
+        XLGRefreshGlobalTabBar();
+    }
+}
+
+static void XLGResolveActiveBadgeUserFromRootCount(void) {
+    if (gXLGLastRootBadgeCount < 0 ||
+        ![gXLGLastBadgeCountsByUserID isKindOfClass:NSDictionary.class]) {
+        return;
+    }
+
+    NSString *activeUserID = XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
     if (activeUserID.length) {
-        id object = dictionary[activeUserID];
-        if (!object) object = dictionary[@(activeUserID.longLongValue)];
-        if (object) {
-            XLGSetBadgeCountsFromObject(object, activeUserID);
-            return;
+        if (![gXLGBadgeActiveUserID isEqualToString:activeUserID]) {
+            gXLGBadgeActiveUserID = [activeUserID copy];
+            XLGPersistBadgeStates();
+        }
+        return;
+    }
+
+    NSString *matchedUserID = nil;
+    NSUInteger matches = 0;
+    for (id key in gXLGLastBadgeCountsByUserID) {
+        id object = gXLGLastBadgeCountsByUserID[key];
+        NSInteger total = -1;
+        if (XLGReadTotalCount(object, &total) &&
+            total == gXLGLastRootBadgeCount) {
+            matchedUserID = XLGNormalizedUserID(key);
+            matches++;
         }
     }
 
-    if (gXLGLastRootBadgeCount >= 0) {
-        id selected = nil;
-        NSString *selectedUserID = nil;
-        NSUInteger matches = 0;
-
-        for (id key in dictionary) {
-            id object = dictionary[key];
-            NSInteger total = -1;
-            if (XLGReadTotalCount(object, &total) &&
-                total == gXLGLastRootBadgeCount) {
-                selected = object;
-                selectedUserID = XLGNormalizedUserID(key);
-                matches++;
-            }
-        }
-
-        if (matches == 1 && selected) {
-            XLGSetBadgeCountsFromObject(selected, selectedUserID);
-            return;
-        }
-    }
-
-    if (dictionary.count == 1) {
-        id key = dictionary.allKeys.firstObject;
-        XLGSetBadgeCountsFromObject(dictionary[key],
-                                    XLGNormalizedUserID(key));
+    if (matches == 1 && matchedUserID.length &&
+        ![gXLGBadgeActiveUserID isEqualToString:matchedUserID]) {
+        gXLGBadgeActiveUserID = [matchedUserID copy];
+        XLGPersistBadgeStates();
+        XLGRefreshGlobalTabBar();
     }
 }
 
@@ -1624,9 +1652,7 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
         id value = notification.userInfo[@"AppIconBadgeCountDidChangeUpdatedValue"];
         if ([value respondsToSelector:@selector(integerValue)]) {
             gXLGLastRootBadgeCount = [value integerValue];
-            if (gXLGLastBadgeCountsByUserID) {
-                XLGSelectBadgeAccountFromMap(gXLGLastBadgeCountsByUserID);
-            }
+            XLGResolveActiveBadgeUserFromRootCount();
         }
         return;
     }
@@ -1634,8 +1660,30 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
     if ([name isEqualToString:@"AccountBadgesDidChange"]) {
         id map = notification.userInfo[@"AccountBadgesDidChangeUpdatedValues"];
         if ([map isKindOfClass:NSDictionary.class]) {
-            XLGSelectBadgeAccountFromMap(map);
+            XLGCacheAllBadgeAccountsFromMap(map);
+            XLGResolveActiveBadgeUserFromRootCount();
         }
+        return;
+    }
+
+    NSString *lower = name.lowercaseString;
+    if ([lower containsString:@"account"] &&
+        ([lower containsString:@"change"] ||
+         [lower containsString:@"active"] ||
+         [lower containsString:@"switch"])) {
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+            dispatch_get_main_queue(),
+            ^{
+                NSString *active =
+                    XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
+                if (active.length &&
+                    ![gXLGBadgeActiveUserID isEqualToString:active]) {
+                    gXLGBadgeActiveUserID = [active copy];
+                    XLGPersistBadgeStates();
+                }
+                XLGRefreshGlobalTabBar();
+            });
     }
 }
 
@@ -1675,8 +1723,13 @@ static void XLGInstallGlobalTabBarFixes(void) {
                             queue:nil
                        usingBlock:^(NSNotification *notification) {
             NSString *name = notification.name ?: @"";
+            NSString *lower = name.lowercaseString;
             if ([name isEqualToString:@"AccountBadgesDidChange"] ||
-                [name isEqualToString:@"AppIconBadgeCountDidChange"]) {
+                [name isEqualToString:@"AppIconBadgeCountDidChange"] ||
+                ([lower containsString:@"account"] &&
+                 ([lower containsString:@"change"] ||
+                  [lower containsString:@"active"] ||
+                  [lower containsString:@"switch"]))) {
                 XLGHandleBadgeNotification(notification);
             }
         }];
@@ -1796,7 +1849,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 2 global loaded: notification badge bridge + activation + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 3 multi-account loaded: isolated per-account badges + activation + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
