@@ -1026,6 +1026,50 @@ static BOOL XLGReadCountField(id object, NSString *baseName, NSInteger *valueOut
     return XLGReadIntegerGetter(object, baseName, valueOut);
 }
 
+static BOOL XLGReadFirstCountField(id object,
+                                   NSArray<NSString *> *baseNames,
+                                   NSInteger *valueOut) {
+    for (NSString *baseName in baseNames) {
+        if (XLGReadCountField(object, baseName, valueOut)) return YES;
+    }
+    return NO;
+}
+
+static BOOL XLGReadNTabCount(id object, NSInteger *valueOut) {
+    return XLGReadFirstCountField(object,
+                                  @[@"ntabUnreadCount",
+                                    @"notificationTabUnreadCount",
+                                    @"notificationsUnreadCount",
+                                    @"notificationUnreadCount",
+                                    @"activityUnreadCount",
+                                    @"notificationBadgeCount"],
+                                  valueOut);
+}
+
+static BOOL XLGReadDMCount(id object, NSInteger *valueOut) {
+    return XLGReadFirstCountField(object,
+                                  @[@"dmUnreadCount",
+                                    @"directMessageUnreadCount",
+                                    @"directMessagesUnreadCount",
+                                    @"messagesUnreadCount"],
+                                  valueOut);
+}
+
+static BOOL XLGReadXChatCount(id object, NSInteger *valueOut) {
+    return XLGReadFirstCountField(object,
+                                  @[@"xchatUnreadCount",
+                                    @"xChatUnreadCount",
+                                    @"xchatBadgeCount"],
+                                  valueOut);
+}
+
+static BOOL XLGReadTotalCount(id object, NSInteger *valueOut) {
+    return XLGReadFirstCountField(object,
+                                  @[@"totalUnreadCount",
+                                    @"totalBadgeCount"],
+                                  valueOut);
+}
+
 static NSString *XLGBadgeDefaultsKey(NSString *name) {
     return [kXLGBadgePrefix stringByAppendingString:name];
 }
