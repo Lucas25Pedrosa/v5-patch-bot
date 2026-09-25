@@ -927,6 +927,8 @@ static IMP gOrigLGBadgeViewDidLayoutSubviews = NULL;
 
 static char kXLGCompactBadgeAppearanceAppliedKey;
 
+static void XLGApplyLiquidGlassTabBarVisualFixes(id controller);
+
 static void XLGInvalidateLiquidGlassCompactBadge(id controller) {
     if (!controller) return;
     objc_setAssociatedObject(
