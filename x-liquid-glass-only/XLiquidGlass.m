@@ -1599,7 +1599,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 1 global loaded: activation + NFB + sidebar + theme sync + badges");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 2 global loaded: notification badge bridge + activation + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
