@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.0 Beta 1
+#pragma mark - XLiquidGlass 1.9.0 Beta 2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -69,6 +69,10 @@ static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
+static IMP gOrigXNavControllerViewDidLayoutSubviews = NULL;
+static IMP gOrigXTabBarControllerViewDidLayoutSubviews = NULL;
+static BOOL gXLGXNavigationChromeBlurFixInstalled = NO;
+static char kXLGChromeBlurLoggedKey;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -632,7 +636,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass190Beta1.log"];
+            @"XLiquidGlass190Beta2.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1746,7 +1750,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"1.9.0 Beta 1 preserva o roteador de busca da 1.8.0, corrige rotas internas seguras do X Premium e remove o blur superior apenas do TTSSearchContainerViewControllerV2. Procure PREMIUM_ROUTER e SEARCH_BLUR no relatório.";
+    return @"1.9.0 Beta 2 corrige Aplicar tema via showDisplaySettings/T1DisplaySettingsViewController e amplia a remoção de blur para o chrome superior/inferior do XNavigation. Procure PREMIUM_ROUTER, SEARCH_BLUR e CHROME_BLUR no relatório.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1806,7 +1810,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.9.0 Beta 1 Premium + Search Visual Probe ==========");
+            @"========== XLiquidGlass 1.9.0 Beta 2 Display Theme + Chrome Blur Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1818,7 +1822,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.9.0 Beta 1 Premium + Search Visual Probe ==========");
+                @"========== XLiquidGlass 1.9.0 Beta 2 Display Theme + Chrome Blur Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -5342,13 +5346,31 @@ static void XLGXAppPremiumAppIcon(
 static void XLGXAppPremiumSettings(
     id self, SEL cmd, long long source, id completion) {
 
-    if (XLGRoutePremiumDestination(
-            self,
-            @"T1PremiumSettingsViewController",
-            source,
-            completion,
-            @"premium-settings")) {
-        return;
+    if (XLGEnabled()) {
+        SEL displaySEL=NSSelectorFromString(
+            @"showDisplaySettingsWithSource:withCompletion:");
+
+        if ([self respondsToSelector:displaySEL]) {
+            if (gXLGNavigationProbeActive) {
+                XLGNavigationProbeLog(
+                    @"PREMIUM_ROUTER route=display-settings native-selector=%@ source=%lld",
+                    NSStringFromSelector(displaySEL),
+                    source);
+            }
+
+            ((void(*)(id,SEL,long long,id))objc_msgSend)(
+                self,displaySEL,source,completion);
+            return;
+        }
+
+        if (XLGRoutePremiumDestination(
+                self,
+                @"T1DisplaySettingsViewController",
+                source,
+                completion,
+                @"display-settings-fallback")) {
+            return;
+        }
     }
 
     if (gOrigXAppPremiumSettings) {
@@ -5509,6 +5531,193 @@ static void XLGInstallSearchBlurFix(void) {
             &gOrigSearchContainerViewDidLayoutSubviews);
 }
 
+
+#pragma mark - XLiquidGlass 1.9.0 Beta 2 XNavigation chrome blur fix
+
+static BOOL XLGViewAncestorLooksLikeNavigationChrome(UIView *view) {
+    UIView *cursor=view;
+    for (NSUInteger depth=0; cursor && depth<10; depth++) {
+        NSString *name=NSStringFromClass(cursor.class);
+        NSString *lower=name.lowercaseString;
+        if ([lower containsString:@"tabbar"] ||
+            [lower containsString:@"navigationbar"] ||
+            [lower containsString:@"chrome"] ||
+            [lower containsString:@"barview"] ||
+            [lower containsString:@"toolbar"]) {
+            return YES;
+        }
+        cursor=cursor.superview;
+    }
+    return NO;
+}
+
+static NSUInteger XLGRemoveXNavigationChromeBlurs(
+    UIView *view,
+    UIView *root,
+    NSUInteger depth) {
+
+    if (!view || !root || depth>50) return 0;
+
+    NSUInteger removed=0;
+    if ([view isKindOfClass:UIVisualEffectView.class]) {
+        UIVisualEffectView *effectView=(UIVisualEffectView *)view;
+        CGRect frame=[effectView convertRect:effectView.bounds toView:root];
+
+        CGFloat rootWidth=CGRectGetWidth(root.bounds);
+        CGFloat rootHeight=CGRectGetHeight(root.bounds);
+        CGFloat width=CGRectGetWidth(frame);
+        CGFloat height=CGRectGetHeight(frame);
+
+        BOOL fullWidth=
+            rootWidth>0.0 &&
+            width >= rootWidth*0.70;
+        BOOL shallow=
+            height >= 12.0 &&
+            height <= 220.0;
+        BOOL nearTop=
+            CGRectGetMaxY(frame)>0.0 &&
+            CGRectGetMinY(frame)<180.0;
+        BOOL nearBottom=
+            rootHeight>0.0 &&
+            CGRectGetMaxY(frame)>(rootHeight-180.0);
+        BOOL chromeAncestor=
+            XLGViewAncestorLooksLikeNavigationChrome(effectView);
+
+        if (fullWidth &&
+            shallow &&
+            (nearTop || nearBottom) &&
+            chromeAncestor &&
+            effectView.effect!=nil) {
+
+            effectView.effect=nil;
+            effectView.backgroundColor=UIColor.clearColor;
+            removed++;
+        }
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        removed+=XLGRemoveXNavigationChromeBlurs(
+            subview,root,depth+1);
+    }
+
+    return removed;
+}
+
+static void XLGXNavigationControllerViewDidLayoutSubviews(
+    id self,
+    SEL cmd) {
+
+    if (gOrigXNavControllerViewDidLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigXNavControllerViewDidLayoutSubviews)(
+                self,cmd);
+    }
+
+    if (!XLGEnabled() ||
+        ![self isKindOfClass:UIViewController.class]) {
+        return;
+    }
+
+    UIViewController *controller=(UIViewController *)self;
+    NSUInteger removed=
+        XLGRemoveXNavigationChromeBlurs(
+            controller.view,controller.view,0);
+
+    if (removed>0 &&
+        gXLGNavigationProbeActive &&
+        ![objc_getAssociatedObject(
+            controller,&kXLGChromeBlurLoggedKey) boolValue]) {
+
+        objc_setAssociatedObject(
+            controller,
+            &kXLGChromeBlurLoggedKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        XLGNavigationProbeLog(
+            @"CHROME_BLUR controller=%@ removed=%lu",
+            NSStringFromClass(controller.class),
+            (unsigned long)removed);
+    }
+}
+
+static void XLGXTabBarControllerViewDidLayoutSubviews(
+    id self,
+    SEL cmd) {
+
+    if (gOrigXTabBarControllerViewDidLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigXTabBarControllerViewDidLayoutSubviews)(
+                self,cmd);
+    }
+
+    if (!XLGEnabled() ||
+        ![self isKindOfClass:UIViewController.class]) {
+        return;
+    }
+
+    UIViewController *controller=(UIViewController *)self;
+    NSUInteger removed=
+        XLGRemoveXNavigationChromeBlurs(
+            controller.view,controller.view,0);
+
+    if (removed>0 &&
+        gXLGNavigationProbeActive &&
+        ![objc_getAssociatedObject(
+            controller,&kXLGChromeBlurLoggedKey) boolValue]) {
+
+        objc_setAssociatedObject(
+            controller,
+            &kXLGChromeBlurLoggedKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        XLGNavigationProbeLog(
+            @"CHROME_BLUR controller=%@ removed=%lu",
+            NSStringFromClass(controller.class),
+            (unsigned long)removed);
+    }
+}
+
+static void XLGInstallXNavigationChromeBlurFix(void) {
+    if (gXLGXNavigationChromeBlurFixInstalled) return;
+
+    BOOL any=NO;
+
+    Class navigationClass=
+        NSClassFromString(@"_TtC11XNavigation20NavigationController");
+    SEL layoutSEL=@selector(viewDidLayoutSubviews);
+    if (navigationClass) {
+        Method method=
+            class_getInstanceMethod(navigationClass,layoutSEL);
+        if (method) {
+            any=XLGHookMethod(
+                navigationClass,
+                layoutSEL,
+                NO,
+                (IMP)XLGXNavigationControllerViewDidLayoutSubviews,
+                &gOrigXNavControllerViewDidLayoutSubviews) || any;
+        }
+    }
+
+    Class tabBarClass=
+        NSClassFromString(@"_TtC11XNavigation16TabBarController");
+    if (tabBarClass) {
+        Method method=
+            class_getInstanceMethod(tabBarClass,layoutSEL);
+        if (method) {
+            any=XLGHookMethod(
+                tabBarClass,
+                layoutSEL,
+                NO,
+                (IMP)XLGXTabBarControllerViewDidLayoutSubviews,
+                &gOrigXTabBarControllerViewDidLayoutSubviews) || any;
+        }
+    }
+
+    gXLGXNavigationChromeBlurFixInstalled=any;
+}
+
 static void XLGInstallHooks(void) {
     Class cls = Nil;
 
@@ -5591,6 +5800,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppSearchRouter();
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
+    XLGInstallXNavigationChromeBlurFix();
     XLGInstallNavigationProbeHooks();
     XLGInstallContainerProbeHooks();
 }
@@ -5608,7 +5818,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.0 Beta 1 loaded: Premium internal routes + Search blur fix + XTabbedAppNavigation search router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.0 Beta 2 loaded: Display theme route + XNavigation chrome blur fix + Premium internal routes + Search blur fix + XTabbedAppNavigation search router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
