@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.8.0 Beta 4
+#pragma mark - XLiquidGlass 1.8.0 Beta 5
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -57,6 +57,9 @@ static NSMutableDictionary<NSString *, NSValue *> *gXLGContainerProbeOriginals =
 static BOOL gXLGContainerProbeHooksInstalled = NO;
 static char kXLGGuideBridgeNavigationKey;
 static char kXLGGuideBridgeMarkerKey;
+static IMP gOrigXAppShowSearchResultsSource = NULL;
+static IMP gOrigXAppShowSearchResultsFromPanel = NULL;
+static BOOL gXLGXAppSearchRouterInstalled = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -620,7 +623,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass180Beta4GuideNavigationBridge.log"];
+            @"XLiquidGlass180Beta5XAppSearchRouter.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1734,7 +1737,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Beta 4 mantém XNavigation visível e inicializa T1GuideNavigationController apenas como roteador oculto. Teste Explorar/Busca/Trending; o relatório deve mostrar GUIDE_BRIDGE ready e, ao navegar, GUIDE_BRIDGE forward.";
+    return @"Beta 5 corrige as rotas showSearchResults que o XTabbedAppNavigation deixa Unrouted, redirecionando o mesmo options para showSearchControllerWithOptions. Teste Explorar/Busca/Trending e procure XAPP_SEARCH_ROUTER seguido de PUSH para TTSSearchContainerViewControllerV2.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1794,7 +1797,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.8.0 Beta 4 Guide Navigation Bridge Probe ==========");
+            @"========== XLiquidGlass 1.8.0 Beta 5 XApp Search Router Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1806,7 +1809,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.8.0 Beta 4 Guide Navigation Bridge Probe ==========");
+                @"========== XLiquidGlass 1.8.0 Beta 5 XApp Search Router Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -4913,6 +4916,160 @@ static void XLGInstallGlobalTabBarFixes(void) {
 }
 
 
+#pragma mark - XLiquidGlass Beta 5 XTabbedAppNavigation search router
+
+static UIViewController *XLGXAppSearchRouteSourceViewController(void) {
+    UIViewController *presenter=
+        XLGSidebarContentPresentingViewController();
+    UINavigationController *navigation=
+        XLGNavigationControllerForPresenter(presenter);
+
+    if (navigation.topViewController) {
+        return navigation.topViewController;
+    }
+    return presenter ?: XLGSidebarPresenter();
+}
+
+static BOOL XLGXAppRouteSearchOptions(
+    id self,
+    id options,
+    id completion,
+    NSString *origin) {
+
+    if (!XLGEnabled() || !self || !options) return NO;
+
+    SEL targetSEL=NSSelectorFromString(
+        @"showSearchControllerWithOptions:fromViewController:completion:");
+    if (![self respondsToSelector:targetSEL]) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"XAPP_SEARCH_ROUTER %@ failed=no-target-selector optionsClass=%@",
+                origin ?: @"-",
+                NSStringFromClass([options class]));
+        }
+        return NO;
+    }
+
+    UIViewController *fromViewController=
+        XLGXAppSearchRouteSourceViewController();
+    if (!fromViewController) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"XAPP_SEARCH_ROUTER %@ failed=no-source-controller optionsClass=%@",
+                origin ?: @"-",
+                NSStringFromClass([options class]));
+        }
+        return NO;
+    }
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"XAPP_SEARCH_ROUTER %@ redirect optionsClass=%@ ptr=%p from=%@ ptr=%p target=%@",
+            origin ?: @"-",
+            NSStringFromClass([options class]),
+            options,
+            NSStringFromClass(fromViewController.class),
+            fromViewController,
+            NSStringFromSelector(targetSEL));
+    }
+
+    ((void(*)(id,SEL,id,id,id))objc_msgSend)(
+        self,
+        targetSEL,
+        options,
+        fromViewController,
+        completion);
+
+    return YES;
+}
+
+static void XLGXAppShowSearchResultsSource(
+    id self,
+    SEL cmd,
+    id options,
+    long long source,
+    id completion) {
+
+    if (XLGXAppRouteSearchOptions(
+            self,
+            options,
+            completion,
+            @"showSearchResultsWithOptions:source:completion:")) {
+        return;
+    }
+
+    if (gOrigXAppShowSearchResultsSource) {
+        ((void(*)(id,SEL,id,long long,id))
+            gOrigXAppShowSearchResultsSource)(
+                self,cmd,options,source,completion);
+    }
+}
+
+static void XLGXAppShowSearchResultsFromPanel(
+    id self,
+    SEL cmd,
+    id options,
+    long long fromPanel,
+    long long source,
+    id completion) {
+
+    if (XLGXAppRouteSearchOptions(
+            self,
+            options,
+            completion,
+            @"showSearchResultsWithOptions:fromPanel:source:completion:")) {
+        return;
+    }
+
+    if (gOrigXAppShowSearchResultsFromPanel) {
+        ((void(*)(id,SEL,id,long long,long long,id))
+            gOrigXAppShowSearchResultsFromPanel)(
+                self,cmd,options,fromPanel,source,completion);
+    }
+}
+
+static void XLGInstallXAppSearchRouter(void) {
+    if (gXLGXAppSearchRouterInstalled) return;
+
+    Class cls=
+        NSClassFromString(@"_TtC14T1TwitterSwift20XTabbedAppNavigation");
+    if (!cls) return;
+
+    SEL sourceSEL=NSSelectorFromString(
+        @"showSearchResultsWithOptions:source:completion:");
+    SEL fromPanelSEL=NSSelectorFromString(
+        @"showSearchResultsWithOptions:fromPanel:source:completion:");
+
+    BOOL sourceHooked=NO;
+    BOOL fromPanelHooked=NO;
+
+    Method sourceMethod=class_getInstanceMethod(cls,sourceSEL);
+    if (sourceMethod &&
+        method_getNumberOfArguments(sourceMethod)==5) {
+        sourceHooked=XLGHookMethod(
+            cls,
+            sourceSEL,
+            NO,
+            (IMP)XLGXAppShowSearchResultsSource,
+            &gOrigXAppShowSearchResultsSource);
+    }
+
+    Method fromPanelMethod=
+        class_getInstanceMethod(cls,fromPanelSEL);
+    if (fromPanelMethod &&
+        method_getNumberOfArguments(fromPanelMethod)==6) {
+        fromPanelHooked=XLGHookMethod(
+            cls,
+            fromPanelSEL,
+            NO,
+            (IMP)XLGXAppShowSearchResultsFromPanel,
+            &gOrigXAppShowSearchResultsFromPanel);
+    }
+
+    gXLGXAppSearchRouterInstalled=
+        sourceHooked || fromPanelHooked;
+}
+
 static void XLGInstallHooks(void) {
     Class cls = Nil;
 
@@ -4992,6 +5149,7 @@ static void XLGInstallHooks(void) {
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
+    XLGInstallXAppSearchRouter();
     XLGInstallNavigationProbeHooks();
     XLGInstallContainerProbeHooks();
 }
@@ -5009,7 +5167,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.8.0 Beta 4 loaded: Guide navigation bridge + native Guide router fallback + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.8.0 Beta 5 loaded: XTabbedAppNavigation search router + Guide navigation bridge + native Guide router fallback + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
