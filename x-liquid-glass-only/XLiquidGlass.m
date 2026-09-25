@@ -73,6 +73,18 @@ static void XLGB12ProbeCaptureSnapshot(NSString *reason);
 static void XLGB12ProbeRuntimeSnapshot(void);
 static void XLGB12ProbeVisibleItems(NSString *reason);
 static NSString *XLGProbeMethodEncoding(Class cls, SEL selector);
+static BOOL XLGApplyStartupHoldIfNeeded(
+    NSString *userID,
+    BOOL hasNtab, NSInteger *ntab,
+    BOOL hasDM, NSInteger *dm,
+    BOOL hasXChat, NSInteger *xchat,
+    BOOL hasTotal, NSInteger *total);
+static void XLGResolveStartupHoldWithRemote(
+    NSString *userID,
+    NSInteger remoteNtab,
+    NSInteger remoteDM,
+    NSInteger remoteXChat,
+    NSInteger remoteTotal);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
