@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.8 Beta 17
+#pragma mark - XLiquidGlass 1.6.9 Beta 18
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -20,6 +20,16 @@ static void XLGResolveStartupHoldWithRemote(
     NSInteger remoteDM,
     NSInteger remoteXChat,
     NSInteger remoteTotal);
+static NSString *XLGCurrentActiveUserID(void);
+static NSMutableDictionary *XLGMutableBadgeStateForUserID(
+    NSString *userID, BOOL create);
+static NSMutableDictionary *XLGSourceStateForUserID(
+    NSString *userID, BOOL create);
+static NSInteger XLGStateInteger(NSDictionary *state,
+                                 NSString *key,
+                                 NSInteger fallback);
+static void XLGPersistBadgeStates(void);
+static void XLGRefreshGlobalTabBar(void);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -32,6 +42,7 @@ static IMP gOrigNFBSetupSections = NULL;
 static IMP gOrigNFBViewWillAppear = NULL;
 static IMP gOrigAppearanceUpdateVisibleToggles = NULL;
 static IMP gOrigAppearanceViewWillAppear = NULL;
+static IMP gOrigNotificationsViewDidAppear = NULL;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -1661,6 +1672,7 @@ static NSDictionary *gXLGLastBadgeCountsByUserID = nil;
 static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeStateByUserID = nil;
 static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeSourceStateByUserID = nil;
 static const NSTimeInterval kXLGBadgeReconcileWindow = 0.75;
+static const NSTimeInterval kXLGNotificationsViewedGraceWindow = 5.0;
 static BOOL gXLGBadgePersistenceLoaded = NO;
 static IMP gOrigXNavItemLayout = NULL;
 static IMP gOrigActiveAccountDidChange = NULL;
@@ -1926,6 +1938,73 @@ static NSMutableDictionary *XLGSourceStateForUserID(NSString *userID,
     return state;
 }
 
+static BOOL XLGNotificationsRecentlyViewedForUserID(
+    NSString *userID,
+    NSTimeInterval *ageOut) {
+    if (ageOut) *ageOut=DBL_MAX;
+    if (!userID.length) return NO;
+
+    NSDictionary *source=XLGSourceStateForUserID(userID,NO);
+    NSTimeInterval timestamp=
+        [source[@"notificationsViewedTimestamp"]
+            respondsToSelector:@selector(doubleValue)]
+            ? [source[@"notificationsViewedTimestamp"] doubleValue]
+            : 0;
+    if (timestamp<=0) return NO;
+
+    NSTimeInterval age=NSDate.date.timeIntervalSince1970-timestamp;
+    if (ageOut) *ageOut=age;
+    return age>=0 && age<=kXLGNotificationsViewedGraceWindow;
+}
+
+static void XLGMarkNotificationsViewedAndClearBadge(NSString *userID) {
+    if (!userID.length) return;
+
+    NSString *active=XLGCurrentActiveUserID();
+    if (active.length && ![active isEqualToString:userID]) return;
+
+    NSTimeInterval now=NSDate.date.timeIntervalSince1970;
+    NSMutableDictionary *source=XLGSourceStateForUserID(userID,YES);
+    source[@"notificationsViewedTimestamp"]=@(now);
+
+    // The notifications screen is now visible for this exact account.
+    // A following zero is a legitimate "seen" transition, not startup noise.
+    source[@"trustedNotifications"]=@NO;
+    source[@"trustedTimestamp"]=@0;
+    source[@"startupHold"]=@NO;
+    source[@"directSourceSeen"]=@YES;
+
+    NSMutableDictionary *state=XLGMutableBadgeStateForUserID(userID,YES);
+    NSInteger dm=XLGStateInteger(state,@"dm",0);
+    NSInteger xchat=XLGStateInteger(state,@"xchat",0);
+    NSInteger chat=xchat>0 ? xchat : MAX((NSInteger)0,dm);
+
+    // Clear only notifications. Preserve the active account's chat badge.
+    state[@"ntab"]=@0;
+    state[@"total"]=@(MAX((NSInteger)0,chat));
+    state[@"timestamp"]=@(now);
+
+    // Also retire the stale notification-only authoritative snapshot so it
+    // cannot immediately recreate the badge during the read transition.
+    source[@"remoteNtab"]=@0;
+    source[@"remoteTotal"]=@(MAX((NSInteger)0,chat));
+    source[@"remoteTimestamp"]=@(now);
+
+    XLGPersistBadgeStates();
+    XLGRefreshGlobalTabBar();
+
+    // Liquid Glass can rebuild the tab bar just after viewDidAppear:.
+    for (NSNumber *delayNumber in @[@0.08,@0.30]) {
+        NSTimeInterval delay=delayNumber.doubleValue;
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                XLGRefreshGlobalTabBar();
+            });
+    }
+}
+
 static NSInteger XLGIntegerFromObjectPointer(uintptr_t raw,
                                              NSInteger fallback) {
     if (!raw) return fallback;
@@ -1983,6 +2062,15 @@ static void XLGEvaluateTrustedNotificationSource(NSString *userID,
                                                   NSString *reason) {
     NSMutableDictionary *state = XLGSourceStateForUserID(userID, NO);
     if (!state) return;
+
+    NSTimeInterval viewedAge=DBL_MAX;
+    if (XLGNotificationsRecentlyViewedForUserID(userID,&viewedAge)) {
+        XLGSetTrustedNotificationSource(
+            userID,
+            NO,
+            @"notifications-recently-viewed");
+        return;
+    }
 
     BOOL remoteGood = XLGRemoteSourceLooksLikeNotificationsOnly(state);
     NSInteger localDM = XLGStateInteger(state, @"localDM", -1);
@@ -2114,6 +2202,42 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         rawDM == 0 &&
         rawXChat == 0 &&
         rawTotal == 0;
+
+    NSTimeInterval viewedAge=DBL_MAX;
+    BOOL recentlyViewed=
+        XLGNotificationsRecentlyViewedForUserID(userID,&viewedAge);
+
+    if (recentlyViewed && (rawZero || rawMisroute)) {
+        NSDictionary *cached=XLGBadgeStateForUserID(userID);
+        NSInteger cachedDM=XLGStateInteger(cached,@"dm",0);
+        NSInteger cachedXChat=XLGStateInteger(cached,@"xchat",0);
+        NSInteger cachedChat=
+            cachedXChat>0 ? cachedXChat : MAX((NSInteger)0,cachedDM);
+
+        *ntab=0;
+        *dm=MAX((NSInteger)0,cachedDM);
+        *xchat=MAX((NSInteger)0,cachedXChat);
+        *total=MAX((NSInteger)0,cachedChat);
+
+        NSMutableDictionary *mutableSource=
+            XLGSourceStateForUserID(userID,YES);
+        mutableSource[@"trustedNotifications"]=@NO;
+        mutableSource[@"remoteNtab"]=@0;
+        mutableSource[@"remoteTotal"]=@(MAX((NSInteger)0,cachedChat));
+
+        XLGDiagLog(
+            @"ACCEPT_READ_ZERO user=%@ age=%.3f raw(ntab=%ld dm=%ld xchat=%ld total=%ld) -> ntab=0 dm=%ld xchat=%ld total=%ld",
+            userID,
+            viewedAge,
+            (long)rawNtab,
+            (long)rawDM,
+            (long)rawXChat,
+            (long)rawTotal,
+            (long)*dm,
+            (long)*xchat,
+            (long)*total);
+        return YES;
+    }
 
     // Final: once direct TFNTwitterAccount + local DM establish a trusted
     // notifications-only state, aggregate AccountBadgesDidChange maps are not
@@ -3059,6 +3183,29 @@ static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
     }
 }
 
+static void XLGNotificationsViewDidAppear(id self,
+                                         SEL cmd,
+                                         BOOL animated) {
+    if (gOrigNotificationsViewDidAppear) {
+        ((void(*)(id,SEL,BOOL))gOrigNotificationsViewDidAppear)(
+            self,cmd,animated);
+    }
+
+    if (!XLGEnabled()) return;
+
+    id account=nil;
+    SEL accountSEL=NSSelectorFromString(@"account");
+    if ([self respondsToSelector:accountSEL]) {
+        account=((id(*)(id,SEL))objc_msgSend)(self,accountSEL);
+    }
+
+    NSString *userID=XLGTryResolveUserID(account,0);
+    if (!userID.length) userID=XLGCurrentActiveUserID();
+    if (!userID.length) return;
+
+    XLGMarkNotificationsViewedAndClearBadge(userID);
+}
+
 static void XLGAppBadgingSetCurrentUserID(id self, SEL cmd, unsigned long long userID) {
     if (gOrigAppBadgingSetCurrentUserID) {
         ((void(*)(id,SEL,unsigned long long))gOrigAppBadgingSetCurrentUserID)(
@@ -3279,6 +3426,19 @@ static void XLGXNavItemLayout(id self, SEL cmd) {
 static void XLGInstallGlobalTabBarFixes(void) {
     XLGLoadPersistedBadgeCounts();
 
+    Class notificationsClass=
+        NSClassFromString(@"T1NotificationsViewController");
+    if (notificationsClass &&
+        [notificationsClass instancesRespondToSelector:@selector(viewDidAppear:)] &&
+        !gOrigNotificationsViewDidAppear) {
+        XLGHookMethod(
+            notificationsClass,
+            @selector(viewDidAppear:),
+            NO,
+            (IMP)XLGNotificationsViewDidAppear,
+            &gOrigNotificationsViewDidAppear);
+    }
+
     Class appEventClass = NSClassFromString(@"T1AppEventHandler");
     SEL activeAccountSEL = NSSelectorFromString(@"_t1_activeAccountDidChange:");
     if (appEventClass &&
@@ -3464,7 +3624,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.8 Beta 17 loaded: own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.9 Beta 18 loaded: read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
