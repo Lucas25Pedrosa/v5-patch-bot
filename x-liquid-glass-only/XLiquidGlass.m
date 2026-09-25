@@ -4,6 +4,74 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
+#pragma mark - Beta 7.1 integrated badge probe
+
+static NSString *const kXLGB7ProbeLogFileName = @"XLiquidGlassBeta7Probe.log";
+static const NSUInteger kXLGB7ProbeMaxLogBytes = 512 * 1024;
+
+static NSString *XLGB7ProbeLogPath(void) {
+    NSString *documents = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    if (!documents.length) documents = NSTemporaryDirectory();
+    return [documents stringByAppendingPathComponent:kXLGB7ProbeLogFileName];
+}
+
+static NSString *XLGB7ProbeStamp(void) {
+    static NSDateFormatter *formatter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        formatter = [NSDateFormatter new];
+        formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+    });
+    return [formatter stringFromDate:NSDate.date];
+}
+
+static void XLGB7ProbeTrimLog(void) {
+    NSString *path = XLGB7ProbeLogPath();
+    NSDictionary *attrs =
+        [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
+    unsigned long long size = [attrs fileSize];
+    if (size <= kXLGB7ProbeMaxLogBytes) return;
+
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    if (data.length <= kXLGB7ProbeMaxLogBytes) return;
+    NSUInteger keep = kXLGB7ProbeMaxLogBytes / 2;
+    NSData *tail = [data subdataWithRange:NSMakeRange(data.length - keep, keep)];
+    [tail writeToFile:path atomically:YES];
+}
+
+static void XLGB7ProbeLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
+static void XLGB7ProbeLog(NSString *format, ...) {
+    if (!format) return;
+    va_list args;
+    va_start(args, format);
+    NSString *body = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSLog(@"[XLiquidGlass B7.1] %@", body ?: @"");
+    NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
+                      XLGB7ProbeStamp(), body ?: @""];
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSString *path = XLGB7ProbeLogPath();
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [@"" writeToFile:path atomically:YES
+                    encoding:NSUTF8StringEncoding error:nil];
+        }
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (handle) {
+            [handle seekToEndOfFile];
+            [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [handle closeFile];
+        }
+        XLGB7ProbeTrimLog();
+    }
+}
+
+static void XLGB7ProbeCaptureSnapshot(NSString *reason);
+static void XLGB7ProbeRuntimeSnapshot(void);
+
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
 static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
@@ -213,12 +281,106 @@ static void XLGSyncCompatibilityGate(void) {
 
 @end
 
-static BOOL XLGSectionsContainEntry(NSArray *sections) {
+@interface XLiquidGlassBadgeProbeViewController : UITableViewController
+@end
+
+@implementation XLiquidGlassBadgeProbeViewController
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Badge Probe";
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+ numberOfRowsInSection:(NSInteger)section {
+    (void)tableView; (void)section;
+    return 4;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+ titleForFooterInSection:(NSInteger)section {
+    (void)tableView; (void)section;
+    return @"Beta 7.1: tentativa de correção + diagnóstico integrado de conta e badges.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier = @"XLGB71ProbeCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) {
+        cell = [[UITableViewCell alloc]
+                initWithStyle:UITableViewCellStyleSubtitle
+                reuseIdentifier:identifier];
+    }
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+
+    if (indexPath.row == 0) {
+        cell.textLabel.text = @"Capturar estado";
+        cell.detailTextLabel.text = @"Conta visível, owner e contadores atuais.";
+    } else if (indexPath.row == 1) {
+        cell.textLabel.text = @"Probe de runtime";
+        cell.detailTextLabel.text = @"Classes e seletores usados pelo Beta 7.1.";
+    } else if (indexPath.row == 2) {
+        cell.textLabel.text = @"Copiar relatório";
+        cell.detailTextLabel.text = kXLGB7ProbeLogFileName;
+    } else {
+        cell.textLabel.text = @"Limpar relatório";
+        cell.detailTextLabel.text = @"Reinicia somente o arquivo de diagnóstico.";
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+    if (indexPath.row == 0) {
+        XLGB7ProbeCaptureSnapshot(@"manual-capture");
+        [tableView reloadData];
+        return;
+    }
+
+    if (indexPath.row == 1) {
+        XLGB7ProbeRuntimeSnapshot();
+        XLGB7ProbeCaptureSnapshot(@"manual-runtime");
+        [tableView reloadData];
+        return;
+    }
+
+    if (indexPath.row == 2) {
+        NSString *report =
+            [NSString stringWithContentsOfFile:XLGB7ProbeLogPath()
+                                      encoding:NSUTF8StringEncoding
+                                         error:nil] ?: @"";
+        UIPasteboard.generalPasteboard.string = report;
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:@"Badge Probe"
+                                                message:
+             [NSString stringWithFormat:@"Relatório copiado (%lu caracteres).",
+              (unsigned long)report.length]
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    [NSFileManager.defaultManager removeItemAtPath:XLGB7ProbeLogPath() error:nil];
+    XLGB7ProbeLog(@"LOG RESET");
+    [tableView reloadData];
+}
+
+@end
+
+static BOOL XLGSectionsContainAction(NSArray *sections, NSString *action) {
     for (id entry in sections) {
         if (![entry isKindOfClass:NSDictionary.class]) continue;
-        if ([entry[@"action"] isEqualToString:@"showXLiquidGlassSettings"]) {
-            return YES;
-        }
+        if ([entry[@"action"] isEqualToString:action]) return YES;
     }
     return NO;
 }
@@ -232,21 +394,36 @@ static void XLGInjectNFBSection(id controller) {
         return;
     }
 
-    if (![sections isKindOfClass:NSArray.class] || XLGSectionsContainEntry(sections)) {
-        return;
-    }
+    if (![sections isKindOfClass:NSArray.class]) return;
 
     NSMutableArray *updated = [sections mutableCopy];
-    NSDictionary *entry = @{
-        @"title": @"Liquid Glass",
-        @"subtitle": @"Ativar ou desativar o redesign Liquid Glass.",
-        @"icon": @"paintbrush_stroke",
-        @"action": @"showXLiquidGlassSettings"
-    };
+    BOOL changed = NO;
 
-    NSUInteger insertIndex = MIN((NSUInteger)2, updated.count);
-    [updated insertObject:entry atIndex:insertIndex];
+    if (!XLGSectionsContainAction(updated, @"showXLiquidGlassSettings")) {
+        NSDictionary *entry = @{
+            @"title": @"Liquid Glass",
+            @"subtitle": @"Ativar ou desativar o redesign Liquid Glass.",
+            @"icon": @"paintbrush_stroke",
+            @"action": @"showXLiquidGlassSettings"
+        };
+        NSUInteger insertIndex = MIN((NSUInteger)2, updated.count);
+        [updated insertObject:entry atIndex:insertIndex];
+        changed = YES;
+    }
 
+    if (!XLGSectionsContainAction(updated, @"showXLiquidGlassBadgeProbe")) {
+        NSDictionary *probeEntry = @{
+            @"title": @"Badge Probe",
+            @"subtitle": @"Diagnóstico da troca de conta e badges.",
+            @"icon": @"person_2",
+            @"action": @"showXLiquidGlassBadgeProbe"
+        };
+        NSUInteger probeIndex = MIN((NSUInteger)3, updated.count);
+        [updated insertObject:probeEntry atIndex:probeIndex];
+        changed = YES;
+    }
+
+    if (!changed) return;
     @try {
         [controller setValue:[updated copy] forKey:@"sections"];
     } @catch (__unused NSException *exception) {
@@ -296,6 +473,24 @@ static void XLGShowSettings(id self, SEL _cmd) {
     }
 }
 
+static void XLGShowBadgeProbe(id self, SEL _cmd) {
+    (void)_cmd;
+    if (![self isKindOfClass:UIViewController.class]) return;
+
+    XLiquidGlassBadgeProbeViewController *probe =
+        [[XLiquidGlassBadgeProbeViewController alloc] init];
+    UINavigationController *navigation =
+        ((UIViewController *)self).navigationController;
+    if (navigation) {
+        [navigation pushViewController:probe animated:YES];
+    } else {
+        UINavigationController *wrapper =
+            [[UINavigationController alloc] initWithRootViewController:probe];
+        [(UIViewController *)self presentViewController:wrapper
+                                              animated:YES completion:nil];
+    }
+}
+
 static void XLGInstallNFBSettingsIntegration(void) {
     if (gNFBSettingsHooked) return;
 
@@ -304,6 +499,9 @@ static void XLGInstallNFBSettingsIntegration(void) {
 
     SEL showSEL = NSSelectorFromString(@"showXLiquidGlassSettings");
     class_addMethod(cls, showSEL, (IMP)XLGShowSettings, "v@:");
+
+    SEL probeSEL = NSSelectorFromString(@"showXLiquidGlassBadgeProbe");
+    class_addMethod(cls, probeSEL, (IMP)XLGShowBadgeProbe, "v@:");
 
     BOOL setupHooked =
         XLGHookMethod(cls,
@@ -1005,7 +1203,7 @@ static NSString *XLGCurrentActiveUserID(void) {
     if (navigationUserID.length &&
         XLGBadgeStateForUserID(navigationUserID)) {
         if (![gXLGBadgeActiveUserID isEqualToString:navigationUserID]) {
-            NSLog(@"[XLiquidGlass B7] OWNER navigation=%@ previous=%@ action=promote-navigation",
+            XLGB7ProbeLog(@"OWNER navigation=%@ previous=%@ action=promote-navigation",
                   navigationUserID,
                   gXLGBadgeActiveUserID ?: @"-");
             gXLGBadgeActiveUserID = [navigationUserID copy];
@@ -1258,6 +1456,61 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state) {
     if (canonical < 0) return derived;
     if (derived > canonical) return derived;
     return canonical;
+}
+
+static void XLGB7ProbeCaptureSnapshot(NSString *reason) {
+    NSString *active = XLGCurrentActiveUserID();
+    NSString *nav = XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
+    NSDictionary *activeState = XLGBadgeStateForUserID(active);
+    XLGB7ProbeLog(@"SNAPSHOT reason=%@ active=%@ nav=%@ storedOwner=%@ root=%ld accounts=%lu ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
+                  reason ?: @"-",
+                  active ?: @"-",
+                  nav ?: @"-",
+                  gXLGBadgeActiveUserID ?: @"-",
+                  (long)gXLGLastRootBadgeCount,
+                  (unsigned long)gXLGBadgeStateByUserID.count,
+                  (long)XLGStateInteger(activeState, @"ntab", -1),
+                  (long)XLGStateInteger(activeState, @"dm", -1),
+                  (long)XLGStateInteger(activeState, @"xchat", -1),
+                  (long)XLGStateInteger(activeState, @"total", -1),
+                  (long)XLGChatDisplayCountForState(activeState),
+                  (long)XLGNotificationDisplayCountForState(activeState));
+
+    NSArray *keys = [[gXLGBadgeStateByUserID allKeys]
+        sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *userID in keys) {
+        NSDictionary *state = gXLGBadgeStateByUserID[userID];
+        XLGB7ProbeLog(@"SNAPSHOT_ACCOUNT user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld%@",
+                      userID,
+                      (long)XLGStateInteger(state, @"ntab", -1),
+                      (long)XLGStateInteger(state, @"dm", -1),
+                      (long)XLGStateInteger(state, @"xchat", -1),
+                      (long)XLGStateInteger(state, @"total", -1),
+                      (long)XLGChatDisplayCountForState(state),
+                      (long)XLGNotificationDisplayCountForState(state),
+                      [userID isEqualToString:active] ? @" ACTIVE" : @"");
+    }
+}
+
+static void XLGB7ProbeRuntimeSnapshot(void) {
+    XLGB7ProbeLog(@"RUNTIME_BEGIN");
+    for (NSString *className in @[@"T1AppBadging",
+                                  @"T1AppEventHandler",
+                                  @"T1TwitterSwift.XTabbedAppNavigation",
+                                  @"XNavigation.TabBarView",
+                                  @"XNavigation.TabBarItemView",
+                                  @"TFNTwitterAccount"]) {
+        Class cls = NSClassFromString(className);
+        XLGB7ProbeLog(@"RUNTIME_CLASS name=%@ present=%d", className, cls != Nil);
+    }
+    Class badging = NSClassFromString(@"T1AppBadging");
+    XLGB7ProbeLog(@"RUNTIME_SELECTOR class=T1AppBadging setCurrentUserID=%d setUserIDsCurrentUserID=%d",
+                  [badging instancesRespondToSelector:NSSelectorFromString(@"setCurrentUserID:")],
+                  [badging instancesRespondToSelector:NSSelectorFromString(@"setUserIDs:currentUserID:")]);
+    Class appEvent = NSClassFromString(@"T1AppEventHandler");
+    XLGB7ProbeLog(@"RUNTIME_SELECTOR class=T1AppEventHandler activeAccountDidChange=%d",
+                  [appEvent instancesRespondToSelector:NSSelectorFromString(@"_t1_activeAccountDidChange:")]);
+    XLGB7ProbeLog(@"RUNTIME_END");
 }
 
 static NSArray<UIWindow *> *XLGVisibleWindows(void) {
@@ -1576,7 +1829,7 @@ static void XLGRefreshGlobalTabBar(void) {
 
         if (![gXLGLastRenderProbeSignature isEqualToString:signature]) {
             gXLGLastRenderProbeSignature = [signature copy];
-            NSLog(@"[XLiquidGlass B7] RENDER active=%@ nav=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
+            XLGB7ProbeLog(@"RENDER active=%@ nav=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
                   activeUserID ?: @"-",
                   navigationUserID ?: @"-",
                   (long)ntab,
@@ -1649,6 +1902,12 @@ static BOOL XLGSetBadgeCountsFromObject(id object, NSString *userID) {
               (long)XLGStateInteger(state, @"dm", -1),
               (long)XLGStateInteger(state, @"xchat", -1),
               (long)XLGStateInteger(state, @"total", -1));
+        XLGB7ProbeLog(@"CACHE user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld",
+              userID,
+              (long)XLGStateInteger(state, @"ntab", -1),
+              (long)XLGStateInteger(state, @"dm", -1),
+              (long)XLGStateInteger(state, @"xchat", -1),
+              (long)XLGStateInteger(state, @"total", -1));
     }
     return changed;
 }
@@ -1694,6 +1953,8 @@ static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
         gXLGBadgeActiveUserID = [userID copy];
         NSLog(@"[XLiquidGlass] active badge account=%@ source=%@",
               userID, source ?: @"-");
+        XLGB7ProbeLog(@"LIFECYCLE active=%@ source=%@",
+                      userID, source ?: @"-");
         XLGPersistBadgeStates();
     }
 
@@ -1711,7 +1972,7 @@ static void XLGAppBadgingSetCurrentUserID(id self, SEL cmd, unsigned long long u
     // Beta 7: advisory only. T1AppBadging owns global badge bookkeeping, not
     // the identity of the XNavigation bar currently visible to the user.
     NSString *reported = [@(userID) stringValue];
-    NSLog(@"[XLiquidGlass B7] ADVISORY source=T1AppBadging.setCurrentUserID reported=%@ active=%@",
+    XLGB7ProbeLog(@"ADVISORY source=T1AppBadging.setCurrentUserID reported=%@ active=%@",
           reported,
           gXLGBadgeActiveUserID ?: @"-");
     XLGRefreshGlobalTabBar();
@@ -1727,7 +1988,7 @@ static void XLGAppBadgingSetUserIDsCurrentUserID(id self,
     }
 
     NSString *reported = XLGNormalizedUserID(currentUserID);
-    NSLog(@"[XLiquidGlass B7] ADVISORY source=T1AppBadging.setUserIDs:currentUserID: reported=%@ active=%@",
+    XLGB7ProbeLog(@"ADVISORY source=T1AppBadging.setUserIDs:currentUserID: reported=%@ active=%@",
           reported ?: @"-",
           gXLGBadgeActiveUserID ?: @"-");
     XLGRefreshGlobalTabBar();
@@ -1992,7 +2253,9 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 7 two-in-one loaded: navigation ownership + T1AppBadging advisory + integrated badge probe + isolated badges + activation + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 7.1 two-in-one loaded: navigation ownership + T1AppBadging advisory + NFB copyable probe + isolated badges + activation + sidebar + theme sync");
+        XLGB7ProbeLog(@"========== XLiquidGlass Beta 7.1 loaded ==========");
+        XLGB7ProbeLog(@"logPath=%@", XLGB7ProbeLogPath());
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
