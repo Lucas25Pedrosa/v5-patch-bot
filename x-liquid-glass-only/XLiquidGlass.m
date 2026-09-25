@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.1
+#pragma mark - XLiquidGlass 1.9.2 Beta 2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -34,6 +34,7 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static NSString *XLGToastBridgeLogPath(void);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -81,6 +82,17 @@ static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
 static BOOL gAppearanceSettingsHooked = NO;
+
+static IMP gOrigToastBridgeToasterInit = NULL;
+static IMP gOrigToastBridgeRegisterVC = NULL;
+static IMP gOrigToastBridgePushToast = NULL;
+static IMP gOrigToastBridgePushToastPriority = NULL;
+static IMP gOrigToastBridgeTweetSentInit = NULL;
+static BOOL gXLGToastBridgeInstalled = NO;
+static id gXLGToastBridgeToaster = nil;
+static UIWindow *gXLGToastBridgeWindow = nil;
+static char kXLGToastBridgePushedKey;
+static char kXLGToastBridgeScheduledKey;
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -206,7 +218,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -229,6 +241,15 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryView=nil;
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
+
+    if (indexPath.row == 2) {
+        cell.textLabel.text = @"Copiar relatório de toast";
+        cell.detailTextLabel.text =
+            @"Copia o diagnóstico da ponte de “Post enviado”.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -271,6 +292,35 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 2) return;
+
+    NSString *path=XLGToastBridgeLogPath();
+    NSData *data=path.length ? [NSData dataWithContentsOfFile:path] : nil;
+    NSString *report=data.length
+        ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+        : @"";
+
+    if (report.length) {
+        UIPasteboard.generalPasteboard.string=report;
+    }
+
+    UIAlertController *alert=
+        [UIAlertController
+            alertControllerWithTitle:@"Relatório de toast"
+                             message:report.length
+                                ? @"Relatório copiado para a área de transferência."
+                                : @"Ainda não há eventos registrados."
+                      preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -602,6 +652,542 @@ static UINavigationController *XLGNavigationControllerForPresenter(
         return (UINavigationController *)presenter;
     }
     return presenter.navigationController;
+}
+
+
+#pragma mark - XLiquidGlass 1.9.2 Beta 2 native toast bridge
+
+static NSString *XLGToastBridgeLogPath(void) {
+    NSString *documents=
+        NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents stringByAppendingPathComponent:
+        @"XLiquidGlass192Beta2ToastBridge.log"];
+}
+
+static NSString *XLGToastBridgeTimestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGToastBridgeLog(NSString *format, ...) {
+    if (!format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=
+        [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGToastBridgeTimestamp(),
+                    message ?: @"-"];
+    NSLog(@"[XLiquidGlass/ToastBridge] %@",message ?: @"-");
+
+    NSString *path=XLGToastBridgeLogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=
+                [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static BOOL XLGToastBridgeIsToaster(id object) {
+    Class cls=NSClassFromString(@"TFNToaster");
+    return object && cls && [object isKindOfClass:cls];
+}
+
+static id XLGToastBridgeValueBySelector(id object, NSString *name) {
+    if (!object || !name.length) return nil;
+    SEL selector=NSSelectorFromString(name);
+    if (![object respondsToSelector:selector]) return nil;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method || method_getNumberOfArguments(method)!=2) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void XLGToastBridgeCaptureToaster(id toaster,
+                                         NSString *reason) {
+    if (!XLGToastBridgeIsToaster(toaster)) return;
+    if (gXLGToastBridgeToaster!=toaster) {
+        gXLGToastBridgeToaster=toaster;
+        XLGToastBridgeLog(
+            @"TOASTER_CAPTURE reason=%@ ptr=%p class=%@",
+            reason ?: @"-",
+            toaster,
+            NSStringFromClass([toaster class]));
+    }
+}
+
+static id XLGToastBridgeFindToaster(void) {
+    if (XLGToastBridgeIsToaster(gXLGToastBridgeToaster)) {
+        return gXLGToastBridgeToaster;
+    }
+
+    NSMutableArray *objects=[NSMutableArray array];
+
+    id appNavigation=XLGSidebarAppNavigation();
+    if (appNavigation) [objects addObject:appNavigation];
+
+    UIViewController *presenter=XLGSidebarContentPresentingViewController();
+    if (presenter) [objects addObject:presenter];
+
+    UIWindow *activeWindow=XLGSidebarActiveWindow();
+    if (activeWindow.rootViewController) {
+        NSMutableArray<UIViewController *> *queue=
+            [NSMutableArray arrayWithObject:activeWindow.rootViewController];
+        for (NSUInteger i=0;i<queue.count && i<160;i++) {
+            UIViewController *vc=queue[i];
+            [objects addObject:vc];
+            if (vc.presentedViewController &&
+                ![queue containsObject:vc.presentedViewController]) {
+                [queue addObject:vc.presentedViewController];
+            }
+            for (UIViewController *child in vc.childViewControllers ?: @[]) {
+                if (![queue containsObject:child]) [queue addObject:child];
+            }
+        }
+    }
+
+    id appDelegate=UIApplication.sharedApplication.delegate;
+    if (appDelegate) [objects addObject:appDelegate];
+
+    for (id object in objects) {
+        if (XLGToastBridgeIsToaster(object)) {
+            XLGToastBridgeCaptureToaster(object,@"hierarchy-object");
+            return object;
+        }
+
+        for (NSString *selectorName in @[
+                @"defaultToaster",
+                @"toaster"
+            ]) {
+            id candidate=XLGToastBridgeValueBySelector(
+                object,selectorName);
+            if (XLGToastBridgeIsToaster(candidate)) {
+                XLGToastBridgeCaptureToaster(
+                    candidate,
+                    [NSString stringWithFormat:@"%@.%@",
+                        NSStringFromClass([object class]),
+                        selectorName]);
+                return candidate;
+            }
+        }
+    }
+
+    return nil;
+}
+
+static UIWindow *XLGToastBridgeExistingToastWindow(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if ([NSStringFromClass(window.class)
+                    isEqualToString:@"TFNToastWindow"]) {
+                return window;
+            }
+        }
+    }
+    return nil;
+}
+
+static BOOL XLGToastBridgeEnsureHost(id toaster) {
+    if (!XLGEnabled() || !XLGToastBridgeIsToaster(toaster)) return NO;
+
+    SEL toastVCSEL=NSSelectorFromString(@"toastViewController");
+    if ([toaster respondsToSelector:toastVCSEL]) {
+        id existing=((id(*)(id,SEL))objc_msgSend)(
+            toaster,toastVCSEL);
+        if ([existing isKindOfClass:UIViewController.class]) {
+            XLGToastBridgeLog(
+                @"HOST_READY existingVC=%@ ptr=%p",
+                NSStringFromClass([existing class]),
+                existing);
+            return YES;
+        }
+    }
+
+    UIWindow *window=XLGToastBridgeExistingToastWindow();
+    if (!window) window=gXLGToastBridgeWindow;
+
+    id toastVC=nil;
+    if (window &&
+        [window respondsToSelector:
+            NSSelectorFromString(@"toastViewController")]) {
+        toastVC=((id(*)(id,SEL))objc_msgSend)(
+            window,NSSelectorFromString(@"toastViewController"));
+    }
+
+    if (!window) {
+        Class windowClass=NSClassFromString(@"TFNToastWindow");
+        SEL initSEL=NSSelectorFromString(@"initWithFrame:toaster:");
+        if (!windowClass ||
+            !class_getInstanceMethod(windowClass,initSEL)) {
+            XLGToastBridgeLog(@"HOST_FAIL missing-TFNToastWindow-init");
+            return NO;
+        }
+
+        UIWindow *active=XLGSidebarActiveWindow();
+        CGRect frame=active ? active.bounds : UIScreen.mainScreen.bounds;
+
+        id allocated=((id(*)(id,SEL))objc_msgSend)(
+            windowClass,@selector(alloc));
+        window=((id(*)(id,SEL,CGRect,id))objc_msgSend)(
+            allocated,initSEL,frame,toaster);
+
+        if (![window isKindOfClass:UIWindow.class]) {
+            XLGToastBridgeLog(@"HOST_FAIL window-create returned=%@",
+                              window ? NSStringFromClass([window class])
+                                     : @"nil");
+            return NO;
+        }
+
+        if (@available(iOS 13.0,*)) {
+            if (active.windowScene) {
+                window.windowScene=active.windowScene;
+            }
+        }
+
+        if ([window respondsToSelector:toastVCSEL]) {
+            toastVC=((id(*)(id,SEL))objc_msgSend)(
+                window,toastVCSEL);
+        }
+
+        gXLGToastBridgeWindow=window;
+        XLGToastBridgeLog(
+            @"HOST_WINDOW_CREATED class=%@ ptr=%p toastVC=%@ ptr=%p frame=%@",
+            NSStringFromClass(window.class),
+            window,
+            toastVC ? NSStringFromClass([toastVC class]) : @"nil",
+            toastVC,
+            NSStringFromCGRect(window.frame));
+    }
+
+    if (![toastVC isKindOfClass:UIViewController.class]) {
+        Class vcClass=NSClassFromString(@"TFNToastViewController");
+        if (vcClass) {
+            id candidate=((id(*)(id,SEL))objc_msgSend)(
+                vcClass,@selector(new));
+            if ([candidate isKindOfClass:UIViewController.class]) {
+                toastVC=candidate;
+                XLGToastBridgeLog(
+                    @"HOST_VC_FALLBACK_CREATED class=%@ ptr=%p",
+                    NSStringFromClass([candidate class]),
+                    candidate);
+            }
+        }
+    }
+
+    if (![toastVC isKindOfClass:UIViewController.class]) {
+        XLGToastBridgeLog(@"HOST_FAIL no-toast-view-controller");
+        return NO;
+    }
+
+    if (!window.rootViewController) {
+        window.rootViewController=toastVC;
+    }
+
+    SEL registerSEL=NSSelectorFromString(@"registerToastViewController:");
+    if ([toaster respondsToSelector:registerSEL]) {
+        ((void(*)(id,SEL,id))objc_msgSend)(
+            toaster,registerSEL,toastVC);
+    } else {
+        SEL setSEL=NSSelectorFromString(@"setToastViewController:");
+        if ([toaster respondsToSelector:setSEL]) {
+            ((void(*)(id,SEL,id))objc_msgSend)(
+                toaster,setSEL,toastVC);
+        }
+    }
+
+    id registered=nil;
+    if ([toaster respondsToSelector:toastVCSEL]) {
+        registered=((id(*)(id,SEL))objc_msgSend)(
+            toaster,toastVCSEL);
+    }
+
+    BOOL ready=[registered isKindOfClass:UIViewController.class];
+    XLGToastBridgeLog(
+        @"HOST_RESULT ready=%@ window=%@ hidden=%@ root=%@ registered=%@",
+        ready ? @"YES" : @"NO",
+        window ? NSStringFromClass(window.class) : @"nil",
+        window.hidden ? @"YES" : @"NO",
+        window.rootViewController
+            ? NSStringFromClass(window.rootViewController.class) : @"nil",
+        registered ? NSStringFromClass([registered class]) : @"nil");
+    return ready;
+}
+
+static id XLGToastBridgeToasterInit(id self, SEL cmd) {
+    id result=self;
+    if (gOrigToastBridgeToasterInit) {
+        result=((id(*)(id,SEL))
+            gOrigToastBridgeToasterInit)(self,cmd);
+    }
+    XLGToastBridgeCaptureToaster(result,@"TFNToaster.init");
+    if (XLGEnabled()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            XLGToastBridgeEnsureHost(result);
+        });
+    }
+    return result;
+}
+
+static void XLGToastBridgeRegisterVC(id self,
+                                     SEL cmd,
+                                     id controller) {
+    XLGToastBridgeCaptureToaster(self,@"registerToastViewController");
+    if (gOrigToastBridgeRegisterVC) {
+        ((void(*)(id,SEL,id))
+            gOrigToastBridgeRegisterVC)(self,cmd,controller);
+    }
+    XLGToastBridgeLog(
+        @"REGISTER_VC controller=%@ ptr=%p",
+        controller ? NSStringFromClass([controller class]) : @"nil",
+        controller);
+}
+
+static void XLGToastBridgePushToast(id self,
+                                    SEL cmd,
+                                    id toast) {
+    XLGToastBridgeCaptureToaster(self,@"pushToast:");
+    if (toast) {
+        objc_setAssociatedObject(
+            toast,&kXLGToastBridgePushedKey,@YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (XLGEnabled()) {
+        XLGToastBridgeEnsureHost(self);
+    }
+
+    XLGToastBridgeLog(
+        @"PUSH toastClass=%@ ptr=%p message=%@",
+        toast ? NSStringFromClass([toast class]) : @"nil",
+        toast,
+        XLGToastBridgeValueBySelector(toast,@"messageText") ?: @"-");
+
+    if (gOrigToastBridgePushToast) {
+        ((void(*)(id,SEL,id))
+            gOrigToastBridgePushToast)(self,cmd,toast);
+    }
+}
+
+static void XLGToastBridgePushToastPriority(id self,
+                                            SEL cmd,
+                                            id toast,
+                                            unsigned long long priority) {
+    XLGToastBridgeCaptureToaster(self,@"pushToast:withPriority:");
+    if (toast) {
+        objc_setAssociatedObject(
+            toast,&kXLGToastBridgePushedKey,@YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (XLGEnabled()) {
+        XLGToastBridgeEnsureHost(self);
+    }
+
+    XLGToastBridgeLog(
+        @"PUSH_PRIORITY toastClass=%@ ptr=%p priority=%llu",
+        toast ? NSStringFromClass([toast class]) : @"nil",
+        toast,
+        priority);
+
+    if (gOrigToastBridgePushToastPriority) {
+        ((void(*)(id,SEL,id,unsigned long long))
+            gOrigToastBridgePushToastPriority)(
+                self,cmd,toast,priority);
+    }
+}
+
+static id XLGToastBridgeTweetSentInit(
+    id self,
+    SEL cmd,
+    id status,
+    id communityReference,
+    unsigned long long sendCount,
+    BOOL editEnabled,
+    id account,
+    id tweetText,
+    id presentingViewController) {
+
+    id result=nil;
+    if (gOrigToastBridgeTweetSentInit) {
+        result=((id(*)(id,SEL,id,id,unsigned long long,BOOL,id,id,id))
+            gOrigToastBridgeTweetSentInit)(
+                self,cmd,status,communityReference,sendCount,editEnabled,
+                account,tweetText,presentingViewController);
+    }
+
+    if (!result) return result;
+
+    XLGToastBridgeLog(
+        @"TWEET_TOAST_INIT ptr=%p message=%@ sendCount=%llu presenter=%@ liquidGlass=%@",
+        result,
+        XLGToastBridgeValueBySelector(result,@"messageText") ?: @"-",
+        sendCount,
+        presentingViewController
+            ? NSStringFromClass([presentingViewController class]) : @"nil",
+        XLGEnabled() ? @"ON" : @"OFF");
+
+    if (!XLGEnabled()) return result;
+
+    if (![objc_getAssociatedObject(
+            result,&kXLGToastBridgeScheduledKey) boolValue]) {
+        objc_setAssociatedObject(
+            result,&kXLGToastBridgeScheduledKey,@YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        __weak id weakToast=result;
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(0.08*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                id toast=weakToast;
+                if (!toast || !XLGEnabled()) return;
+
+                if ([objc_getAssociatedObject(
+                        toast,&kXLGToastBridgePushedKey) boolValue]) {
+                    XLGToastBridgeLog(
+                        @"DIRECT_SKIP already-pushed ptr=%p",
+                        toast);
+                    return;
+                }
+
+                id toaster=XLGToastBridgeFindToaster();
+                if (!toaster) {
+                    XLGToastBridgeLog(
+                        @"DIRECT_FAIL no-toaster toast=%p",
+                        toast);
+                    return;
+                }
+
+                if (!XLGToastBridgeEnsureHost(toaster)) {
+                    XLGToastBridgeLog(
+                        @"DIRECT_FAIL no-host toaster=%p toast=%p",
+                        toaster,toast);
+                    return;
+                }
+
+                XLGToastBridgeLog(
+                    @"DIRECT_PUSH toast=%p message=%@ toaster=%p",
+                    toast,
+                    XLGToastBridgeValueBySelector(
+                        toast,@"messageText") ?: @"-",
+                    toaster);
+
+                SEL pushSEL=NSSelectorFromString(@"pushToast:");
+                if ([toaster respondsToSelector:pushSEL]) {
+                    ((void(*)(id,SEL,id))objc_msgSend)(
+                        toaster,pushSEL,toast);
+                }
+            });
+    }
+
+    return result;
+}
+
+static void XLGInstallToastBridge(void) {
+    if (gXLGToastBridgeInstalled) return;
+
+    Class toasterClass=NSClassFromString(@"TFNToaster");
+    Class toastClass=NSClassFromString(@"T1TweetSentToast");
+    if (!toasterClass || !toastClass) return;
+
+    BOOL any=NO;
+
+    any |= XLGHookMethod(
+        toasterClass,@selector(init),NO,
+        (IMP)XLGToastBridgeToasterInit,
+        &gOrigToastBridgeToasterInit);
+
+    any |= XLGHookMethod(
+        toasterClass,
+        NSSelectorFromString(@"registerToastViewController:"),
+        NO,
+        (IMP)XLGToastBridgeRegisterVC,
+        &gOrigToastBridgeRegisterVC);
+
+    any |= XLGHookMethod(
+        toasterClass,
+        NSSelectorFromString(@"pushToast:"),
+        NO,
+        (IMP)XLGToastBridgePushToast,
+        &gOrigToastBridgePushToast);
+
+    any |= XLGHookMethod(
+        toasterClass,
+        NSSelectorFromString(@"pushToast:withPriority:"),
+        NO,
+        (IMP)XLGToastBridgePushToastPriority,
+        &gOrigToastBridgePushToastPriority);
+
+    SEL initSEL=NSSelectorFromString(
+        @"initWithStatus:communityReference:sendCount:isStatusEditCreationEnabled:account:tweetText:presentingViewController:");
+    Method initMethod=class_getInstanceMethod(toastClass,initSEL);
+    if (initMethod &&
+        method_getNumberOfArguments(initMethod)==9) {
+        any |= XLGHookMethod(
+            toastClass,initSEL,NO,
+            (IMP)XLGToastBridgeTweetSentInit,
+            &gOrigToastBridgeTweetSentInit);
+    }
+
+    gXLGToastBridgeInstalled=any;
+
+    if (any) {
+        NSString *path=XLGToastBridgeLogPath();
+        if (path.length) {
+            [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+        }
+        XLGToastBridgeLog(
+            @"========== XLiquidGlass 1.9.2 Beta 2 Toast Bridge ==========");
+        XLGToastBridgeLog(
+            @"liquidGlass=%@ appNavigation=%@",
+            XLGEnabled() ? @"ON" : @"OFF",
+            XLGSidebarAppNavigation()
+                ? NSStringFromClass([XLGSidebarAppNavigation() class])
+                : @"nil");
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(0.35*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                if (!XLGEnabled()) return;
+                id toaster=XLGToastBridgeFindToaster();
+                XLGToastBridgeLog(
+                    @"STARTUP_FIND toaster=%@ ptr=%p",
+                    toaster ? NSStringFromClass([toaster class]) : @"nil",
+                    toaster);
+                if (toaster) XLGToastBridgeEnsureHost(toaster);
+            });
+    }
 }
 
 #pragma mark - XLiquidGlass Beta 3 native Guide router + navigation probe
@@ -5900,6 +6486,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
     XLGInstallGuideRouterHook();
+    XLGInstallToastBridge();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -5915,7 +6502,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.1 stable loaded: direct remote notification badge promotion + native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.2 Beta 2 loaded: native tweet-sent toast bridge + 1.9.1 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
