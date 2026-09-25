@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2 Beta 4
+#pragma mark - XLiquidGlass 1.9.2 Beta 5
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -666,7 +666,7 @@ static NSString *XLGToastBridgeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass192Beta4NativeSentToast.log"];
+        @"XLiquidGlass192Beta5NativeSentToast.log"];
 }
 
 static NSString *XLGToastBridgeTimestamp(void) {
@@ -1158,19 +1158,34 @@ static void XLGToastBridgeHandleCompositionDidSend(
         @YES,
         OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // Give X one run-loop turn to present a native toast itself if a future
-    // XNavigation build restores that path. The current 12.28.1 Liquid Glass
-    // path does not create T1TweetSentToast at all.
-    __weak id weakComposition=composition;
-    __weak id weakStatus=status;
+    XLGToastBridgeLog(
+        @"COMPOSITION_EVENT object=%@ ptr=%p status=%@ ptr=%p",
+        NSStringFromClass([composition class]),
+        composition,
+        NSStringFromClass([status class]),
+        status);
+
+    // Keep both payload objects alive until the deferred presentation. The
+    // did-send notification owns them only for the duration of delivery.
+    // Beta 4 used weak references here, which allowed them to disappear
+    // before the 60 ms presentation window elapsed.
+    id capturedComposition=composition;
+    id capturedStatus=status;
 
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW,
                       (int64_t)(0.06*NSEC_PER_SEC)),
         dispatch_get_main_queue(), ^{
-            id strongComposition=weakComposition;
-            id strongStatus=weakStatus;
-            if (!strongComposition || !strongStatus || !XLGEnabled()) return;
+            id strongComposition=capturedComposition;
+            id strongStatus=capturedStatus;
+            if (!strongComposition || !strongStatus || !XLGEnabled()) {
+                XLGToastBridgeLog(
+                    @"COMPOSITION_ABORT composition=%p status=%p liquidGlass=%@",
+                    strongComposition,
+                    strongStatus,
+                    XLGEnabled() ? @"ON" : @"OFF");
+                return;
+            }
 
             if ([objc_getAssociatedObject(
                     strongStatus,
@@ -1184,6 +1199,13 @@ static void XLGToastBridgeHandleCompositionDidSend(
             id account=XLGSidebarCurrentAccount();
             UIViewController *presenter=
                 XLGSidebarContentPresentingViewController();
+
+            UINavigationController *presenterNavigation=
+                XLGNavigationControllerForPresenter(presenter);
+            if (presenterNavigation.topViewController) {
+                presenter=presenterNavigation.topViewController;
+            }
+
             id toaster=XLGToastBridgeFindToaster();
 
             if (!account || !presenter || !toaster) {
@@ -1356,19 +1378,20 @@ static void XLGInstallToastBridge(void) {
     gXLGToastBridgeInstalled=any;
 
     if (any) {
-        XLGInstallCompositionSentToastBridge();
         NSString *path=XLGToastBridgeLogPath();
         if (path.length) {
             [NSFileManager.defaultManager removeItemAtPath:path error:nil];
         }
         XLGToastBridgeLog(
-            @"========== XLiquidGlass 1.9.2 Beta 4 Native Sent Toast ==========");
+            @"========== XLiquidGlass 1.9.2 Beta 5 Native Sent Toast ==========");
         XLGToastBridgeLog(
             @"liquidGlass=%@ appNavigation=%@",
             XLGEnabled() ? @"ON" : @"OFF",
             XLGSidebarAppNavigation()
                 ? NSStringFromClass([XLGSidebarAppNavigation() class])
                 : @"nil");
+
+        XLGInstallCompositionSentToastBridge();
 
         dispatch_after(
             dispatch_time(DISPATCH_TIME_NOW,
@@ -6681,6 +6704,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
     XLGInstallGuideRouterHook();
+    XLGInstallCompositionSentToastBridge();
     XLGInstallToastBridge();
 }
 
@@ -6697,7 +6721,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 Beta 4 loaded: native composition-sent T1TweetSentToast bridge + 1.9.1 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.2 Beta 5 loaded: retained composition payload + native timeline presenter + sent-toast bridge + 1.9.1 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
