@@ -2538,7 +2538,7 @@ static void XLGTabAppear(id self,SEL cmd,BOOL animated) {
     if ([self isKindOfClass:UIViewController.class]) XLGInstallEdgeGesture(self);
 }
 
-static void XLGInstallSidebarFix(void) {
+static __attribute__((unused)) void XLGInstallSidebarFix(void) {
     Class tabClass=NSClassFromString(@"_TtC11XNavigation16TabBarController");
     if (!tabClass) return;
 
