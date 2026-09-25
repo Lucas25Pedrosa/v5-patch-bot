@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.8.0 Beta 2
+#pragma mark - XLiquidGlass 1.8.0 Beta 3
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -55,8 +55,6 @@ static BOOL gXLGNavigationProbeActive = NO;
 static BOOL gXLGNavigationProbeHooksInstalled = NO;
 static NSMutableDictionary<NSString *, NSValue *> *gXLGContainerProbeOriginals = nil;
 static BOOL gXLGContainerProbeHooksInstalled = NO;
-static char kXLGContainerHostKey;
-static char kXLGContainerHostRootKey;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -166,64 +164,6 @@ static void XLGSyncCompatibilityGate(void) {
         ((void (*)(id, SEL, BOOL))objc_msgSend)(installer, gateSEL, YES);
     }
 }
-
-@interface XLiquidGlassLegacyNavigationHostViewController : UIViewController
-@property(nonatomic,strong) UINavigationController *embeddedNavigationController;
-- (instancetype)initWithNavigationController:(UINavigationController *)navigationController;
-@end
-
-@implementation XLiquidGlassLegacyNavigationHostViewController
-
-- (instancetype)initWithNavigationController:(UINavigationController *)navigationController {
-    self=[super initWithNibName:nil bundle:nil];
-    if (self) {
-        _embeddedNavigationController=navigationController;
-    }
-    return self;
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor=UIColor.systemBackgroundColor;
-
-    UINavigationController *navigation=self.embeddedNavigationController;
-    if (!navigation) return;
-
-    if (navigation.parentViewController!=self) {
-        [self addChildViewController:navigation];
-        navigation.view.frame=self.view.bounds;
-        navigation.view.autoresizingMask=
-            UIViewAutoresizingFlexibleWidth |
-            UIViewAutoresizingFlexibleHeight;
-        [self.view addSubview:navigation.view];
-        [navigation didMoveToParentViewController:self];
-    }
-}
-
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
-    self.embeddedNavigationController.view.frame=self.view.bounds;
-}
-
-- (UIViewController *)childViewControllerForStatusBarStyle {
-    return self.embeddedNavigationController;
-}
-
-- (UIViewController *)childViewControllerForStatusBarHidden {
-    return self.embeddedNavigationController;
-}
-
-- (UIViewController *)childViewControllerForHomeIndicatorAutoHidden {
-    return self.embeddedNavigationController;
-}
-
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return self.embeddedNavigationController
-        ? self.embeddedNavigationController.supportedInterfaceOrientations
-        : [super supportedInterfaceOrientations];
-}
-
-@end
 
 @interface XLiquidGlassNavigationProbeViewController : UITableViewController
 @end
@@ -643,6 +583,8 @@ static id XLGSidebarCurrentAccount(void) {
 
 static void XLGRouteContentViewController(UIViewController *viewController);
 static void XLGRouteModalViewController(UIViewController *viewController);
+static BOOL XLGHierarchyContainsViewController(UIViewController *root,
+                                               UIViewController *target);
 
 static UIViewController *XLGSidebarContentPresentingViewController(void) {
     id appNavigation=XLGSidebarAppNavigation();
@@ -667,7 +609,7 @@ static UINavigationController *XLGNavigationControllerForPresenter(
     return presenter.navigationController;
 }
 
-#pragma mark - XLiquidGlass Beta 19 passive navigation probe
+#pragma mark - XLiquidGlass Beta 3 native Guide router + navigation probe
 
 static NSString *XLGNavigationProbeLogPath(void) {
     NSString *documents=
@@ -676,7 +618,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass180Beta2LegacyHost.log"];
+            @"XLiquidGlass180Beta3NativeGuideRouter.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1014,14 +956,24 @@ static id XLGNavProbeTrendingFactoryCreate(
     id account,
     long long trendID,
     id mode) {
+    UIViewController *beforePresenter=
+        XLGSidebarContentPresentingViewController();
+    UINavigationController *beforeNavigation=
+        XLGNavigationControllerForPresenter(beforePresenter);
+    UIViewController *beforeTop=beforeNavigation.topViewController;
+    UIViewController *beforePresented=
+        beforePresenter.presentedViewController;
+
     if (gXLGNavigationProbeActive) {
         XLGNavigationProbeLog(
-            @"TREND_FACTORY before accountClass=%@ userID=%@ trendID=%lld modeClass=%@ mode=%@",
+            @"GUIDE_FACTORY before accountClass=%@ userID=%@ trendID=%lld modeClass=%@ mode=%@ nav=%@ top=%@",
             account ? NSStringFromClass([account class]) : @"nil",
             XLGTryResolveUserID(account,0) ?: @"-",
             trendID,
             mode ? NSStringFromClass([mode class]) : @"nil",
-            mode ?: @"-");
+            mode ?: @"-",
+            beforeNavigation ? NSStringFromClass(beforeNavigation.class) : @"nil",
+            beforeTop ? NSStringFromClass(beforeTop.class) : @"nil");
     }
 
     id result=nil;
@@ -1033,10 +985,102 @@ static id XLGNavProbeTrendingFactoryCreate(
 
     if (gXLGNavigationProbeActive) {
         XLGNavigationProbeLog(
-            @"TREND_FACTORY after resultClass=%@ ptr=%p",
+            @"GUIDE_FACTORY after resultClass=%@ ptr=%p",
             result ? NSStringFromClass([result class]) : @"nil",
             result);
     }
+
+    // Beta 3: keep XNavigation as the outer architecture. The factory already
+    // gives us X's native destination. Give X a short window to route it itself;
+    // only if the Liquid Glass hierarchy stays unchanged do we push that exact
+    // native destination onto the current navigation stack.
+    if (XLGEnabled() &&
+        [result isKindOfClass:UIViewController.class]) {
+        UIViewController *destination=(UIViewController *)result;
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(0.18*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                if (!XLGEnabled()) return;
+
+                UIWindow *window=XLGSidebarActiveWindow();
+                UIViewController *root=window.rootViewController;
+                if (root &&
+                    XLGHierarchyContainsViewController(root,destination)) {
+                    if (gXLGNavigationProbeActive) {
+                        XLGNavigationProbeLog(
+                            @"GUIDE_ROUTER native-success destination=%@ ptr=%p",
+                            NSStringFromClass(destination.class),
+                            destination);
+                    }
+                    return;
+                }
+
+                UIViewController *afterPresenter=
+                    XLGSidebarContentPresentingViewController();
+                UINavigationController *afterNavigation=
+                    XLGNavigationControllerForPresenter(afterPresenter);
+                UIViewController *afterTop=
+                    afterNavigation.topViewController;
+                UIViewController *afterPresented=
+                    afterPresenter.presentedViewController;
+
+                BOOL hierarchyChanged=
+                    (beforeTop && afterTop && beforeTop!=afterTop) ||
+                    (afterPresented &&
+                     afterPresented!=beforePresented) ||
+                    (beforePresenter && afterPresenter &&
+                     beforePresenter!=afterPresenter);
+
+                if (hierarchyChanged) {
+                    if (gXLGNavigationProbeActive) {
+                        XLGNavigationProbeLog(
+                            @"GUIDE_ROUTER native-changed destination=%@ currentTop=%@",
+                            NSStringFromClass(destination.class),
+                            afterTop ? NSStringFromClass(afterTop.class) : @"nil");
+                    }
+                    return;
+                }
+
+                UINavigationController *navigation=
+                    afterNavigation ?: beforeNavigation;
+
+                if (!navigation ||
+                    destination.navigationController ||
+                    destination.parentViewController) {
+                    if (gXLGNavigationProbeActive) {
+                        XLGNavigationProbeLog(
+                            @"GUIDE_ROUTER fallback-skipped nav=%@ parent=%@ destinationNav=%@",
+                            navigation ? NSStringFromClass(navigation.class) : @"nil",
+                            destination.parentViewController
+                                ? NSStringFromClass(destination.parentViewController.class)
+                                : @"nil",
+                            destination.navigationController
+                                ? NSStringFromClass(destination.navigationController.class)
+                                : @"nil");
+                    }
+                    return;
+                }
+
+                if ([navigation.viewControllers containsObject:destination]) {
+                    return;
+                }
+
+                if (gXLGNavigationProbeActive) {
+                    XLGNavigationProbeLog(
+                        @"GUIDE_ROUTER fallback-push nav=%@ ptr=%p destination=%@ ptr=%p stackBefore=%@",
+                        NSStringFromClass(navigation.class),
+                        navigation,
+                        NSStringFromClass(destination.class),
+                        destination,
+                        XLGNavigationProbeStackDescription(navigation));
+                }
+
+                [navigation pushViewController:destination animated:YES];
+            });
+    }
+
     return result;
 }
 
@@ -1233,117 +1277,6 @@ static NSString *XLGContainerProbeControllerSummary(id object) {
         stack];
 }
 
-static BOOL XLGContainerNeedsLegacyHost(id entry) {
-    if (!entry || !XLGEnabled()) return NO;
-    NSString *name=NSStringFromClass([entry class]);
-    return [name containsString:@"GuideAppNavigationTabEntry"] ||
-           [name containsString:@"NotificationsAppNavigationTabEntry"];
-}
-
-static BOOL XLGContainerNavigationClassMatchesEntry(
-    id entry,
-    UINavigationController *navigation) {
-
-    if (!entry || !navigation) return NO;
-
-    NSString *entryName=NSStringFromClass([entry class]);
-    NSString *navName=NSStringFromClass([navigation class]);
-
-    if ([entryName containsString:@"GuideAppNavigationTabEntry"]) {
-        return [navName isEqualToString:@"T1GuideNavigationController"];
-    }
-
-    if ([entryName containsString:@"NotificationsAppNavigationTabEntry"]) {
-        return [navName containsString:@"NotificationsNavigationController"];
-    }
-
-    return NO;
-}
-
-static id XLGContainerCompatibilityHost(
-    id entry,
-    UIViewController *rawRoot) {
-
-    if (!XLGContainerNeedsLegacyHost(entry) || !rawRoot) {
-        return rawRoot;
-    }
-
-    XLiquidGlassLegacyNavigationHostViewController *cached=
-        objc_getAssociatedObject(entry,&kXLGContainerHostKey);
-    UIViewController *cachedRoot=
-        objc_getAssociatedObject(entry,&kXLGContainerHostRootKey);
-
-    if (cached && cachedRoot==rawRoot) {
-        return cached;
-    }
-
-    SEL createSEL=NSSelectorFromString(@"createContentController");
-    IMP createIMP=XLGContainerProbeOriginalIMP(entry,createSEL);
-    if (!createIMP) {
-        if (gXLGNavigationProbeActive) {
-            XLGNavigationProbeLog(
-                @"CONTAINER_FIX owner=%@ failed=no-createContentController-IMP",
-                NSStringFromClass([entry class]));
-        }
-        return rawRoot;
-    }
-
-    id created=((id(*)(id,SEL))createIMP)(entry,createSEL);
-    if (![created isKindOfClass:UINavigationController.class]) {
-        if (gXLGNavigationProbeActive) {
-            XLGNavigationProbeLog(
-                @"CONTAINER_FIX owner=%@ failed=create-result-%@",
-                NSStringFromClass([entry class]),
-                created ? NSStringFromClass([created class]) : @"nil");
-        }
-        return rawRoot;
-    }
-
-    UINavigationController *legacyNavigation=
-        (UINavigationController *)created;
-
-    if (!XLGContainerNavigationClassMatchesEntry(
-            entry,legacyNavigation)) {
-        if (gXLGNavigationProbeActive) {
-            XLGNavigationProbeLog(
-                @"CONTAINER_FIX owner=%@ failed=unexpected-nav-%@",
-                NSStringFromClass([entry class]),
-                NSStringFromClass(legacyNavigation.class));
-        }
-        return rawRoot;
-    }
-
-    [legacyNavigation setViewControllers:@[rawRoot] animated:NO];
-
-    XLiquidGlassLegacyNavigationHostViewController *host=
-        [[XLiquidGlassLegacyNavigationHostViewController alloc]
-            initWithNavigationController:legacyNavigation];
-
-    host.title=rawRoot.title;
-
-    objc_setAssociatedObject(
-        entry,
-        &kXLGContainerHostKey,
-        host,
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(
-        entry,
-        &kXLGContainerHostRootKey,
-        rawRoot,
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    if (gXLGNavigationProbeActive) {
-        XLGNavigationProbeLog(
-            @"CONTAINER_FIX owner=%@ root=%@ legacyNav=%@ host=%@",
-            NSStringFromClass([entry class]),
-            NSStringFromClass(rawRoot.class),
-            NSStringFromClass(legacyNavigation.class),
-            NSStringFromClass(host.class));
-    }
-
-    return host;
-}
-
 static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
     IMP original=XLGContainerProbeOriginalIMP(self,cmd);
     id result=nil;
@@ -1351,24 +1284,17 @@ static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
         result=((id(*)(id,SEL))original)(self,cmd);
     }
 
-    id finalResult=result;
-
-    if (sel_isEqual(cmd,NSSelectorFromString(@"rootTabViewController")) &&
-        [result isKindOfClass:UIViewController.class]) {
-        finalResult=XLGContainerCompatibilityHost(
-            self,(UIViewController *)result);
-    }
-
+    // Beta 3 is passive here: do not replace rootTabViewController and do not
+    // rebuild the legacy Guide/Notifications navigation containers.
     if (gXLGNavigationProbeActive) {
         XLGNavigationProbeLog(
-            @"CONTAINER %@ owner=%@ ptr=%p raw={%@} final={%@}",
+            @"CONTAINER %@ owner=%@ ptr=%p result={%@}",
             NSStringFromSelector(cmd),
             NSStringFromClass([self class]),
             self,
-            XLGContainerProbeControllerSummary(result),
-            XLGContainerProbeControllerSummary(finalResult));
+            XLGContainerProbeControllerSummary(result));
     }
-    return finalResult;
+    return result;
 }
 
 static void XLGContainerProbeVoidNoArg(id self, SEL cmd) {
@@ -1644,7 +1570,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Beta 2 aplica o Legacy Container Host em Notificações e Explorar quando Liquid Glass está ativo. Inicie a captura e teste: notificação 'seguiu você', Notícias/Trending em Explorar e X Premium. O relatório mostra CONTAINER_FIX e os PUSH resultantes.";
+    return @"Beta 3 mantém XNavigation nativo e repara Trending/News somente quando o destino nativo é criado mas não entra na hierarquia. Inicie a captura, toque em Trending/Notícias no Explorar e copie o relatório. Procure por GUIDE_FACTORY e GUIDE_ROUTER.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1704,7 +1630,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.8.0 Beta 2 Navigation Container Probe ==========");
+            @"========== XLiquidGlass 1.8.0 Beta 3 Native Guide Router Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1716,7 +1642,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.8.0 Beta 2 Navigation Container Probe ==========");
+                @"========== XLiquidGlass 1.8.0 Beta 3 Native Guide Router Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -4919,7 +4845,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.8.0 Beta 2 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.8.0 Beta 3 loaded: native Guide router + native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
