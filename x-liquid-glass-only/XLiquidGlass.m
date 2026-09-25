@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.7.2 Beta 21
+#pragma mark - XLiquidGlass 1.8.0 Beta 1
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -53,6 +53,8 @@ static IMP gOrigNavProbeTrendingFactoryCreate = NULL;
 static NSMutableDictionary<NSString *, NSValue *> *gXLGNavProbeViewAppearOriginals = nil;
 static BOOL gXLGNavigationProbeActive = NO;
 static BOOL gXLGNavigationProbeHooksInstalled = NO;
+static NSMutableDictionary<NSString *, NSValue *> *gXLGContainerProbeOriginals = nil;
+static BOOL gXLGContainerProbeHooksInstalled = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -614,7 +616,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlassBeta21ProfileGuideProbe.log"];
+            @"XLiquidGlass180Beta1ContainerProbe.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1119,6 +1121,221 @@ static BOOL XLGNavProbeSendAction(
     return NO;
 }
 
+static NSString *XLGContainerProbeKey(Class cls, SEL sel) {
+    return [NSString stringWithFormat:@"%@::%@",
+            NSStringFromClass(cls) ?: @"?",
+            NSStringFromSelector(sel) ?: @"?"];
+}
+
+static IMP XLGContainerProbeOriginalIMP(id self, SEL sel) {
+    if (!self || !sel) return NULL;
+    Class cls=[self class];
+    while (cls) {
+        NSValue *value=
+            gXLGContainerProbeOriginals[
+                XLGContainerProbeKey(cls,sel)];
+        if (value) return [value pointerValue];
+        cls=class_getSuperclass(cls);
+    }
+    return NULL;
+}
+
+static NSString *XLGContainerProbeControllerSummary(id object) {
+    if (!object) return @"nil";
+    if (![object isKindOfClass:UIViewController.class]) {
+        return [NSString stringWithFormat:@"%@ ptr=%p",
+                NSStringFromClass([object class]),object];
+    }
+
+    UIViewController *vc=(UIViewController *)object;
+    NSMutableArray<NSString *> *children=[NSMutableArray array];
+    for (UIViewController *child in vc.childViewControllers ?: @[]) {
+        [children addObject:NSStringFromClass(child.class) ?: @"?"];
+    }
+
+    NSString *stack=@"-";
+    if ([vc isKindOfClass:UINavigationController.class]) {
+        stack=XLGNavigationProbeStackDescription(
+            (UINavigationController *)vc);
+    }
+
+    return [NSString stringWithFormat:
+        @"class=%@ ptr=%p nav=%@ parent=%@ children=[%@] stack=%@",
+        NSStringFromClass(vc.class),
+        vc,
+        vc.navigationController
+            ? NSStringFromClass(vc.navigationController.class)
+            : @"nil",
+        vc.parentViewController
+            ? NSStringFromClass(vc.parentViewController.class)
+            : @"nil",
+        [children componentsJoinedByString:@","],
+        stack];
+}
+
+static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
+    IMP original=XLGContainerProbeOriginalIMP(self,cmd);
+    id result=nil;
+    if (original) {
+        result=((id(*)(id,SEL))original)(self,cmd);
+    }
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"CONTAINER %@ owner=%@ ptr=%p result={%@}",
+            NSStringFromSelector(cmd),
+            NSStringFromClass([self class]),
+            self,
+            XLGContainerProbeControllerSummary(result));
+    }
+    return result;
+}
+
+static void XLGContainerProbeVoidNoArg(id self, SEL cmd) {
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"CONTAINER %@ BEGIN owner=%@ ptr=%p",
+            NSStringFromSelector(cmd),
+            NSStringFromClass([self class]),
+            self);
+    }
+
+    IMP original=XLGContainerProbeOriginalIMP(self,cmd);
+    if (original) {
+        ((void(*)(id,SEL))original)(self,cmd);
+    }
+
+    if (gXLGNavigationProbeActive) {
+        id root=nil;
+        SEL rootSEL=NSSelectorFromString(@"rootTabViewController");
+        if ([self respondsToSelector:rootSEL]) {
+            Method method=class_getInstanceMethod([self class],rootSEL);
+            if (method && method_getNumberOfArguments(method)==2) {
+                char ret[32]={0};
+                method_getReturnType(method,ret,sizeof(ret));
+                const char *r=ret;
+                while (*r && strchr("rnNoORV",*r)) r++;
+                if (*r=='@' || *r=='#') {
+                    root=((id(*)(id,SEL))objc_msgSend)(self,rootSEL);
+                }
+            }
+        }
+
+        XLGNavigationProbeLog(
+            @"CONTAINER %@ END owner=%@ root={%@}",
+            NSStringFromSelector(cmd),
+            NSStringFromClass([self class]),
+            XLGContainerProbeControllerSummary(root));
+    }
+}
+
+static void XLGInstallContainerProbeForClass(NSString *className) {
+    Class cls=NSClassFromString(className);
+    if (!cls) {
+        return;
+    }
+
+    if (!gXLGContainerProbeOriginals) {
+        gXLGContainerProbeOriginals=[NSMutableDictionary dictionary];
+    }
+
+    XLGNavigationProbeLog(
+        @"CONTAINER_CLASS %@ present=YES",
+        className);
+
+    for (NSString *selectorName in @[
+        @"createContentController",
+        @"rootTabViewController"
+    ]) {
+        SEL sel=NSSelectorFromString(selectorName);
+        Method method=class_getInstanceMethod(cls,sel);
+        if (!method) {
+            XLGNavigationProbeLog(
+                @"CONTAINER_METHOD %@ %@ present=NO",
+                className,selectorName);
+            continue;
+        }
+
+        const char *types=method_getTypeEncoding(method);
+        XLGNavigationProbeLog(
+            @"CONTAINER_METHOD %@ %@ types=%s args=%u",
+            className,
+            selectorName,
+            types ?: "-",
+            method_getNumberOfArguments(method));
+
+        if (method_getNumberOfArguments(method)!=2) continue;
+
+        char ret[32]={0};
+        method_getReturnType(method,ret,sizeof(ret));
+        const char *r=ret;
+        while (*r && strchr("rnNoORV",*r)) r++;
+        if (*r!='@' && *r!='#') continue;
+
+        IMP current=class_getMethodImplementation(cls,sel);
+        if (!current || current==(IMP)XLGContainerProbeObjectNoArg) {
+            continue;
+        }
+
+        gXLGContainerProbeOriginals[
+            XLGContainerProbeKey(cls,sel)]=
+            [NSValue valueWithPointer:current];
+
+        class_replaceMethod(
+            cls,
+            sel,
+            (IMP)XLGContainerProbeObjectNoArg,
+            types);
+    }
+
+    SEL setupSEL=NSSelectorFromString(@"setupForTabBarPresentation");
+    Method setupMethod=class_getInstanceMethod(cls,setupSEL);
+    if (setupMethod) {
+        const char *types=method_getTypeEncoding(setupMethod);
+        XLGNavigationProbeLog(
+            @"CONTAINER_METHOD %@ setupForTabBarPresentation types=%s args=%u",
+            className,
+            types ?: "-",
+            method_getNumberOfArguments(setupMethod));
+
+        if (method_getNumberOfArguments(setupMethod)==2) {
+            char ret[32]={0};
+            method_getReturnType(setupMethod,ret,sizeof(ret));
+            const char *r=ret;
+            while (*r && strchr("rnNoORV",*r)) r++;
+            if (*r=='v') {
+                IMP current=
+                    class_getMethodImplementation(cls,setupSEL);
+                if (current &&
+                    current!=(IMP)XLGContainerProbeVoidNoArg) {
+                    gXLGContainerProbeOriginals[
+                        XLGContainerProbeKey(cls,setupSEL)]=
+                        [NSValue valueWithPointer:current];
+                    class_replaceMethod(
+                        cls,
+                        setupSEL,
+                        (IMP)XLGContainerProbeVoidNoArg,
+                        types);
+                }
+            }
+        }
+    }
+}
+
+static void XLGInstallContainerProbeHooks(void) {
+    if (gXLGContainerProbeHooksInstalled) return;
+
+    for (NSString *className in @[
+        @"_TtC14T1TwitterSwift26GuideAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift34NotificationsAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift31PremiumHubAppNavigationTabEntry"
+    ]) {
+        XLGInstallContainerProbeForClass(className);
+    }
+
+    gXLGContainerProbeHooksInstalled=YES;
+}
+
 static void XLGInstallNavigationProbeHooks(void) {
     if (gXLGNavigationProbeHooksInstalled) return;
 
@@ -1247,7 +1464,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Inicie a captura. Teste Explorar > Notícias/Trending e a notificação 'seguiu você'. O swipe agora usa somente o gesto nativo: confirme visualmente se deixou de abrir duas vezes. Depois copie o relatório. Este probe não faz dump recursivo de objetos Swift.";
+    return @"Inicie a captura, feche e reabra as áreas de Notificações, Explorar e X Premium. Faça uma captura com Liquid Glass e outra sem. O foco desta beta é comparar createContentController, rootTabViewController e setupForTabBarPresentation dos AppNavigationTabEntry.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1307,7 +1524,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.7.2 Beta 21 Navigation Probe ==========");
+            @"========== XLiquidGlass 1.8.0 Beta 1 Navigation Container Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1319,7 +1536,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.7.2 Beta 21 Navigation Probe ==========");
+                @"========== XLiquidGlass 1.8.0 Beta 1 Navigation Container Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -4506,6 +4723,7 @@ static void XLGInstallHooks(void) {
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
     XLGInstallNavigationProbeHooks();
+    XLGInstallContainerProbeHooks();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -4521,7 +4739,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.7.2 Beta 21 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.8.0 Beta 1 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
