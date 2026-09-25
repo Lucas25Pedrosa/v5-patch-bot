@@ -392,19 +392,29 @@ static void MAPTryExtractBadgeMap(id object, NSString *source) {
 
 static NSArray<UIView *> *MAPFindViewsNamed(NSString *className) {
     NSMutableArray<UIView *> *result = [NSMutableArray array];
-    for (UIWindow *window in [UIApplication.sharedApplication.connectedScenes
-                               valueForKeyPath:@"@unionOfArrays.windows"]) {
-        if (![window isKindOfClass:UIWindow.class]) continue;
-        NSMutableArray<UIView *> *queue =
-            [NSMutableArray arrayWithObject:window];
-        for (NSUInteger i=0; i<queue.count && i<4096; i++) {
-            UIView *view = queue[i];
-            if ([NSStringFromClass(view.class) isEqualToString:className]) {
-                [result addObject:view];
+
+    // Do not use KVC collection operators on connectedScenes. The set can
+    // contain UIScene instances that do not expose a windows key, which throws
+    // NSUnknownKeyException and can crash during startup.
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (![window isKindOfClass:UIWindow.class]) continue;
+
+            NSMutableArray<UIView *> *queue =
+                [NSMutableArray arrayWithObject:window];
+
+            for (NSUInteger i=0; i<queue.count && i<4096; i++) {
+                UIView *view = queue[i];
+                if ([NSStringFromClass(view.class) isEqualToString:className]) {
+                    [result addObject:view];
+                }
+                [queue addObjectsFromArray:view.subviews ?: @[]];
             }
-            [queue addObjectsFromArray:view.subviews ?: @[]];
         }
     }
+
     return result;
 }
 
@@ -924,7 +934,7 @@ static void MAPRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassMultiAccountProbeInit(void) {
     @autoreleasepool {
-        MAPLog(@"========== XLiquidGlass Multi-Account Badge Probe 0.2.0 loaded ==========");
+        MAPLog(@"========== XLiquidGlass Multi-Account Badge Probe 0.2.1 loaded ==========");
         MAPLog(@"logPath=%@", MAPLogPath());
 
         MAPInstallAll();
