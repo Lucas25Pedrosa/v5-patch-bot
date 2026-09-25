@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2 Beta 2
+#pragma mark - XLiquidGlass 1.9.2 Beta 4
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -91,8 +91,11 @@ static IMP gOrigToastBridgeTweetSentInit = NULL;
 static BOOL gXLGToastBridgeInstalled = NO;
 static id gXLGToastBridgeToaster = nil;
 static UIWindow *gXLGToastBridgeWindow = nil;
+static id gXLGToastBridgeCompositionObserver = nil;
 static char kXLGToastBridgePushedKey;
 static char kXLGToastBridgeScheduledKey;
+static char kXLGToastBridgeStatusHasToastKey;
+static char kXLGToastBridgeCompositionHandledKey;
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -663,7 +666,7 @@ static NSString *XLGToastBridgeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass192Beta2ToastBridge.log"];
+        @"XLiquidGlass192Beta4NativeSentToast.log"];
 }
 
 static NSString *XLGToastBridgeTimestamp(void) {
@@ -1047,6 +1050,14 @@ static id XLGToastBridgeTweetSentInit(
 
     if (!result) return result;
 
+    if (status) {
+        objc_setAssociatedObject(
+            status,
+            &kXLGToastBridgeStatusHasToastKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     XLGToastBridgeLog(
         @"TWEET_TOAST_INIT ptr=%p message=%@ sendCount=%llu presenter=%@ liquidGlass=%@",
         result,
@@ -1113,6 +1124,191 @@ static id XLGToastBridgeTweetSentInit(
     return result;
 }
 
+
+static void XLGToastBridgeHandleCompositionDidSend(
+    NSNotification *notification) {
+
+    if (!XLGEnabled() || !notification) return;
+
+    id composition=notification.object;
+    id status=
+        [notification.userInfo isKindOfClass:NSDictionary.class]
+            ? notification.userInfo[@"status"] : nil;
+
+    if (!composition || !status) {
+        XLGToastBridgeLog(
+            @"COMPOSITION_SKIP missing composition/status object=%@ status=%@",
+            composition ? NSStringFromClass([composition class]) : @"nil",
+            status ? NSStringFromClass([status class]) : @"nil");
+        return;
+    }
+
+    if ([objc_getAssociatedObject(
+            composition,
+            &kXLGToastBridgeCompositionHandledKey) boolValue]) {
+        XLGToastBridgeLog(
+            @"COMPOSITION_SKIP already-handled composition=%p status=%p",
+            composition,status);
+        return;
+    }
+
+    objc_setAssociatedObject(
+        composition,
+        &kXLGToastBridgeCompositionHandledKey,
+        @YES,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Give X one run-loop turn to present a native toast itself if a future
+    // XNavigation build restores that path. The current 12.28.1 Liquid Glass
+    // path does not create T1TweetSentToast at all.
+    __weak id weakComposition=composition;
+    __weak id weakStatus=status;
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(0.06*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            id strongComposition=weakComposition;
+            id strongStatus=weakStatus;
+            if (!strongComposition || !strongStatus || !XLGEnabled()) return;
+
+            if ([objc_getAssociatedObject(
+                    strongStatus,
+                    &kXLGToastBridgeStatusHasToastKey) boolValue]) {
+                XLGToastBridgeLog(
+                    @"COMPOSITION_SKIP native-toast-exists status=%p",
+                    strongStatus);
+                return;
+            }
+
+            id account=XLGSidebarCurrentAccount();
+            UIViewController *presenter=
+                XLGSidebarContentPresentingViewController();
+            id toaster=XLGToastBridgeFindToaster();
+
+            if (!account || !presenter || !toaster) {
+                XLGToastBridgeLog(
+                    @"COMPOSITION_FAIL account=%@ presenter=%@ toaster=%@",
+                    account ? NSStringFromClass([account class]) : @"nil",
+                    presenter ? NSStringFromClass(presenter.class) : @"nil",
+                    toaster ? NSStringFromClass([toaster class]) : @"nil");
+                return;
+            }
+
+            if (!XLGToastBridgeEnsureHost(toaster)) {
+                XLGToastBridgeLog(
+                    @"COMPOSITION_FAIL host-not-ready toaster=%p",
+                    toaster);
+                return;
+            }
+
+            Class toastClass=NSClassFromString(@"T1TweetSentToast");
+            SEL initSEL=NSSelectorFromString(
+                @"initWithStatus:communityReference:sendCount:isStatusEditCreationEnabled:account:tweetText:presentingViewController:");
+
+            Method initMethod=
+                toastClass ? class_getInstanceMethod(toastClass,initSEL) : NULL;
+            if (!toastClass ||
+                !initMethod ||
+                method_getNumberOfArguments(initMethod)!=9) {
+                XLGToastBridgeLog(
+                    @"COMPOSITION_FAIL toast-constructor-missing");
+                return;
+            }
+
+            id communityReference=
+                XLGToastBridgeValueBySelector(
+                    strongComposition,@"communityReference");
+            id tweetText=
+                XLGToastBridgeValueBySelector(
+                    strongComposition,@"text");
+
+            if (![tweetText isKindOfClass:NSString.class]) {
+                tweetText=
+                    XLGToastBridgeValueBySelector(
+                        strongStatus,@"text");
+            }
+
+            id allocated=((id(*)(id,SEL))objc_msgSend)(
+                toastClass,@selector(alloc));
+
+            // A did-send notification represents one successfully sent
+            // composition. Edit eligibility only controls the optional edit
+            // action; keeping it NO preserves the sent confirmation itself.
+            id toast=
+                ((id(*)(id,SEL,id,id,unsigned long long,BOOL,id,id,id))
+                    objc_msgSend)(
+                        allocated,
+                        initSEL,
+                        strongStatus,
+                        communityReference,
+                        1,
+                        NO,
+                        account,
+                        tweetText,
+                        presenter);
+
+            if (!toast) {
+                XLGToastBridgeLog(
+                    @"COMPOSITION_FAIL toast-init-returned-nil status=%p",
+                    strongStatus);
+                return;
+            }
+
+            XLGToastBridgeLog(
+                @"COMPOSITION_TOAST_CREATED toast=%p status=%p isReply=%@ message=%@ presenter=%@",
+                toast,
+                strongStatus,
+                [[XLGToastBridgeValueBySelector(
+                    strongStatus,@"isReply") description] ?: @"-"],
+                XLGToastBridgeValueBySelector(
+                    toast,@"messageText") ?: @"-",
+                NSStringFromClass(presenter.class));
+
+            // XLGToastBridgeTweetSentInit schedules the native push. If this
+            // initializer is ever no longer hooked, use the same native
+            // toaster as a fallback.
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                              (int64_t)(0.12*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    if ([objc_getAssociatedObject(
+                            toast,
+                            &kXLGToastBridgePushedKey) boolValue]) {
+                        return;
+                    }
+
+                    SEL pushSEL=NSSelectorFromString(@"pushToast:");
+                    if ([toaster respondsToSelector:pushSEL]) {
+                        XLGToastBridgeLog(
+                            @"COMPOSITION_FALLBACK_PUSH toast=%p",
+                            toast);
+                        ((void(*)(id,SEL,id))objc_msgSend)(
+                            toaster,pushSEL,toast);
+                    }
+                });
+        });
+}
+
+static void XLGInstallCompositionSentToastBridge(void) {
+    if (gXLGToastBridgeCompositionObserver) return;
+
+    NSString *name=@"TwitterCompositionDidSendNotification";
+    gXLGToastBridgeCompositionObserver=
+        [NSNotificationCenter.defaultCenter
+            addObserverForName:name
+                        object:nil
+                         queue:NSOperationQueue.mainQueue
+                    usingBlock:^(NSNotification *notification) {
+                        XLGToastBridgeHandleCompositionDidSend(notification);
+                    }];
+
+    XLGToastBridgeLog(
+        @"COMPOSITION_BRIDGE observer=%p name=%@",
+        gXLGToastBridgeCompositionObserver,
+        name);
+}
+
 static void XLGInstallToastBridge(void) {
     if (gXLGToastBridgeInstalled) return;
 
@@ -1162,12 +1358,13 @@ static void XLGInstallToastBridge(void) {
     gXLGToastBridgeInstalled=any;
 
     if (any) {
+        XLGInstallCompositionSentToastBridge();
         NSString *path=XLGToastBridgeLogPath();
         if (path.length) {
             [NSFileManager.defaultManager removeItemAtPath:path error:nil];
         }
         XLGToastBridgeLog(
-            @"========== XLiquidGlass 1.9.2 Beta 2 Toast Bridge ==========");
+            @"========== XLiquidGlass 1.9.2 Beta 4 Native Sent Toast ==========");
         XLGToastBridgeLog(
             @"liquidGlass=%@ appNavigation=%@",
             XLGEnabled() ? @"ON" : @"OFF",
@@ -6502,7 +6699,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 Beta 2 loaded: native tweet-sent toast bridge + 1.9.1 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.2 Beta 4 loaded: native composition-sent T1TweetSentToast bridge + 1.9.1 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
