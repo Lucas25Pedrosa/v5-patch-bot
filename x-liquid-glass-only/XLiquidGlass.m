@@ -656,7 +656,7 @@ static void XLGNavigationProbeLog(NSString *format, ...) {
     }
 }
 
-static NSString *XLGNavigationProbeRead(void) {
+static __attribute__((unused)) NSString *XLGNavigationProbeRead(void) {
     NSString *path=XLGNavigationProbeLogPath();
     if (!path.length) return @"";
     NSData *data=[NSData dataWithContentsOfFile:path];
@@ -665,7 +665,7 @@ static NSString *XLGNavigationProbeRead(void) {
                                 encoding:NSUTF8StringEncoding] ?: @"";
 }
 
-static void XLGNavigationProbeClear(void) {
+static __attribute__((unused)) void XLGNavigationProbeClear(void) {
     NSString *path=XLGNavigationProbeLogPath();
     if (!path.length) return;
     [NSFileManager.defaultManager removeItemAtPath:path error:nil];
@@ -1586,7 +1586,7 @@ static void XLGInstallContainerProbeForClass(NSString *className) {
     }
 }
 
-static void XLGInstallContainerProbeHooks(void) {
+static __attribute__((unused)) void XLGInstallContainerProbeHooks(void) {
     if (gXLGContainerProbeHooksInstalled) return;
 
     for (NSString *className in @[
@@ -1600,7 +1600,7 @@ static void XLGInstallContainerProbeHooks(void) {
     gXLGContainerProbeHooksInstalled=YES;
 }
 
-static void XLGInstallNavigationProbeHooks(void) {
+static __attribute__((unused)) void XLGInstallNavigationProbeHooks(void) {
     if (gXLGNavigationProbeHooksInstalled) return;
 
     Class navClass=UINavigationController.class;
