@@ -72,6 +72,7 @@ static void XLGB9ProbeLog(NSString *format, ...) {
 static void XLGB9ProbeCaptureSnapshot(NSString *reason);
 static void XLGB9ProbeRuntimeSnapshot(void);
 static void XLGB9ProbeVisibleItems(NSString *reason);
+static NSString *XLGProbeMethodEncoding(Class cls, SEL selector);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
