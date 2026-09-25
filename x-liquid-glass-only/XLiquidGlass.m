@@ -911,13 +911,11 @@ static void XLGInstallSidebarFix(void) {
 #pragma mark - XLiquidGlass 1.6 global Tab Bar / badge bridge
 
 static NSString *const kXLGBadgePrefix = @"XLiquidGlass.Badges.";
-static NSInteger gXLGNTabCount = -1;
-static NSInteger gXLGDMCount = -1;
-static NSInteger gXLGXChatCount = -1;
-static NSInteger gXLGTotalCount = -1;
+static NSString *const kXLGBadgeAccountsKey = @"XLiquidGlass.Badges.accounts";
 static NSInteger gXLGLastRootBadgeCount = -1;
 static NSString *gXLGBadgeActiveUserID = nil;
 static NSDictionary *gXLGLastBadgeCountsByUserID = nil;
+static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeStateByUserID = nil;
 static BOOL gXLGBadgePersistenceLoaded = NO;
 static IMP gOrigXNavItemLayout = NULL;
 static id gXLGBadgeNotificationObserver = nil;
@@ -970,7 +968,12 @@ static NSString *XLGTryResolveUserID(id object, NSUInteger depth) {
 static NSString *XLGCurrentActiveUserID(void) {
     id account = XLGSidebarCurrentAccount();
     NSString *userID = XLGTryResolveUserID(account, 0);
-    if (userID.length) return userID;
+    if (userID.length) {
+        if (![gXLGBadgeActiveUserID isEqualToString:userID]) {
+            gXLGBadgeActiveUserID = [userID copy];
+        }
+        return userID;
+    }
     return gXLGBadgeActiveUserID;
 }
 
@@ -1074,53 +1077,136 @@ static NSString *XLGBadgeDefaultsKey(NSString *name) {
     return [kXLGBadgePrefix stringByAppendingString:name];
 }
 
-static void XLGPersistBadgeCounts(void) {
+static NSMutableDictionary *XLGNewEmptyBadgeState(void) {
+    return [@{
+        @"ntab": @(-1),
+        @"dm": @(-1),
+        @"xchat": @(-1),
+        @"total": @(-1),
+        @"timestamp": @(NSDate.date.timeIntervalSince1970)
+    } mutableCopy];
+}
+
+static NSInteger XLGStateInteger(NSDictionary *state,
+                                 NSString *key,
+                                 NSInteger fallback) {
+    id value = state[key];
+    return [value respondsToSelector:@selector(integerValue)]
+        ? [value integerValue]
+        : fallback;
+}
+
+static NSMutableDictionary *XLGMutableBadgeStateForUserID(NSString *userID,
+                                                           BOOL create) {
+    if (!userID.length) return nil;
+    if (!gXLGBadgeStateByUserID) {
+        gXLGBadgeStateByUserID = [NSMutableDictionary dictionary];
+    }
+
+    NSMutableDictionary *state = gXLGBadgeStateByUserID[userID];
+    if (!state && create) {
+        state = XLGNewEmptyBadgeState();
+        gXLGBadgeStateByUserID[userID] = state;
+    }
+    return state;
+}
+
+static NSDictionary *XLGBadgeStateForUserID(NSString *userID) {
+    if (!userID.length) return nil;
+    return XLGMutableBadgeStateForUserID(userID, NO);
+}
+
+static void XLGPersistBadgeStates(void) {
+    if (!gXLGBadgeStateByUserID) return;
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    [defaults setInteger:gXLGNTabCount forKey:XLGBadgeDefaultsKey(@"ntab")];
-    [defaults setInteger:gXLGDMCount forKey:XLGBadgeDefaultsKey(@"dm")];
-    [defaults setInteger:gXLGXChatCount forKey:XLGBadgeDefaultsKey(@"xchat")];
-    [defaults setInteger:gXLGTotalCount forKey:XLGBadgeDefaultsKey(@"total")];
+    [defaults setObject:gXLGBadgeStateByUserID forKey:kXLGBadgeAccountsKey];
     if (gXLGBadgeActiveUserID.length) {
         [defaults setObject:gXLGBadgeActiveUserID
-                    forKey:XLGBadgeDefaultsKey(@"userID")];
+                    forKey:XLGBadgeDefaultsKey(@"lastActiveUserID")];
     }
-    [defaults setDouble:NSDate.date.timeIntervalSince1970
-                 forKey:XLGBadgeDefaultsKey(@"timestamp")];
 }
 
 static void XLGLoadPersistedBadgeCounts(void) {
     if (gXLGBadgePersistenceLoaded) return;
     gXLGBadgePersistenceLoaded = YES;
+    gXLGBadgeStateByUserID = [NSMutableDictionary dictionary];
 
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    NSTimeInterval timestamp = [defaults doubleForKey:XLGBadgeDefaultsKey(@"timestamp")];
-    if (timestamp <= 0) return;
+    NSDictionary *stored = [defaults dictionaryForKey:kXLGBadgeAccountsKey];
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
 
-    NSTimeInterval age = NSDate.date.timeIntervalSince1970 - timestamp;
-    if (age > 24.0 * 60.0 * 60.0) return;
+    for (id key in stored) {
+        NSString *userID = XLGNormalizedUserID(key);
+        NSDictionary *state = [stored[key] isKindOfClass:NSDictionary.class]
+            ? stored[key]
+            : nil;
+        if (!userID.length || !state) continue;
 
-    gXLGNTabCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"ntab")];
-    gXLGDMCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"dm")];
-    gXLGXChatCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"xchat")];
-    gXLGTotalCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"total")];
+        NSTimeInterval timestamp =
+            [state[@"timestamp"] respondsToSelector:@selector(doubleValue)]
+                ? [state[@"timestamp"] doubleValue]
+                : 0;
+        if (timestamp > 0 && now - timestamp <= 24.0 * 60.0 * 60.0) {
+            gXLGBadgeStateByUserID[userID] = [state mutableCopy];
+        }
+    }
+
     gXLGBadgeActiveUserID =
-        [[defaults stringForKey:XLGBadgeDefaultsKey(@"userID")] copy];
+        [[defaults stringForKey:XLGBadgeDefaultsKey(@"lastActiveUserID")] copy];
+
+    // One-time migration from the Beta 1/2 single-account cache.
+    NSString *legacyUserID =
+        [defaults stringForKey:XLGBadgeDefaultsKey(@"userID")];
+    NSTimeInterval legacyTimestamp =
+        [defaults doubleForKey:XLGBadgeDefaultsKey(@"timestamp")];
+    if (legacyUserID.length &&
+        !gXLGBadgeStateByUserID[legacyUserID] &&
+        legacyTimestamp > 0 &&
+        now - legacyTimestamp <= 24.0 * 60.0 * 60.0) {
+        NSMutableDictionary *legacy = XLGNewEmptyBadgeState();
+        legacy[@"ntab"] = @([defaults integerForKey:XLGBadgeDefaultsKey(@"ntab")]);
+        legacy[@"dm"] = @([defaults integerForKey:XLGBadgeDefaultsKey(@"dm")]);
+        legacy[@"xchat"] = @([defaults integerForKey:XLGBadgeDefaultsKey(@"xchat")]);
+        legacy[@"total"] = @([defaults integerForKey:XLGBadgeDefaultsKey(@"total")]);
+        legacy[@"timestamp"] = @(legacyTimestamp);
+        gXLGBadgeStateByUserID[legacyUserID] = legacy;
+    }
 }
 
-static NSInteger XLGChatDisplayCount(void) {
-    if (gXLGXChatCount > 0) return gXLGXChatCount;
-    if (gXLGDMCount >= 0) return gXLGDMCount;
-    if (gXLGXChatCount >= 0) return gXLGXChatCount;
+static NSDictionary *XLGActiveBadgeState(void) {
+    NSString *userID = XLGCurrentActiveUserID();
+    NSDictionary *state = XLGBadgeStateForUserID(userID);
+    if (state) return state;
+
+    // Never merge two accounts. A single cached account is only a startup
+    // fallback while X has not exposed the active account yet.
+    if (!userID.length && gXLGBadgeStateByUserID.count == 1) {
+        return gXLGBadgeStateByUserID.allValues.firstObject;
+    }
+    return nil;
+}
+
+static NSInteger XLGChatDisplayCountForState(NSDictionary *state) {
+    if (!state) return -1;
+    NSInteger xchat = XLGStateInteger(state, @"xchat", -1);
+    NSInteger dm = XLGStateInteger(state, @"dm", -1);
+
+    if (xchat > 0) return xchat;
+    if (dm >= 0) return dm;
+    if (xchat >= 0) return xchat;
     return -1;
 }
 
-static NSInteger XLGNotificationDisplayCount(void) {
-    NSInteger canonical = gXLGNTabCount;
-    NSInteger chat = XLGChatDisplayCount();
+static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state) {
+    if (!state) return -1;
+
+    NSInteger canonical = XLGStateInteger(state, @"ntab", -1);
+    NSInteger total = XLGStateInteger(state, @"total", -1);
+    NSInteger chat = XLGChatDisplayCountForState(state);
     NSInteger derived = -1;
 
-    if (gXLGTotalCount >= 0 && chat >= 0 && gXLGTotalCount >= chat) {
-        derived = gXLGTotalCount - chat;
+    if (total >= 0 && chat >= 0 && total >= chat) {
+        derived = total - chat;
     }
 
     if (canonical < 0) return derived;
