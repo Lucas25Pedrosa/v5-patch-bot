@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.0 Final
+#pragma mark - XLiquidGlass 1.6.3 Final
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -30,6 +30,8 @@ static IMP gOrigInstallGateForAccount = NULL;
 static IMP gOrigDummyFeature = NULL;
 static IMP gOrigNFBSetupSections = NULL;
 static IMP gOrigNFBViewWillAppear = NULL;
+static IMP gOrigAppearanceUpdateVisibleToggles = NULL;
+static IMP gOrigAppearanceViewWillAppear = NULL;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -38,6 +40,7 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
+static BOOL gAppearanceSettingsHooked = NO;
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -230,67 +233,70 @@ static void XLGSyncCompatibilityGate(void) {
 
 @end
 
-static BOOL XLGSectionsContainAction(NSArray *sections, NSString *action) {
-    for (id entry in sections) {
+static BOOL XLGArrayContainsAction(NSArray *entries, NSString *action) {
+    for (id entry in entries) {
         if (![entry isKindOfClass:NSDictionary.class]) continue;
         if ([entry[@"action"] isEqualToString:action]) return YES;
     }
     return NO;
 }
 
-static void XLGInjectNFBSection(id controller) {
-    NSArray *sections = nil;
-
+static void XLGSetArrayForKey(id controller, NSString *key, NSArray *value) {
+    if (!controller || !key.length || !value) return;
     @try {
-        sections = [controller valueForKey:@"sections"];
-    } @catch (__unused NSException *exception) {
-        return;
-    }
-
-    if (![sections isKindOfClass:NSArray.class]) return;
-
-    NSMutableArray *updated = [sections mutableCopy];
-    BOOL changed = NO;
-
-    if (!XLGSectionsContainAction(updated, @"showXLiquidGlassSettings")) {
-        NSDictionary *entry = @{
-            @"title": @"Liquid Glass",
-            @"subtitle": @"Ativar ou desativar o redesign Liquid Glass.",
-            @"icon": @"drop",
-            @"action": @"showXLiquidGlassSettings"
-        };
-        NSUInteger insertIndex = MIN((NSUInteger)2, updated.count);
-        [updated insertObject:entry atIndex:insertIndex];
-        changed = YES;
-    }
-
-
-    if (!changed) return;
-    @try {
-        [controller setValue:[updated copy] forKey:@"sections"];
+        [controller setValue:value forKey:key];
     } @catch (__unused NSException *exception) {
     }
+}
+
+static NSArray *XLGArrayForKey(id controller, NSString *key) {
+    if (!controller || !key.length) return nil;
+    @try {
+        id value=[controller valueForKey:key];
+        return [value isKindOfClass:NSArray.class] ? value : nil;
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void XLGReloadControllerTable(id controller) {
+    UITableView *tableView=nil;
+    @try {
+        id value=[controller valueForKey:@"tableView"];
+        if ([value isKindOfClass:UITableView.class]) tableView=value;
+    } @catch (__unused NSException *exception) {
+    }
+    [tableView reloadData];
+}
+
+static void XLGRemoveLiquidGlassFromRoot(id controller) {
+    NSArray *sections=XLGArrayForKey(controller,@"sections");
+    if (!sections || !XLGArrayContainsAction(sections,@"showXLiquidGlassSettings")) return;
+
+    NSMutableArray *updated=[NSMutableArray arrayWithCapacity:sections.count];
+    for (id entry in sections) {
+        if ([entry isKindOfClass:NSDictionary.class] &&
+            [entry[@"action"] isEqualToString:@"showXLiquidGlassSettings"]) {
+            continue;
+        }
+        [updated addObject:entry];
+    }
+    XLGSetArrayForKey(controller,@"sections",[updated copy]);
 }
 
 static void XLGNFBSetupSections(id self, SEL _cmd) {
     if (gOrigNFBSetupSections) {
         ((void (*)(id, SEL))gOrigNFBSetupSections)(self, _cmd);
     }
-    XLGInjectNFBSection(self);
+    XLGRemoveLiquidGlassFromRoot(self);
 }
 
 static void XLGNFBViewWillAppear(id self, SEL _cmd, BOOL animated) {
     if (gOrigNFBViewWillAppear) {
         ((void (*)(id, SEL, BOOL))gOrigNFBViewWillAppear)(self, _cmd, animated);
     }
-    XLGInjectNFBSection(self);
-
-    UITableView *tableView = nil;
-    @try {
-        tableView = [self valueForKey:@"tableView"];
-    } @catch (__unused NSException *exception) {
-    }
-    [tableView reloadData];
+    XLGRemoveLiquidGlassFromRoot(self);
+    XLGReloadControllerTable(self);
 }
 
 static void XLGShowSettings(id self, SEL _cmd) {
@@ -315,30 +321,95 @@ static void XLGShowSettings(id self, SEL _cmd) {
     }
 }
 
+static void XLGShowSettingsFromAppearance(id self, SEL _cmd, id sender) {
+    (void)sender;
+    XLGShowSettings(self,_cmd);
+}
+
+static void XLGInjectAppearanceButton(id controller) {
+    NSArray *visible=XLGArrayForKey(controller,@"visibleToggles");
+    if (!visible) return;
+
+    if (XLGArrayContainsAction(visible,@"showXLiquidGlassSettings:")) return;
+
+    NSDictionary *entry=@{
+        @"type": @"button",
+        @"key": @"xlg_liquid_glass_button",
+        @"titleKey": @"Liquid Glass",
+        @"action": @"showXLiquidGlassSettings:"
+    };
+
+    NSMutableArray *updated=[visible mutableCopy];
+
+    // Native appearance page starts with Theme, App Icon and Custom Tab Bar.
+    // Place Liquid Glass immediately after those three native buttons.
+    NSUInteger insertIndex=MIN((NSUInteger)3,updated.count);
+    [updated insertObject:entry atIndex:insertIndex];
+
+    XLGSetArrayForKey(controller,@"visibleToggles",[updated copy]);
+}
+
+static void XLGAppearanceUpdateVisibleToggles(id self, SEL _cmd) {
+    if (gOrigAppearanceUpdateVisibleToggles) {
+        ((void (*)(id,SEL))gOrigAppearanceUpdateVisibleToggles)(self,_cmd);
+    }
+    XLGInjectAppearanceButton(self);
+}
+
+static void XLGAppearanceViewWillAppear(id self, SEL _cmd, BOOL animated) {
+    if (gOrigAppearanceViewWillAppear) {
+        ((void (*)(id,SEL,BOOL))gOrigAppearanceViewWillAppear)(self,_cmd,animated);
+    }
+    XLGInjectAppearanceButton(self);
+    XLGReloadControllerTable(self);
+}
+
 static void XLGInstallNFBSettingsIntegration(void) {
-    if (gNFBSettingsHooked) return;
+    Class rootClass=NSClassFromString(@"ModernSettingsViewController");
+    if (rootClass && !gNFBSettingsHooked) {
+        BOOL setupHooked=
+            XLGHookMethod(rootClass,
+                          NSSelectorFromString(@"setupSections"),
+                          NO,
+                          (IMP)XLGNFBSetupSections,
+                          &gOrigNFBSetupSections);
 
-    Class cls = NSClassFromString(@"ModernSettingsViewController");
-    if (!cls) return;
+        BOOL appearHooked=
+            XLGHookMethod(rootClass,
+                          @selector(viewWillAppear:),
+                          NO,
+                          (IMP)XLGNFBViewWillAppear,
+                          &gOrigNFBViewWillAppear);
 
-    SEL showSEL = NSSelectorFromString(@"showXLiquidGlassSettings");
-    class_addMethod(cls, showSEL, (IMP)XLGShowSettings, "v@:");
+        gNFBSettingsHooked=setupHooked || appearHooked;
+    }
 
-    BOOL setupHooked =
-        XLGHookMethod(cls,
-                      NSSelectorFromString(@"setupSections"),
-                      NO,
-                      (IMP)XLGNFBSetupSections,
-                      &gOrigNFBSetupSections);
+    Class appearanceClass=NSClassFromString(@"AppearanceSettingsViewController");
+    if (appearanceClass && !gAppearanceSettingsHooked) {
+        SEL showSEL=NSSelectorFromString(@"showXLiquidGlassSettings:");
+        if (![appearanceClass instancesRespondToSelector:showSEL]) {
+            class_addMethod(appearanceClass,
+                            showSEL,
+                            (IMP)XLGShowSettingsFromAppearance,
+                            "v@:@");
+        }
 
-    BOOL appearHooked =
-        XLGHookMethod(cls,
-                      @selector(viewWillAppear:),
-                      NO,
-                      (IMP)XLGNFBViewWillAppear,
-                      &gOrigNFBViewWillAppear);
+        BOOL updateHooked=
+            XLGHookMethod(appearanceClass,
+                          NSSelectorFromString(@"updateVisibleToggles"),
+                          NO,
+                          (IMP)XLGAppearanceUpdateVisibleToggles,
+                          &gOrigAppearanceUpdateVisibleToggles);
 
-    gNFBSettingsHooked = setupHooked || appearHooked;
+        BOOL appearHooked=
+            XLGHookMethod(appearanceClass,
+                          @selector(viewWillAppear:),
+                          NO,
+                          (IMP)XLGAppearanceViewWillAppear,
+                          &gOrigAppearanceViewWillAppear);
+
+        gAppearanceSettingsHooked=updateHooked || appearHooked;
+    }
 }
 
 
@@ -2928,7 +2999,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Final loaded: native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.3 Final loaded: native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
