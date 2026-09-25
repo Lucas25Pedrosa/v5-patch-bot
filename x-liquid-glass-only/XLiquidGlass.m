@@ -29,8 +29,8 @@ static BOOL XLGEnabled(void) {
 }
 
 static BOOL XLGTabLabelsEnabled(void) {
-    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
-    id stored=[defaults objectForKey:kXLGTabLabelsKey];
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    id stored = [defaults objectForKey:kXLGTabLabelsKey];
     return stored ? [stored boolValue] : NO;
 }
 
@@ -175,11 +175,11 @@ static void XLGSyncCompatibilityGate(void) {
         cell.detailTextLabel.text = @"Usa o redesign nativo presente no X.";
         toggle.on = XLGEnabled();
         [toggle addTarget:self
-                   action:@selector(xlgLiquidGlassToggleChanged:)
+                   action:@selector(xlgToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
     } else {
         cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
-        cell.detailTextLabel.text = @"Exibe os nomes das abas no modo Liquid Glass.";
+        cell.detailTextLabel.text = @"Exibe rótulos nativos quando disponíveis.";
         toggle.on = XLGTabLabelsEnabled();
         [toggle addTarget:self
                    action:@selector(xlgTabLabelsToggleChanged:)
@@ -190,7 +190,7 @@ static void XLGSyncCompatibilityGate(void) {
     return cell;
 }
 
-- (void)xlgLiquidGlassToggleChanged:(UISwitch *)sender {
+- (void)xlgToggleChanged:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGEnabledKey];
     XLGSyncCompatibilityGate();
 
@@ -207,15 +207,8 @@ static void XLGSyncCompatibilityGate(void) {
 
 - (void)xlgTabLabelsToggleChanged:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
-
-    UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"Liquid Glass"
-                                            message:@"A alteração dos rótulos será aplicada ao voltar para a timeline."
-                                     preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                             style:UIAlertActionStyleDefault
-                                           handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
+                                                        object:nil];
 }
 
 @end
@@ -915,633 +908,605 @@ static void XLGInstallSidebarFix(void) {
 }
 
 
-#pragma mark - Liquid Glass Tab Bar badge fixes
+#pragma mark - XLiquidGlass 1.6 global Tab Bar / badge bridge
 
-static IMP gOrigLGBadgeViewDidLoad = NULL;
-static IMP gOrigLGBadgeViewDidAppear = NULL;
-static IMP gOrigLGBadgeSetTabViews = NULL;
-static IMP gOrigLGBadgeSyncTabBarItems = NULL;
-static IMP gOrigLGBadgeSyncBadges = NULL;
-static IMP gOrigLGBadgeTraitCollectionDidChange = NULL;
-static IMP gOrigLGBadgeViewDidLayoutSubviews = NULL;
+static NSString *const kXLGBadgePrefix = @"XLiquidGlass.Badges.";
+static NSInteger gXLGNTabCount = -1;
+static NSInteger gXLGDMCount = -1;
+static NSInteger gXLGXChatCount = -1;
+static NSInteger gXLGTotalCount = -1;
+static NSInteger gXLGLastRootBadgeCount = -1;
+static NSString *gXLGBadgeActiveUserID = nil;
+static NSDictionary *gXLGLastBadgeCountsByUserID = nil;
+static BOOL gXLGBadgePersistenceLoaded = NO;
+static IMP gOrigXNavItemLayout = NULL;
+static id gXLGBadgeNotificationObserver = nil;
+static id gXLGDefaultsObserver = nil;
+static char kXLGBadgeLabelKey;
 
-static char kXLGCompactBadgeAppearanceAppliedKey;
-
-static void XLGApplyLiquidGlassTabBarVisualFixes(id controller);
-
-static void XLGInvalidateLiquidGlassCompactBadge(id controller) {
-    if (!controller) return;
-    objc_setAssociatedObject(
-        controller,
-        &kXLGCompactBadgeAppearanceAppliedKey,
-        nil,
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC
-    );
-}
-
-static void XLGNormalizeLiquidGlassUnreadBadgeValues(id controller) {
-    if (!controller || !XLGEnabled()) return;
-
-    SEL viewControllersSEL=NSSelectorFromString(@"viewControllers");
-    if (![controller respondsToSelector:viewControllersSEL]) return;
-
-    id value=((id(*)(id,SEL))objc_msgSend)(controller,viewControllersSEL);
-    if (![value isKindOfClass:NSArray.class]) return;
-
-    NSCharacterSet *whitespace=[NSCharacterSet whitespaceAndNewlineCharacterSet];
-
-    for (id viewController in (NSArray *)value) {
-        if (![viewController isKindOfClass:UIViewController.class]) continue;
-
-        UITabBarItem *item=((UIViewController *)viewController).tabBarItem;
-        if (!item) continue;
-
-        NSString *badge=item.badgeValue;
-        if (![badge isKindOfClass:NSString.class]) continue;
-
-        NSString *trimmed=[badge stringByTrimmingCharactersInSet:whitespace];
-        if (trimmed.length==0) {
-            item.badgeValue=nil;
-        }
+static id XLGSafeValueForKey(id object, NSString *key) {
+    if (!object || !key.length) return nil;
+    @try {
+        return [object valueForKey:key];
+    } @catch (__unused NSException *exception) {
+        return nil;
     }
 }
 
-static void XLGApplyCompactBadgeToStateAppearance(UITabBarItemStateAppearance *state) {
-    if (!state) return;
+static NSString *XLGNormalizedUserID(id value) {
+    if (!value || value == NSNull.null) return nil;
+    if ([value isKindOfClass:NSString.class]) {
+        return [(NSString *)value length] ? value : nil;
+    }
+    if ([value respondsToSelector:@selector(stringValue)]) {
+        NSString *string = [value stringValue];
+        return string.length ? string : nil;
+    }
+    NSString *string = [value description];
+    return string.length ? string : nil;
+}
 
-    NSMutableDictionary<NSAttributedStringKey,id> *attributes=
-        [state.badgeTextAttributes mutableCopy] ?: [NSMutableDictionary dictionary];
+static NSString *XLGTryResolveUserID(id object, NSUInteger depth) {
+    if (!object || depth > 2) return nil;
 
-    attributes[NSFontAttributeName]=
-        [UIFont systemFontOfSize:9.0 weight:UIFontWeightBold];
-
-    if (!attributes[NSForegroundColorAttributeName]) {
-        attributes[NSForegroundColorAttributeName]=UIColor.whiteColor;
+    for (NSString *key in @[@"userID", @"userId", @"restID", @"restId",
+                             @"accountID", @"accountId", @"activeUserID",
+                             @"activeAccountID", @"currentUserID",
+                             @"currentAccountID"]) {
+        NSString *resolved = XLGNormalizedUserID(XLGSafeValueForKey(object, key));
+        if (resolved.length) return resolved;
     }
 
-    state.badgeTextAttributes=[attributes copy];
-}
-
-static void XLGApplyCompactBadgeToItemAppearance(UITabBarItemAppearance *itemAppearance) {
-    if (!itemAppearance) return;
-
-    XLGApplyCompactBadgeToStateAppearance(itemAppearance.normal);
-    XLGApplyCompactBadgeToStateAppearance(itemAppearance.selected);
-    XLGApplyCompactBadgeToStateAppearance(itemAppearance.disabled);
-    XLGApplyCompactBadgeToStateAppearance(itemAppearance.focused);
-}
-
-static void XLGApplyCompactBadgeToAppearance(UITabBarAppearance *appearance) {
-    if (!appearance) return;
-
-    XLGApplyCompactBadgeToItemAppearance(appearance.stackedLayoutAppearance);
-    XLGApplyCompactBadgeToItemAppearance(appearance.inlineLayoutAppearance);
-    XLGApplyCompactBadgeToItemAppearance(appearance.compactInlineLayoutAppearance);
-}
-
-static void XLGNormalizeLiquidGlassBadges(id controller) {
-    if (!controller || !XLGEnabled()) return;
-
-    Class liquidClass=NSClassFromString(@"T1LiquidGlassTabBarController");
-    if (liquidClass && ![controller isKindOfClass:liquidClass]) return;
-
-    if (![controller isKindOfClass:UIViewController.class]) return;
-    UIViewController *viewController=(UIViewController *)controller;
-    if (!viewController.isViewLoaded) return;
-
-    // Moe normalizes unread values before touching appearance.
-    XLGNormalizeLiquidGlassUnreadBadgeValues(controller);
-
-    SEL tabBarSEL=NSSelectorFromString(@"tabBar");
-    if (![controller respondsToSelector:tabBarSEL]) return;
-
-    id tabBarObject=((id(*)(id,SEL))objc_msgSend)(controller,tabBarSEL);
-    if (![tabBarObject isKindOfClass:UITabBar.class]) return;
-    UITabBar *tabBar=(UITabBar *)tabBarObject;
-
-    NSNumber *alreadyApplied=
-        objc_getAssociatedObject(controller,&kXLGCompactBadgeAppearanceAppliedKey);
-    if (alreadyApplied.boolValue) return;
-
-    UITabBarAppearance *appearance=[tabBar.standardAppearance copy];
-    if (!appearance) appearance=[UITabBarAppearance new];
-
-    XLGApplyCompactBadgeToAppearance(appearance);
-
-    tabBar.standardAppearance=appearance;
-    if (@available(iOS 15.0,*)) {
-        tabBar.scrollEdgeAppearance=appearance;
+    for (NSString *key in @[@"account", @"currentAccount", @"activeAccount"]) {
+        id nested = XLGSafeValueForKey(object, key);
+        if (!nested || nested == object) continue;
+        NSString *resolved = XLGTryResolveUserID(nested, depth + 1);
+        if (resolved.length) return resolved;
     }
 
-    objc_setAssociatedObject(
-        controller,
-        &kXLGCompactBadgeAppearanceAppliedKey,
-        @YES,
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC
-    );
+    return nil;
 }
 
-static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
-    if (!controller || !XLGEnabled()) return;
-
-    __weak id weakController=controller;
-    dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.05*NSEC_PER_SEC)),
-        dispatch_get_main_queue(),^{
-            id strongController=weakController;
-            if (!strongController) return;
-            XLGInvalidateLiquidGlassCompactBadge(strongController);
-            XLGNormalizeLiquidGlassBadges(strongController);
-            XLGApplyLiquidGlassTabBarVisualFixes(strongController);
-        }
-    );
-
-    dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.25*NSEC_PER_SEC)),
-        dispatch_get_main_queue(),^{
-            id strongController=weakController;
-            if (!strongController) return;
-            XLGInvalidateLiquidGlassCompactBadge(strongController);
-            XLGNormalizeLiquidGlassBadges(strongController);
-            XLGApplyLiquidGlassTabBarVisualFixes(strongController);
-        }
-    );
+static NSString *XLGCurrentActiveUserID(void) {
+    id account = XLGSidebarCurrentAccount();
+    NSString *userID = XLGTryResolveUserID(account, 0);
+    if (userID.length) return userID;
+    return gXLGBadgeActiveUserID;
 }
 
+static BOOL XLGReadIntegerGetter(id object, NSString *selectorName, NSInteger *valueOut) {
+    if (!object || !selectorName.length || !valueOut) return NO;
 
-#pragma mark - Liquid Glass Tab Bar visual fixes
-
-static char kXLGInjectedTabLabelKey;
-
-static UIColor *XLGResolvedAccentColor(id controller, UITabBar *tabBar) {
-    UIColor *color=nil;
-
-    if ([controller isKindOfClass:UIViewController.class]) {
-        UIViewController *vc=(UIViewController *)controller;
-        if (vc.isViewLoaded) color=vc.view.tintColor;
-    }
-
-    if (!color) color=tabBar.tintColor;
-
-    UIWindow *window=tabBar.window;
-    if (!color && window) color=window.tintColor;
-
-    return color ?: UIColor.systemBlueColor;
-}
-
-static NSArray<UIView *> *XLGCollectViewsMatching(UIView *root, BOOL (^predicate)(UIView *view)) {
-    if (!root || !predicate) return @[];
-
-    NSMutableArray<UIView *> *result=[NSMutableArray array];
-    NSMutableArray<UIView *> *queue=[NSMutableArray arrayWithObject:root];
-
-    for (NSUInteger i=0;i<queue.count && i<512;i++) {
-        UIView *view=queue[i];
-        if (predicate(view)) [result addObject:view];
-        for (UIView *subview in view.subviews ?: @[]) {
-            [queue addObject:subview];
+    SEL selector = NSSelectorFromString(selectorName);
+    if ([object respondsToSelector:selector]) {
+        NSMethodSignature *signature = [object methodSignatureForSelector:selector];
+        const char *ret = signature.methodReturnType;
+        if (ret) {
+            switch (ret[0]) {
+                case '@': {
+                    id value = ((id(*)(id,SEL))objc_msgSend)(object, selector);
+                    if ([value respondsToSelector:@selector(integerValue)]) {
+                        *valueOut = [value integerValue];
+                        return YES;
+                    }
+                    break;
+                }
+                case 'q':
+                    *valueOut = (NSInteger)((long long(*)(id,SEL))objc_msgSend)(object, selector);
+                    return YES;
+                case 'Q':
+                    *valueOut = (NSInteger)((unsigned long long(*)(id,SEL))objc_msgSend)(object, selector);
+                    return YES;
+                case 'i':
+                    *valueOut = (NSInteger)((int(*)(id,SEL))objc_msgSend)(object, selector);
+                    return YES;
+                case 'I':
+                    *valueOut = (NSInteger)((unsigned int(*)(id,SEL))objc_msgSend)(object, selector);
+                    return YES;
+                default:
+                    break;
+            }
         }
     }
 
-    return result;
-}
-
-static NSArray<UIView *> *XLGSystemTabButtons(UITabBar *tabBar) {
-    NSArray<UIView *> *buttons=
-        XLGCollectViewsMatching(tabBar,^BOOL(UIView *view) {
-            NSString *name=NSStringFromClass(view.class);
-            return [name containsString:@"UITabBarButton"] ||
-                   [name containsString:@"TabBarButton"];
-        });
-
-    return [buttons sortedArrayUsingComparator:^NSComparisonResult(UIView *a,UIView *b) {
-        CGFloat ax=CGRectGetMidX([a convertRect:a.bounds toView:tabBar]);
-        CGFloat bx=CGRectGetMidX([b convertRect:b.bounds toView:tabBar]);
-        if (ax<bx) return NSOrderedAscending;
-        if (ax>bx) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
-}
-
-static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
-    if (!root) return nil;
-
-    NSArray<UIView *> *matches=
-        XLGCollectViewsMatching(root,^BOOL(UIView *view) {
-            NSString *name=NSStringFromClass(view.class);
-            return [name containsString:@"_UITabSelectionView"] ||
-                   [name containsString:@"TabSelectionView"] ||
-                   [name containsString:@"TabSelection"] ||
-                   [name containsString:@"_UITabBarPlatterView"];
-        });
-
-    return matches.firstObject;
-}
-
-static BOOL XLGViewLooksSelected(UIView *button, UITabBar *tabBar, NSUInteger index) {
-    if ([button isKindOfClass:UIControl.class]) {
-        UIControl *control=(UIControl *)button;
-        if (control.selected || control.highlighted) return YES;
+    id value = XLGSafeValueForKey(object, selectorName);
+    if ([value respondsToSelector:@selector(integerValue)]) {
+        *valueOut = [value integerValue];
+        return YES;
     }
-
-    if ((button.accessibilityTraits & UIAccessibilityTraitSelected) != 0) return YES;
-
-    if (index < tabBar.items.count && tabBar.selectedItem == tabBar.items[index]) return YES;
-
-    UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
-    if (chrome && !chrome.hidden && chrome.alpha>0.01) {
-        CGRect buttonFrame=[button convertRect:button.bounds toView:tabBar];
-        CGRect chromeFrame=[chrome convertRect:chrome.bounds toView:tabBar];
-        if (CGRectIntersectsRect(buttonFrame,chromeFrame)) return YES;
-    }
-
     return NO;
 }
 
-static BOOL XLGTitleLooksLikeProfile(NSString *title) {
-    if (![title isKindOfClass:NSString.class] || title.length==0) return NO;
-    NSString *s=title.lowercaseString;
-    return [s containsString:@"profile"] ||
-           [s containsString:@"perfil"] ||
-           [s containsString:@"account"] ||
-           [s containsString:@"conta"];
+static BOOL XLGReadCountField(id object, NSString *baseName, NSInteger *valueOut) {
+    if (XLGReadIntegerGetter(object,
+                             [baseName stringByAppendingString:@"Number"],
+                             valueOut)) {
+        return YES;
+    }
+    return XLGReadIntegerGetter(object, baseName, valueOut);
 }
 
-static void XLGStripAvatarCircleStyling(UIView *view) {
-    if (!view) return;
+static NSString *XLGBadgeDefaultsKey(NSString *name) {
+    return [kXLGBadgePrefix stringByAppendingString:name];
+}
 
-    CALayer *layer=view.layer;
-    layer.cornerRadius=0.0;
-    layer.masksToBounds=NO;
-    layer.borderWidth=0.0;
-    layer.borderColor=UIColor.clearColor.CGColor;
-    layer.shadowOpacity=0.0;
-    layer.shadowRadius=0.0;
-    layer.backgroundColor=UIColor.clearColor.CGColor;
-    view.backgroundColor=UIColor.clearColor;
+static void XLGPersistBadgeCounts(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setInteger:gXLGNTabCount forKey:XLGBadgeDefaultsKey(@"ntab")];
+    [defaults setInteger:gXLGDMCount forKey:XLGBadgeDefaultsKey(@"dm")];
+    [defaults setInteger:gXLGXChatCount forKey:XLGBadgeDefaultsKey(@"xchat")];
+    [defaults setInteger:gXLGTotalCount forKey:XLGBadgeDefaultsKey(@"total")];
+    if (gXLGBadgeActiveUserID.length) {
+        [defaults setObject:gXLGBadgeActiveUserID
+                    forKey:XLGBadgeDefaultsKey(@"userID")];
+    }
+    [defaults setDouble:NSDate.date.timeIntervalSince1970
+                 forKey:XLGBadgeDefaultsKey(@"timestamp")];
+}
 
-    // Moe also neutralizes decorative circular sublayers around the avatar.
-    for (CALayer *sublayer in layer.sublayers ?: @[]) {
-        if (sublayer.cornerRadius>0.0 ||
-            sublayer.borderWidth>0.0 ||
-            sublayer.shadowOpacity>0.0) {
-            sublayer.hidden=YES;
-            sublayer.opacity=0.0;
-            sublayer.borderWidth=0.0;
-            sublayer.cornerRadius=0.0;
-            sublayer.masksToBounds=NO;
+static void XLGLoadPersistedBadgeCounts(void) {
+    if (gXLGBadgePersistenceLoaded) return;
+    gXLGBadgePersistenceLoaded = YES;
+
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSTimeInterval timestamp = [defaults doubleForKey:XLGBadgeDefaultsKey(@"timestamp")];
+    if (timestamp <= 0) return;
+
+    NSTimeInterval age = NSDate.date.timeIntervalSince1970 - timestamp;
+    if (age > 24.0 * 60.0 * 60.0) return;
+
+    gXLGNTabCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"ntab")];
+    gXLGDMCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"dm")];
+    gXLGXChatCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"xchat")];
+    gXLGTotalCount = [defaults integerForKey:XLGBadgeDefaultsKey(@"total")];
+    gXLGBadgeActiveUserID =
+        [[defaults stringForKey:XLGBadgeDefaultsKey(@"userID")] copy];
+}
+
+static NSInteger XLGChatDisplayCount(void) {
+    if (gXLGXChatCount > 0) return gXLGXChatCount;
+    if (gXLGDMCount >= 0) return gXLGDMCount;
+    if (gXLGXChatCount >= 0) return gXLGXChatCount;
+    return -1;
+}
+
+static NSArray<UIWindow *> *XLGVisibleWindows(void) {
+    NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (window && !window.hidden) [windows addObject:window];
+        }
+    }
+    return windows;
+}
+
+static NSArray<UIView *> *XLGSubviewsMatchingClassName(UIView *root,
+                                                       NSString *className) {
+    if (!root || !className.length) return @[];
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSMutableArray<UIView *> *result = [NSMutableArray array];
+
+    for (NSUInteger i = 0; i < queue.count && i < 4096; i++) {
+        UIView *view = queue[i];
+        if ([NSStringFromClass(view.class) isEqualToString:className]) {
+            [result addObject:view];
+        }
+        [queue addObjectsFromArray:view.subviews ?: @[]];
+    }
+    return result;
+}
+
+static UIImageView *XLGImageViewForXNavItem(UIView *item) {
+    for (UIView *subview in item.subviews ?: @[]) {
+        if ([subview isKindOfClass:UIImageView.class]) {
+            return (UIImageView *)subview;
+        }
+    }
+    return nil;
+}
+
+static BOOL XLGItemIsProfile(UIView *item) {
+    NSString *text = item.accessibilityLabel.lowercaseString ?: @"";
+    return [text containsString:@"perfil"] ||
+           [text containsString:@"profile"] ||
+           [text containsString:@"conta"] ||
+           [text containsString:@"account"];
+}
+
+static UIView *XLGAncestorNamed(UIView *view, NSString *className) {
+    UIView *cursor = view.superview;
+    while (cursor) {
+        if ([NSStringFromClass(cursor.class) isEqualToString:className]) {
+            return cursor;
+        }
+        cursor = cursor.superview;
+    }
+    return nil;
+}
+
+static BOOL XLGXNavItemIsSelected(UIView *item) {
+    if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) return YES;
+
+    UIView *bar = XLGAncestorNamed(item, @"XNavigation.TabBarView");
+    if (!bar) return NO;
+
+    id itemViews = XLGSafeValueForKey(bar, @"itemViews");
+    id selectedIndexValue = XLGSafeValueForKey(bar, @"selectedIndex");
+    if (![itemViews isKindOfClass:NSArray.class] ||
+        ![selectedIndexValue respondsToSelector:@selector(integerValue)]) {
+        return NO;
+    }
+
+    NSUInteger index = [(NSArray *)itemViews indexOfObjectIdenticalTo:item];
+    if (index == NSNotFound) return NO;
+    return (NSInteger)index == [selectedIndexValue integerValue];
+}
+
+static UIColor *XLGNativeInactiveTabColor(void) {
+    Class tabViewClass = NSClassFromString(@"T1TabView");
+    SEL itemColorSEL = NSSelectorFromString(@"itemColor");
+    if (tabViewClass && [tabViewClass respondsToSelector:itemColorSEL]) {
+        id color = ((id(*)(id,SEL))objc_msgSend)(tabViewClass, itemColorSEL);
+        if ([color isKindOfClass:UIColor.class]) return color;
+    }
+    return UIColor.secondaryLabelColor;
+}
+
+static UIColor *XLGResolvedAccentColor(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSInteger option = 0;
+
+    id nfb = [defaults objectForKey:@"bh_color_theme_selectedColor"];
+    if ([nfb respondsToSelector:@selector(integerValue)]) {
+        option = [nfb integerValue];
+    } else {
+        id native = [defaults objectForKey:@"T1ColorSettingsPrimaryColorOptionKey"];
+        if ([native respondsToSelector:@selector(integerValue)]) {
+            option = [native integerValue];
+        }
+    }
+
+    if (option < 1) option = 1;
+
+    Class settingsClass = NSClassFromString(@"TAEColorSettings");
+    SEL sharedSEL = NSSelectorFromString(@"sharedSettings");
+    if (settingsClass && [settingsClass respondsToSelector:sharedSEL]) {
+        id settings = ((id(*)(id,SEL))objc_msgSend)(settingsClass, sharedSEL);
+        SEL infoSEL = NSSelectorFromString(@"currentColorPalette");
+        id info = (settings && [settings respondsToSelector:infoSEL])
+            ? ((id(*)(id,SEL))objc_msgSend)(settings, infoSEL)
+            : nil;
+        SEL paletteSEL = NSSelectorFromString(@"colorPalette");
+        id palette = (info && [info respondsToSelector:paletteSEL])
+            ? ((id(*)(id,SEL))objc_msgSend)(info, paletteSEL)
+            : nil;
+        SEL primarySEL = NSSelectorFromString(@"primaryColorForOption:");
+        if (palette && [palette respondsToSelector:primarySEL]) {
+            id color = ((id(*)(id,SEL,NSUInteger))objc_msgSend)(
+                palette, primarySEL, (NSUInteger)option);
+            if ([color isKindOfClass:UIColor.class]) return color;
+        }
+    }
+
+    return UIColor.systemBlueColor;
+}
+
+static UILabel *XLGBadgeLabelForXNavItem(UIView *item) {
+    UILabel *badge = objc_getAssociatedObject(item, &kXLGBadgeLabelKey);
+    if (badge) return badge;
+
+    badge = [[UILabel alloc] initWithFrame:CGRectZero];
+    badge.userInteractionEnabled = NO;
+    badge.hidden = YES;
+    badge.textAlignment = NSTextAlignmentCenter;
+    badge.textColor = UIColor.whiteColor;
+    badge.backgroundColor = UIColor.systemRedColor;
+    badge.font = [UIFont boldSystemFontOfSize:10.0];
+    badge.layer.cornerRadius = 8.0;
+    badge.layer.masksToBounds = YES;
+    badge.accessibilityIdentifier = @"XLiquidGlassUnreadBadge";
+    [item addSubview:badge];
+
+    objc_setAssociatedObject(item,
+                             &kXLGBadgeLabelKey,
+                             badge,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return badge;
+}
+
+static NSInteger XLGBadgeCountForXNavItem(UIView *item) {
+    NSString *label = item.accessibilityLabel.lowercaseString ?: @"";
+    if ([label containsString:@"notifica"]) return gXLGNTabCount;
+
+    if ([label containsString:@"bate-papo"] ||
+        [label containsString:@"chat"] ||
+        [label containsString:@"mensag"] ||
+        [label containsString:@"messages"]) {
+        return XLGChatDisplayCount();
+    }
+
+    return -1;
+}
+
+static void XLGApplyBadgeToXNavItem(UIView *item) {
+    NSInteger count = XLGBadgeCountForXNavItem(item);
+    if (count < 0) return;
+
+    UILabel *badge = XLGBadgeLabelForXNavItem(item);
+    if (count <= 0) {
+        badge.hidden = YES;
+        return;
+    }
+
+    NSString *text = count > 99
+        ? @"99+"
+        : [NSString stringWithFormat:@"%ld", (long)count];
+
+    badge.text = text;
+    CGSize size = [text sizeWithAttributes:@{NSFontAttributeName: badge.font}];
+    CGFloat height = 16.0;
+    CGFloat width = MAX(16.0, ceil(size.width) + 7.0);
+
+    UIImageView *imageView = XLGImageViewForXNavItem(item);
+    if (imageView) {
+        badge.frame = CGRectIntegral(CGRectMake(
+            CGRectGetMaxX(imageView.frame) - 8.0,
+            CGRectGetMinY(imageView.frame) - 4.0,
+            width,
+            height));
+    } else {
+        badge.frame = CGRectIntegral(CGRectMake(
+            CGRectGetMidX(item.bounds) + 4.0,
+            8.0,
+            width,
+            height));
+    }
+
+    badge.layer.cornerRadius = height / 2.0;
+    badge.hidden = NO;
+    [item bringSubviewToFront:badge];
+}
+
+static void XLGApplyThemeToXNavItem(UIView *item) {
+    if (!item || XLGItemIsProfile(item)) return;
+
+    UIImageView *imageView = XLGImageViewForXNavItem(item);
+    if (!imageView || !imageView.image) return;
+
+    BOOL selected = XLGXNavItemIsSelected(item);
+    UIColor *color = selected ? XLGResolvedAccentColor()
+                              : XLGNativeInactiveTabColor();
+
+    if (imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+        imageView.image =
+            [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+    imageView.tintColor = color;
+    item.tintColor = color;
+
+    UIView *bar = XLGAncestorNamed(item, @"XNavigation.TabBarView");
+    if (selected && bar) {
+        for (NSString *key in @[@"pill", @"platter"]) {
+            id chrome = XLGSafeValueForKey(bar, key);
+            if ([chrome isKindOfClass:UIView.class]) {
+                ((UIView *)chrome).tintColor = XLGResolvedAccentColor();
+            }
+        }
+    }
+
+    for (UIView *subview in item.subviews ?: @[]) {
+        if (![subview isKindOfClass:UILabel.class]) continue;
+        UILabel *label = (UILabel *)subview;
+        if ([label.accessibilityIdentifier isEqualToString:@"XLiquidGlassUnreadBadge"]) {
+            continue;
+        }
+        label.hidden = !XLGTabLabelsEnabled();
+        if (!label.hidden) label.textColor = color;
+    }
+}
+
+static void XLGRefreshGlobalTabBar(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIWindow *window in XLGVisibleWindows()) {
+            for (UIView *item in
+                 XLGSubviewsMatchingClassName(window, @"XNavigation.TabBarItemView")) {
+                XLGApplyThemeToXNavItem(item);
+                XLGApplyBadgeToXNavItem(item);
+            }
+        }
+    });
+}
+
+static void XLGSetBadgeCountsFromObject(id object, NSString *userID) {
+    if (!object) return;
+
+    NSInteger ntab = 0, dm = 0, xchat = 0, total = 0;
+    BOOL hasNtab = XLGReadCountField(object, @"ntabUnreadCount", &ntab);
+    BOOL hasDM = XLGReadCountField(object, @"dmUnreadCount", &dm);
+    BOOL hasXChat = XLGReadCountField(object, @"xchatUnreadCount", &xchat);
+    BOOL hasTotal = XLGReadCountField(object, @"totalUnreadCount", &total);
+    if (!hasNtab && !hasDM && !hasXChat && !hasTotal) return;
+
+    BOOL changed = NO;
+    if (hasNtab && gXLGNTabCount != MAX((NSInteger)0, ntab)) {
+        gXLGNTabCount = MAX((NSInteger)0, ntab);
+        changed = YES;
+    }
+    if (hasDM && gXLGDMCount != MAX((NSInteger)0, dm)) {
+        gXLGDMCount = MAX((NSInteger)0, dm);
+        changed = YES;
+    }
+    if (hasXChat && gXLGXChatCount != MAX((NSInteger)0, xchat)) {
+        gXLGXChatCount = MAX((NSInteger)0, xchat);
+        changed = YES;
+    }
+    if (hasTotal && gXLGTotalCount != MAX((NSInteger)0, total)) {
+        gXLGTotalCount = MAX((NSInteger)0, total);
+        changed = YES;
+    }
+
+    if (userID.length &&
+        ![gXLGBadgeActiveUserID isEqualToString:userID]) {
+        gXLGBadgeActiveUserID = [userID copy];
+        changed = YES;
+    }
+
+    if (changed) {
+        XLGPersistBadgeCounts();
+        NSLog(@"[XLiquidGlass] badges user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld",
+              gXLGBadgeActiveUserID ?: @"-",
+              (long)gXLGNTabCount,
+              (long)gXLGDMCount,
+              (long)gXLGXChatCount,
+              (long)gXLGTotalCount);
+        XLGRefreshGlobalTabBar();
+    }
+}
+
+static BOOL XLGLooksLikeAccountBadgeMap(NSDictionary *dictionary) {
+    if (![dictionary isKindOfClass:NSDictionary.class] || dictionary.count == 0)
+        return NO;
+
+    NSUInteger valid = 0;
+    for (id key in dictionary) {
+        id object = dictionary[key];
+        NSInteger total = 0;
+        if (XLGReadCountField(object, @"totalUnreadCount", &total)) valid++;
+    }
+    return valid == dictionary.count;
+}
+
+static void XLGSelectBadgeAccountFromMap(NSDictionary *dictionary) {
+    if (!XLGLooksLikeAccountBadgeMap(dictionary)) return;
+    gXLGLastBadgeCountsByUserID = [dictionary copy];
+
+    NSString *activeUserID = XLGCurrentActiveUserID();
+    if (activeUserID.length) {
+        id object = dictionary[activeUserID];
+        if (!object) object = dictionary[@(activeUserID.longLongValue)];
+        if (object) {
+            XLGSetBadgeCountsFromObject(object, activeUserID);
+            return;
+        }
+    }
+
+    if (gXLGLastRootBadgeCount >= 0) {
+        id selected = nil;
+        NSString *selectedUserID = nil;
+        NSUInteger matches = 0;
+
+        for (id key in dictionary) {
+            id object = dictionary[key];
+            NSInteger total = -1;
+            if (XLGReadCountField(object, @"totalUnreadCount", &total) &&
+                total == gXLGLastRootBadgeCount) {
+                selected = object;
+                selectedUserID = XLGNormalizedUserID(key);
+                matches++;
+            }
+        }
+
+        if (matches == 1 && selected) {
+            XLGSetBadgeCountsFromObject(selected, selectedUserID);
+            return;
+        }
+    }
+
+    if (dictionary.count == 1) {
+        id key = dictionary.allKeys.firstObject;
+        XLGSetBadgeCountsFromObject(dictionary[key],
+                                    XLGNormalizedUserID(key));
+    }
+}
+
+static void XLGHandleBadgeNotification(NSNotification *notification) {
+    NSString *name = notification.name ?: @"";
+
+    if ([name isEqualToString:@"AppIconBadgeCountDidChange"]) {
+        id value = notification.userInfo[@"AppIconBadgeCountDidChangeUpdatedValue"];
+        if ([value respondsToSelector:@selector(integerValue)]) {
+            gXLGLastRootBadgeCount = [value integerValue];
+            if (gXLGLastBadgeCountsByUserID) {
+                XLGSelectBadgeAccountFromMap(gXLGLastBadgeCountsByUserID);
+            }
+        }
+        return;
+    }
+
+    if ([name isEqualToString:@"AccountBadgesDidChange"]) {
+        id map = notification.userInfo[@"AccountBadgesDidChangeUpdatedValues"];
+        if ([map isKindOfClass:NSDictionary.class]) {
+            XLGSelectBadgeAccountFromMap(map);
         }
     }
 }
 
-static void XLGTintImageViews(UIView *root, UIColor *color, BOOL stripAvatar) {
-    if (!root || !color) return;
-
-    if ([root isKindOfClass:UIImageView.class]) {
-        UIImageView *imageView=(UIImageView *)root;
-        UIImage *image=imageView.image;
-        if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-            imageView.image=[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        }
-        imageView.tintColor=color;
-        if (stripAvatar) XLGStripAvatarCircleStyling(imageView);
+static void XLGXNavItemLayout(id self, SEL cmd) {
+    if (gOrigXNavItemLayout) {
+        ((void(*)(id,SEL))gOrigXNavItemLayout)(self, cmd);
     }
 
-    for (UIView *subview in root.subviews ?: @[]) {
-        XLGTintImageViews(subview,color,stripAvatar);
+    if ([self isKindOfClass:UIView.class]) {
+        UIView *item = (UIView *)self;
+        XLGApplyThemeToXNavItem(item);
+        XLGApplyBadgeToXNavItem(item);
     }
 }
 
-static void XLGApplySelectedAccentToItemAppearance(UITabBarItemAppearance *appearance,
-                                                   UIColor *accent) {
-    if (!appearance || !accent) return;
+static void XLGInstallGlobalTabBarFixes(void) {
+    XLGLoadPersistedBadgeCounts();
 
-    appearance.selected.iconColor=accent;
-
-    NSMutableDictionary<NSAttributedStringKey,id> *selected=
-        [appearance.selected.titleTextAttributes mutableCopy] ?:
-        [NSMutableDictionary dictionary];
-    selected[NSForegroundColorAttributeName]=accent;
-    appearance.selected.titleTextAttributes=selected;
-
-    UIColor *secondary=UIColor.secondaryLabelColor;
-    if (!appearance.normal.iconColor) appearance.normal.iconColor=secondary;
-
-    NSMutableDictionary<NSAttributedStringKey,id> *normal=
-        [appearance.normal.titleTextAttributes mutableCopy] ?:
-        [NSMutableDictionary dictionary];
-    if (!normal[NSForegroundColorAttributeName]) {
-        normal[NSForegroundColorAttributeName]=secondary;
-    }
-    appearance.normal.titleTextAttributes=normal;
-}
-
-static void XLGApplyAccentToTabBar(UITabBar *tabBar, UIColor *accent) {
-    if (!tabBar || !accent) return;
-
-    tabBar.tintColor=accent;
-    if (!tabBar.unselectedItemTintColor) {
-        tabBar.unselectedItemTintColor=UIColor.secondaryLabelColor;
+    Class itemClass = NSClassFromString(@"XNavigation.TabBarItemView");
+    if (!itemClass) {
+        itemClass = NSClassFromString(@"_TtC11XNavigation14TabBarItemView");
     }
 
-    UITabBarAppearance *appearance=[tabBar.standardAppearance copy];
-    if (!appearance) appearance=[UITabBarAppearance new];
-
-    XLGApplySelectedAccentToItemAppearance(appearance.stackedLayoutAppearance,accent);
-    XLGApplySelectedAccentToItemAppearance(appearance.inlineLayoutAppearance,accent);
-    XLGApplySelectedAccentToItemAppearance(appearance.compactInlineLayoutAppearance,accent);
-
-    // Preserve the badge fixes already applied by 1.4.0.
-    XLGApplyCompactBadgeToAppearance(appearance);
-
-    tabBar.standardAppearance=appearance;
-    if (@available(iOS 15.0,*)) {
-        tabBar.scrollEdgeAppearance=appearance;
-    }
-}
-
-static void XLGApplySelectionChrome(UIView *chrome, UIColor *accent) {
-    if (!chrome || !accent) return;
-
-    chrome.tintColor=accent;
-
-    UIColor *background=chrome.backgroundColor;
-    CGFloat r=0,g=0,b=0,a=0;
-    BOOL resolved=[background getRed:&r green:&g blue:&b alpha:&a];
-    if (!resolved) {
-        CGFloat w=0;
-        resolved=[background getWhite:&w alpha:&a];
+    if (itemClass && !gOrigXNavItemLayout) {
+        XLGHookMethod(itemClass,
+                      @selector(layoutSubviews),
+                      NO,
+                      (IMP)XLGXNavItemLayout,
+                      &gOrigXNavItemLayout);
     }
 
-    // Preserve Apple's glass translucency; replace only the hue.
-    if (resolved && a>0.01) {
-        chrome.backgroundColor=[accent colorWithAlphaComponent:a];
+    if (!gXLGBadgeNotificationObserver) {
+        gXLGBadgeNotificationObserver =
+            [NSNotificationCenter.defaultCenter
+                addObserverForName:nil
+                           object:nil
+                            queue:nil
+                       usingBlock:^(NSNotification *notification) {
+            NSString *name = notification.name ?: @"";
+            if ([name isEqualToString:@"AccountBadgesDidChange"] ||
+                [name isEqualToString:@"AppIconBadgeCountDidChange"]) {
+                XLGHandleBadgeNotification(notification);
+            }
+        }];
     }
 
-    for (UIView *subview in chrome.subviews ?: @[]) {
-        subview.tintColor=accent;
-    }
-}
+    if (!gXLGDefaultsObserver) {
+        gXLGDefaultsObserver =
+            [NSNotificationCenter.defaultCenter
+                addObserverForName:NSUserDefaultsDidChangeNotification
+                           object:nil
+                            queue:nil
+                       usingBlock:^(__unused NSNotification *notification) {
+            XLGRefreshGlobalTabBar();
+        }];
 
-static UILabel *XLGInjectedLabelForButton(UIView *button, BOOL create) {
-    UILabel *label=objc_getAssociatedObject(button,&kXLGInjectedTabLabelKey);
-    if (label || !create) return label;
-
-    label=[[UILabel alloc] initWithFrame:CGRectZero];
-    label.translatesAutoresizingMaskIntoConstraints=NO;
-    label.font=[UIFont systemFontOfSize:10.0 weight:UIFontWeightMedium];
-    label.textAlignment=NSTextAlignmentCenter;
-    label.adjustsFontSizeToFitWidth=YES;
-    label.minimumScaleFactor=0.75;
-    label.lineBreakMode=NSLineBreakByTruncatingTail;
-    label.isAccessibilityElement=NO;
-    [button addSubview:label];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [label.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:2.0],
-        [label.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-2.0],
-        [label.bottomAnchor constraintEqualToAnchor:button.bottomAnchor constant:-1.0],
-        [label.heightAnchor constraintEqualToConstant:12.0]
-    ]];
-
-    objc_setAssociatedObject(
-        button,
-        &kXLGInjectedTabLabelKey,
-        label,
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC
-    );
-
-    return label;
-}
-
-static void XLGSyncLiquidGlassLabels(UITabBar *tabBar,
-                                    NSArray<UIView *> *buttons,
-                                    UIColor *accent) {
-    BOOL showLabels=XLGTabLabelsEnabled();
-    UIColor *secondary=UIColor.secondaryLabelColor;
-
-    NSUInteger count=MIN(buttons.count,tabBar.items.count);
-    for (NSUInteger i=0;i<count;i++) {
-        UIView *button=buttons[i];
-        UITabBarItem *item=tabBar.items[i];
-        BOOL selected=XLGViewLooksSelected(button,tabBar,i);
-
-        // Theme any native labels the system already created.
-        NSArray<UIView *> *nativeLabels=
-            XLGCollectViewsMatching(button,^BOOL(UIView *view) {
-                return [view isKindOfClass:UILabel.class] &&
-                       objc_getAssociatedObject(button,&kXLGInjectedTabLabelKey) != view;
-            });
-
-        for (UILabel *label in (NSArray<UILabel *> *)nativeLabels) {
-            label.textColor=selected ? accent : secondary;
-        }
-
-        UILabel *label=XLGInjectedLabelForButton(button,showLabels);
-        if (label) {
-            NSString *title=item.title;
-            if (title.length==0) title=item.accessibilityLabel;
-            if (title.length==0) title=button.accessibilityLabel;
-            label.text=title ?: @"";
-            label.hidden=!showLabels || label.text.length==0;
-            label.textColor=selected ? accent : secondary;
-            [button bringSubviewToFront:label];
-        }
+        [NSNotificationCenter.defaultCenter
+            addObserverForName:@"XLiquidGlassRefreshTabBar"
+                       object:nil
+                        queue:nil
+                   usingBlock:^(__unused NSNotification *notification) {
+            XLGRefreshGlobalTabBar();
+        }];
     }
 
-    // Hide labels from stale buttons after a tab-count change.
-    for (NSUInteger i=count;i<buttons.count;i++) {
-        UILabel *label=XLGInjectedLabelForButton(buttons[i],NO);
-        label.hidden=YES;
-    }
+    XLGRefreshGlobalTabBar();
 }
 
-static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
-    if (!controller || !XLGEnabled()) return;
-    if (![controller isKindOfClass:UIViewController.class]) return;
-
-    UIViewController *vc=(UIViewController *)controller;
-    if (!vc.isViewLoaded) return;
-
-    SEL tabBarSEL=NSSelectorFromString(@"tabBar");
-    if (![controller respondsToSelector:tabBarSEL]) return;
-
-    id object=((id(*)(id,SEL))objc_msgSend)(controller,tabBarSEL);
-    if (![object isKindOfClass:UITabBar.class]) return;
-
-    UITabBar *tabBar=(UITabBar *)object;
-    UIColor *accent=XLGResolvedAccentColor(controller,tabBar);
-    UIColor *secondary=tabBar.unselectedItemTintColor ?: UIColor.secondaryLabelColor;
-
-    XLGApplyAccentToTabBar(tabBar,accent);
-
-    NSArray<UIView *> *buttons=XLGSystemTabButtons(tabBar);
-    NSUInteger count=buttons.count;
-
-    for (NSUInteger i=0;i<count;i++) {
-        UIView *button=buttons[i];
-        BOOL selected=XLGViewLooksSelected(button,tabBar,i);
-        UIColor *color=selected ? accent : secondary;
-
-        NSString *title=button.accessibilityLabel;
-        if (i<tabBar.items.count) {
-            UITabBarItem *item=tabBar.items[i];
-            if (item.title.length) title=item.title;
-            else if (item.accessibilityLabel.length) title=item.accessibilityLabel;
-        }
-
-        BOOL profile=XLGTitleLooksLikeProfile(title);
-        XLGTintImageViews(button,color,profile);
-        if (profile) XLGStripAvatarCircleStyling(button);
-    }
-
-    UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
-    XLGApplySelectionChrome(chrome,accent);
-
-    XLGSyncLiquidGlassLabels(tabBar,buttons,accent);
-
-    [tabBar setNeedsLayout];
-}
-
-static IMP gOrigXLGNavigationTabBarViewLayoutSubviews=NULL;
-
-static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
-    if (gOrigXLGNavigationTabBarViewLayoutSubviews) {
-        ((void(*)(id,SEL))gOrigXLGNavigationTabBarViewLayoutSubviews)(self,cmd);
-    }
-
-    if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
-
-    UIView *view=(UIView *)self;
-    UIViewController *controller=nil;
-    UIResponder *responder=view.nextResponder;
-    for (NSInteger i=0;responder && i<16;i++,responder=responder.nextResponder) {
-        if ([responder isKindOfClass:UIViewController.class]) {
-            controller=(UIViewController *)responder;
-            break;
-        }
-    }
-
-    UIColor *accent=controller && controller.isViewLoaded ?
-        controller.view.tintColor : view.tintColor;
-    if (!accent) accent=UIColor.systemBlueColor;
-
-    XLGTintImageViews(view,accent,NO);
-    UIView *chrome=XLGFindLiquidSelectionChrome(view);
-    XLGApplySelectionChrome(chrome,accent);
-}
-
-static void XLGInstallXNavigationVisualFix(void) {
-    Class cls=NSClassFromString(@"_TtC11XNavigation10TabBarView");
-    if (!cls) return;
-
-    XLGHookMethod(
-        cls,
-        @selector(layoutSubviews),
-        NO,
-        (IMP)XLGNavigationTabBarViewLayoutSubviews,
-        &gOrigXLGNavigationTabBarViewLayoutSubviews
-    );
-}
-
-static void XLGLGBadgeViewDidLoad(id self,SEL cmd) {
-    if (gOrigLGBadgeViewDidLoad)
-        ((void(*)(id,SEL))gOrigLGBadgeViewDidLoad)(self,cmd);
-
-    XLGInvalidateLiquidGlassCompactBadge(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-    XLGScheduleLiquidGlassBadgeRefresh(self);
-}
-
-static void XLGLGBadgeViewDidAppear(id self,SEL cmd,BOOL animated) {
-    if (gOrigLGBadgeViewDidAppear)
-        ((void(*)(id,SEL,BOOL))gOrigLGBadgeViewDidAppear)(self,cmd,animated);
-
-    XLGInvalidateLiquidGlassCompactBadge(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-    XLGScheduleLiquidGlassBadgeRefresh(self);
-}
-
-static void XLGLGBadgeSetTabViews(id self,SEL cmd,id tabViews) {
-    if (gOrigLGBadgeSetTabViews)
-        ((void(*)(id,SEL,id))gOrigLGBadgeSetTabViews)(self,cmd,tabViews);
-
-    XLGInvalidateLiquidGlassCompactBadge(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-    XLGScheduleLiquidGlassBadgeRefresh(self);
-}
-
-static void XLGLGBadgeSyncTabBarItems(id self,SEL cmd) {
-    if (gOrigLGBadgeSyncTabBarItems)
-        ((void(*)(id,SEL))gOrigLGBadgeSyncTabBarItems)(self,cmd);
-
-    XLGInvalidateLiquidGlassCompactBadge(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-    XLGScheduleLiquidGlassBadgeRefresh(self);
-}
-
-static void XLGLGBadgeSyncBadges(id self,SEL cmd) {
-    if (gOrigLGBadgeSyncBadges)
-        ((void(*)(id,SEL))gOrigLGBadgeSyncBadges)(self,cmd);
-
-    // Moe's syncBadges hook immediately normalizes after the original method.
-    XLGNormalizeLiquidGlassUnreadBadgeValues(self);
-    XLGInvalidateLiquidGlassCompactBadge(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-}
-
-static void XLGLGBadgeTraitCollectionDidChange(id self,SEL cmd,id previousTraitCollection) {
-    if (gOrigLGBadgeTraitCollectionDidChange)
-        ((void(*)(id,SEL,id))gOrigLGBadgeTraitCollectionDidChange)(
-            self,cmd,previousTraitCollection
-        );
-
-    XLGInvalidateLiquidGlassCompactBadge(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-}
-
-static void XLGLGBadgeViewDidLayoutSubviews(id self,SEL cmd) {
-    if (gOrigLGBadgeViewDidLayoutSubviews)
-        ((void(*)(id,SEL))gOrigLGBadgeViewDidLayoutSubviews)(self,cmd);
-
-    XLGNormalizeLiquidGlassUnreadBadgeValues(self);
-    XLGNormalizeLiquidGlassBadges(self);
-    XLGApplyLiquidGlassTabBarVisualFixes(self);
-}
-
-static void XLGInstallLiquidGlassBadgeFixes(void) {
-    Class cls=NSClassFromString(@"T1LiquidGlassTabBarController");
-    if (!cls) return;
-
-    XLGHookMethod(cls,@selector(viewDidLoad),NO,
-                  (IMP)XLGLGBadgeViewDidLoad,&gOrigLGBadgeViewDidLoad);
-
-    XLGHookMethod(cls,@selector(viewDidAppear:),NO,
-                  (IMP)XLGLGBadgeViewDidAppear,&gOrigLGBadgeViewDidAppear);
-
-    XLGHookMethod(cls,NSSelectorFromString(@"setTabViews:"),NO,
-                  (IMP)XLGLGBadgeSetTabViews,&gOrigLGBadgeSetTabViews);
-
-    XLGHookMethod(cls,NSSelectorFromString(@"_t1_syncTabBarItems"),NO,
-                  (IMP)XLGLGBadgeSyncTabBarItems,&gOrigLGBadgeSyncTabBarItems);
-
-    XLGHookMethod(cls,NSSelectorFromString(@"syncBadges"),NO,
-                  (IMP)XLGLGBadgeSyncBadges,&gOrigLGBadgeSyncBadges);
-
-    XLGHookMethod(cls,@selector(traitCollectionDidChange:),NO,
-                  (IMP)XLGLGBadgeTraitCollectionDidChange,
-                  &gOrigLGBadgeTraitCollectionDidChange);
-
-    XLGHookMethod(cls,@selector(viewDidLayoutSubviews),NO,
-                  (IMP)XLGLGBadgeViewDidLayoutSubviews,
-                  &gOrigLGBadgeViewDidLayoutSubviews);
-}
 
 static void XLGInstallHooks(void) {
     Class cls = Nil;
@@ -1617,8 +1582,7 @@ static void XLGInstallHooks(void) {
 
     XLGSyncCompatibilityGate();
     XLGInstallSidebarFix();
-    XLGInstallLiquidGlassBadgeFixes();
-    XLGInstallXNavigationVisualFix();
+    XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
 }
 
@@ -1635,7 +1599,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.5.0 standalone + Moe Liquid Glass tab bar visual fixes loaded");
+        NSLog(@"[XLiquidGlass] 1.6.0 Beta 1 global loaded: activation + NFB + sidebar + theme sync + badges");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
