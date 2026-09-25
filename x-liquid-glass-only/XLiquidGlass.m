@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.3 Final
+#pragma mark - XLiquidGlass 1.6.5 Beta 14
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -418,7 +418,10 @@ static void XLGInstallNFBSettingsIntegration(void) {
 
 static IMP gOrigTabLoad = NULL;
 static IMP gOrigTabAppear = NULL;
+static IMP gOrigNotificationCellDidMoveToWindow = NULL;
 static char kXLGSidebarEdgePanKey;
+static char kXLGNotificationTapRecognizerKey;
+static BOOL gXLGNotificationSelectionHooked = NO;
 
 @class XLiquidGlassSidebarDrawerViewController;
 
@@ -533,6 +536,8 @@ static id XLGSidebarCurrentAccount(void) {
 
 static void XLGRouteContentViewController(UIViewController *viewController);
 static void XLGRouteModalViewController(UIViewController *viewController);
+static UINavigationController *XLGNavigationControllerForPresenter(
+    UIViewController *presenter);
 
 static UIViewController *XLGSidebarContentPresentingViewController(void) {
     id appNavigation=XLGSidebarAppNavigation();
@@ -546,6 +551,372 @@ static UIViewController *XLGSidebarContentPresentingViewController(void) {
     }
 
     return XLGSidebarPresenter();
+}
+
+#pragma mark - Moe-style notification selection fix
+
+static id XLGObjectIvarValue(id object, const char *ivarName) {
+    if (!object || !ivarName) return nil;
+    Ivar ivar=class_getInstanceVariable([object class],ivarName);
+    if (!ivar) return nil;
+    @try {
+        return object_getIvar(object,ivar);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static id XLGObjectValueForSelector(id object, NSString *selectorName) {
+    if (!object || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) return nil;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method) return nil;
+
+    char returnType[64]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *type=returnType;
+    while (*type=='r' || *type=='n' || *type=='N' ||
+           *type=='o' || *type=='O' || *type=='R' || *type=='V') {
+        type++;
+    }
+    if (*type!='@' && *type!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static long long XLGIntegerValueForSelector(id object,
+                                            NSString *selectorName) {
+    if (!object || !selectorName.length) return 0;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) return 0;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method) return 0;
+
+    char returnType[64]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *type=returnType;
+    while (*type=='r' || *type=='n' || *type=='N' ||
+           *type=='o' || *type=='O' || *type=='R' || *type=='V') {
+        type++;
+    }
+
+    @try {
+        if (*type=='@' || *type=='#') {
+            id value=((id(*)(id,SEL))objc_msgSend)(object,selector);
+            if ([value respondsToSelector:@selector(longLongValue)]) {
+                return [value longLongValue];
+            }
+            return 0;
+        }
+
+        switch (*type) {
+            case 'q':
+            case 'Q':
+            case 'l':
+            case 'L':
+            case 'i':
+            case 'I':
+            case 's':
+            case 'S':
+            case 'c':
+            case 'C':
+                return ((long long(*)(id,SEL))objc_msgSend)(object,selector);
+            default:
+                return 0;
+        }
+    } @catch (__unused NSException *exception) {
+        return 0;
+    }
+}
+
+static long long XLGStatusIDFromObjectDepth(id object,
+                                            NSUInteger depth,
+                                            NSHashTable *visited) {
+    if (!object || depth>4) return 0;
+
+    if ([visited containsObject:object]) return 0;
+    [visited addObject:object];
+
+    if ([object isKindOfClass:NSNumber.class] ||
+        [object isKindOfClass:NSString.class]) {
+        long long value=[object longLongValue];
+        return value>0 ? value : 0;
+    }
+
+    // Moe's generic status-ID helper resolves both object and scalar status IDs.
+    for (NSString *selectorName in @[
+        @"statusIDNumber",
+        @"targetStatusIDNumber",
+        @"statusIDString",
+        @"statusID",
+        @"tweetID"
+    ]) {
+        long long value=XLGIntegerValueForSelector(object,selectorName);
+        if (value>0) return value;
+    }
+
+    for (NSString *selectorName in @[
+        @"targetStatusModel",
+        @"targetStatus",
+        @"status",
+        @"tweet",
+        @"representedStatus",
+        @"representeeStatus",
+        @"underlyingViewModel",
+        @"canonicalStatus"
+    ]) {
+        id nested=XLGObjectValueForSelector(object,selectorName);
+        long long value=XLGStatusIDFromObjectDepth(
+            nested,depth+1,visited);
+        if (value>0) return value;
+    }
+
+    // Some Swift notification view-model members are ivars without Objective-C
+    // property accessors in the classdump.
+    for (NSString *ivarName in @[
+        @"targetStatusModel",
+        @"targetStatus",
+        @"status",
+        @"tweet"
+    ]) {
+        id nested=XLGObjectIvarValue(object,ivarName.UTF8String);
+        long long value=XLGStatusIDFromObjectDepth(
+            nested,depth+1,visited);
+        if (value>0) return value;
+    }
+
+    return 0;
+}
+
+static long long XLGStatusIDFromObject(id object) {
+    NSHashTable *visited=[NSHashTable weakObjectsHashTable];
+    return XLGStatusIDFromObjectDepth(object,0,visited);
+}
+
+static long long XLGStatusIDFromNotificationCell(id cell) {
+    if (!cell) return 0;
+
+    // T1URTTimelineNotificationCell has a private "viewModel" ivar.
+    id viewModel=XLGObjectIvarValue(cell,"viewModel");
+    if (!viewModel) {
+        @try {
+            viewModel=[cell valueForKey:@"viewModel"];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+
+    long long statusID=XLGStatusIDFromObject(viewModel);
+    if (statusID>0) return statusID;
+
+    // Moe also falls back to direct target-status values where available.
+    for (NSString *selectorName in @[
+        @"targetStatusModel",
+        @"targetStatus",
+        @"targetStatusIDNumber"
+    ]) {
+        id value=XLGObjectValueForSelector(cell,selectorName);
+        statusID=XLGStatusIDFromObject(value);
+        if (statusID>0) return statusID;
+    }
+
+    return XLGStatusIDFromObject(cell);
+}
+
+static BOOL XLGOpenTweetStatusNatively(long long statusID) {
+    if (statusID<=0) return NO;
+
+    id appNavigation=XLGSidebarAppNavigation();
+    id account=XLGSidebarCurrentAccount();
+    UIViewController *presenter=XLGSidebarContentPresentingViewController();
+
+    SEL showSEL=NSSelectorFromString(
+        @"showConversationViewControllerForViewModel:statusID:account:"
+         "statusNavigationContext:scribeContext:sourceNavigationMetadata:"
+         "fromViewController:animated:");
+
+    if (XLGEnabled() &&
+        appNavigation &&
+        account &&
+        presenter &&
+        [appNavigation respondsToSelector:showSEL]) {
+        typedef void (*ShowConversationFn)(
+            id,SEL,id,long long,id,id,id,id,id,BOOL);
+        ((ShowConversationFn)objc_msgSend)(
+            appNavigation,
+            showSEL,
+            nil,
+            statusID,
+            account,
+            nil,
+            nil,
+            nil,
+            presenter,
+            YES
+        );
+        return YES;
+    }
+
+    NSString *urlString=
+        [NSString stringWithFormat:@"twitter://status?id=%lld",statusID];
+    NSURL *url=[NSURL URLWithString:urlString];
+    if (!url) return NO;
+
+    UIApplication *application=UIApplication.sharedApplication;
+    if ([application respondsToSelector:
+         @selector(openURL:options:completionHandler:)]) {
+        [application openURL:url
+                    options:@{}
+          completionHandler:nil];
+        return YES;
+    }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    return [application openURL:url];
+#pragma clang diagnostic pop
+}
+
+static BOOL XLGNotificationTapTouchIsInteractive(UIView *view,
+                                                 UIView *cell) {
+    UIView *cursor=view;
+    for (NSUInteger depth=0;
+         cursor && cursor!=cell && depth<16;
+         depth++,cursor=cursor.superview) {
+        if ([cursor isKindOfClass:UIControl.class]) return YES;
+
+        NSString *name=NSStringFromClass(cursor.class).lowercaseString;
+        if ([name containsString:@"button"] ||
+            [name containsString:@"link"] ||
+            [name containsString:@"avatar"] ||
+            [name containsString:@"feedback"] ||
+            [name containsString:@"dismiss"]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL XLGNotificationCellShouldReceiveTouch(id self,
+                                                  SEL _cmd,
+                                                  UIGestureRecognizer *gesture,
+                                                  UITouch *touch) {
+    (void)_cmd;
+    (void)gesture;
+    UIView *view=touch.view;
+    if (!view) return YES;
+    return !XLGNotificationTapTouchIsInteractive(view,(UIView *)self);
+}
+
+static void XLGNotificationCellHandleTap(id self,
+                                         SEL _cmd,
+                                         UITapGestureRecognizer *recognizer) {
+    (void)_cmd;
+    if (!XLGEnabled()) return;
+    if (recognizer.state!=UIGestureRecognizerStateEnded) return;
+
+    long long statusID=XLGStatusIDFromNotificationCell(self);
+    if (statusID<=0) return;
+
+    // Keep the original X touch path alive (cancelsTouchesInView=NO). If X
+    // navigates successfully on its own, do nothing. Otherwise use Moe's
+    // native conversation route as a fallback.
+    UIViewController *beforePresenter=
+        XLGSidebarContentPresentingViewController();
+    UINavigationController *beforeNavigation=
+        XLGNavigationControllerForPresenter(beforePresenter);
+    UIViewController *beforeTop=beforeNavigation.topViewController;
+    UIViewController *beforePresented=beforePresenter.presentedViewController;
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(0.16*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            UIViewController *afterPresenter=
+                XLGSidebarContentPresentingViewController();
+            UINavigationController *afterNavigation=
+                XLGNavigationControllerForPresenter(afterPresenter);
+            UIViewController *afterTop=afterNavigation.topViewController;
+            UIViewController *afterPresented=
+                afterPresenter.presentedViewController;
+
+            BOOL nativeHandled=
+                (beforeTop && afterTop && beforeTop!=afterTop) ||
+                (afterPresented && afterPresented!=beforePresented);
+
+            if (!nativeHandled) {
+                XLGOpenTweetStatusNatively(statusID);
+            }
+        });
+}
+
+static void XLGNotificationCellDidMoveToWindow(id self, SEL _cmd) {
+    if (gOrigNotificationCellDidMoveToWindow) {
+        ((void(*)(id,SEL))gOrigNotificationCellDidMoveToWindow)(self,_cmd);
+    }
+
+    if (!XLGEnabled()) return;
+    if (![self isKindOfClass:UIView.class]) return;
+
+    UIView *cell=(UIView *)self;
+    if (!cell.window) return;
+
+    UITapGestureRecognizer *recognizer=
+        objc_getAssociatedObject(self,&kXLGNotificationTapRecognizerKey);
+    if (recognizer) return;
+
+    recognizer=[[UITapGestureRecognizer alloc]
+        initWithTarget:self
+                action:NSSelectorFromString(@"xlg_handleNotificationTap:")];
+    recognizer.cancelsTouchesInView=NO;
+    recognizer.delegate=(id<UIGestureRecognizerDelegate>)self;
+    [cell addGestureRecognizer:recognizer];
+
+    objc_setAssociatedObject(
+        self,
+        &kXLGNotificationTapRecognizerKey,
+        recognizer,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void XLGInstallNotificationSelectionFix(void) {
+    if (gXLGNotificationSelectionHooked) return;
+
+    Class cls=NSClassFromString(@"T1URTTimelineNotificationCell");
+    if (!cls) return;
+
+    SEL tapSEL=NSSelectorFromString(@"xlg_handleNotificationTap:");
+    if (![cls instancesRespondToSelector:tapSEL]) {
+        class_addMethod(
+            cls,
+            tapSEL,
+            (IMP)XLGNotificationCellHandleTap,
+            "v@:@");
+    }
+
+    SEL receiveSEL=
+        @selector(gestureRecognizer:shouldReceiveTouch:);
+    if (![cls instancesRespondToSelector:receiveSEL]) {
+        class_addMethod(
+            cls,
+            receiveSEL,
+            (IMP)XLGNotificationCellShouldReceiveTouch,
+            "B@:@@");
+    }
+
+    gXLGNotificationSelectionHooked=
+        XLGHookMethod(
+            cls,
+            @selector(didMoveToWindow),
+            NO,
+            (IMP)XLGNotificationCellDidMoveToWindow,
+            &gOrigNotificationCellDidMoveToWindow);
 }
 
 static UINavigationController *XLGNavigationControllerForPresenter(
@@ -2984,6 +3355,7 @@ static void XLGInstallHooks(void) {
     XLGInstallSidebarFix();
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
+    XLGInstallNotificationSelectionFix();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -2999,7 +3371,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.3 Final loaded: native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.5 Beta 14 loaded: Moe notification selection fix + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
