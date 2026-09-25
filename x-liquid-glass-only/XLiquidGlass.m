@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.1
+#pragma mark - XLiquidGlass 1.9.2 Beta 1
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -34,6 +34,7 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static NSString *XLGToastProbeLogPath(void);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -72,6 +73,9 @@ static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
+static NSMutableDictionary<NSString *, NSValue *> *gXLGToastProbeOriginalIMPs = nil;
+static BOOL gXLGToastProbeInstalled = NO;
+static BOOL gXLGToastProbeBannerLogged = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -206,7 +210,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -229,6 +233,15 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryView=nil;
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
+
+    if (indexPath.row == 2) {
+        cell.textLabel.text = @"Copiar relatório de toast";
+        cell.detailTextLabel.text =
+            @"Copia o diagnóstico de “Post enviado” e “Resposta enviada”.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -271,6 +284,35 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 2) return;
+
+    NSString *path=XLGToastProbeLogPath();
+    NSData *data=path.length ? [NSData dataWithContentsOfFile:path] : nil;
+    NSString *report=data.length
+        ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+        : @"";
+
+    if (report.length) {
+        UIPasteboard.generalPasteboard.string=report;
+    }
+
+    UIAlertController *alert=
+        [UIAlertController
+            alertControllerWithTitle:@"Relatório de toast"
+                             message:report.length
+                                ? @"Relatório copiado para a área de transferência."
+                                : @"Ainda não há eventos de toast registrados."
+                      preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -5792,6 +5834,453 @@ static void XLGInstallSearchBlurFix(void) {
             &gOrigSearchContainerViewDidLayoutSubviews);
 }
 
+
+#pragma mark - XLiquidGlass 1.9.2 Beta 1 Toast Probe
+
+static NSString *XLGToastProbeLogPath(void) {
+    NSString *documents=
+        NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents stringByAppendingPathComponent:
+        @"XLiquidGlass192Beta1ToastProbe.log"];
+}
+
+static NSString *XLGToastProbeTimestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGToastProbeLog(NSString *format, ...) {
+    if (!format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=
+        [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGToastProbeTimestamp(),
+                    message ?: @"-"];
+    NSLog(@"[XLiquidGlass/ToastProbe] %@",message ?: @"-");
+
+    NSString *path=XLGToastProbeLogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=
+                [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static NSString *XLGToastProbeObject(id object) {
+    if (!object) return @"nil";
+    @try {
+        NSString *description=[object description] ?: @"-";
+        if (description.length>600) {
+            description=[[description substringToIndex:600]
+                stringByAppendingString:@"…"];
+        }
+        return [NSString stringWithFormat:@"%@{%@}",
+                NSStringFromClass([object class]) ?: @"?",
+                description];
+    } @catch (__unused NSException *exception) {
+        return [NSString stringWithFormat:@"%@{description-error}",
+                NSStringFromClass([object class]) ?: @"?"];
+    }
+}
+
+static NSString *XLGToastProbeKey(Class cls, SEL selector) {
+    return [NSString stringWithFormat:@"%@|%@",
+            NSStringFromClass(cls) ?: @"?",
+            NSStringFromSelector(selector) ?: @"?"];
+}
+
+static void XLGToastProbeRememberOriginal(Class cls,
+                                          SEL selector,
+                                          IMP original) {
+    if (!cls || !selector || !original) return;
+    if (!gXLGToastProbeOriginalIMPs) {
+        gXLGToastProbeOriginalIMPs=[NSMutableDictionary dictionary];
+    }
+    gXLGToastProbeOriginalIMPs[XLGToastProbeKey(cls,selector)]=
+        [NSValue valueWithPointer:original];
+}
+
+static IMP XLGToastProbeOriginal(id self, SEL selector) {
+    if (!self || !selector || !gXLGToastProbeOriginalIMPs) return NULL;
+    for (Class cls=object_getClass(self); cls; cls=class_getSuperclass(cls)) {
+        NSValue *value=
+            gXLGToastProbeOriginalIMPs[XLGToastProbeKey(cls,selector)];
+        if (value) return [value pointerValue];
+    }
+    return NULL;
+}
+
+static void XLGToastProbeWindowSnapshot(NSString *reason) {
+    NSMutableArray<NSString *> *entries=[NSMutableArray array];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            NSString *className=NSStringFromClass(window.class) ?: @"?";
+            UIViewController *root=window.rootViewController;
+            [entries addObject:
+                [NSString stringWithFormat:
+                    @"%@ ptr=%p hidden=%@ alpha=%.2f level=%.1f frame=%@ root=%@",
+                    className,
+                    window,
+                    window.hidden ? @"YES" : @"NO",
+                    window.alpha,
+                    window.windowLevel,
+                    NSStringFromCGRect(window.frame),
+                    root ? NSStringFromClass(root.class) : @"nil"]];
+        }
+    }
+    XLGToastProbeLog(@"WINDOWS %@ count=%lu\n%@",
+                     reason ?: @"-",
+                     (unsigned long)entries.count,
+                     [entries componentsJoinedByString:@"\n"]);
+}
+
+static void XLGToastProbeDumpClass(NSString *className) {
+    Class cls=NSClassFromString(className);
+    if (!cls) {
+        XLGToastProbeLog(@"CLASS %@ missing",className);
+        return;
+    }
+
+    XLGToastProbeLog(@"CLASS_DUMP_BEGIN %@ ptr=%p",
+                     className,cls);
+
+    unsigned int count=0;
+    Method *methods=class_copyMethodList(cls,&count);
+    for (unsigned int i=0;i<count;i++) {
+        Method method=methods[i];
+        SEL selector=method_getName(method);
+        XLGToastProbeLog(@"METHOD %@ selector=%@ types=%s",
+                         className,
+                         NSStringFromSelector(selector),
+                         method_getTypeEncoding(method) ?: "-");
+    }
+    if (methods) free(methods);
+
+    XLGToastProbeLog(@"CLASS_DUMP_END %@",className);
+}
+
+static BOOL XLGToastProbeHookDirectMethod(Class cls,
+                                          SEL selector,
+                                          IMP replacement) {
+    if (!cls || !selector || !replacement) return NO;
+
+    unsigned int count=0;
+    Method *methods=class_copyMethodList(cls,&count);
+    Method direct=NULL;
+    for (unsigned int i=0;i<count;i++) {
+        if (method_getName(methods[i])==selector) {
+            direct=methods[i];
+            break;
+        }
+    }
+    if (methods) free(methods);
+    if (!direct) return NO;
+
+    IMP original=method_getImplementation(direct);
+    if (!original || original==replacement) return NO;
+
+    method_setImplementation(direct,replacement);
+    XLGToastProbeRememberOriginal(cls,selector,original);
+
+    XLGToastProbeLog(@"HOOK class=%@ selector=%@ types=%s",
+                     NSStringFromClass(cls),
+                     NSStringFromSelector(selector),
+                     method_getTypeEncoding(direct) ?: "-");
+    return YES;
+}
+
+static void XLGToastProbeVoidOneObject(id self, SEL cmd, id arg) {
+    XLGToastProbeLog(@"CALL %@.%@ BEFORE arg=%@",
+                     NSStringFromClass([self class]),
+                     NSStringFromSelector(cmd),
+                     XLGToastProbeObject(arg));
+    XLGToastProbeWindowSnapshot(@"before-void-one-object");
+
+    IMP original=XLGToastProbeOriginal(self,cmd);
+    if (original) {
+        ((void(*)(id,SEL,id))original)(self,cmd,arg);
+    }
+
+    XLGToastProbeLog(@"CALL %@.%@ AFTER",
+                     NSStringFromClass([self class]),
+                     NSStringFromSelector(cmd));
+    XLGToastProbeWindowSnapshot(@"after-void-one-object");
+}
+
+static void XLGToastProbeVoidObjectPriority(id self,
+                                            SEL cmd,
+                                            id arg,
+                                            unsigned long long priority) {
+    XLGToastProbeLog(@"CALL %@.%@ BEFORE arg=%@ priority=%llu",
+                     NSStringFromClass([self class]),
+                     NSStringFromSelector(cmd),
+                     XLGToastProbeObject(arg),
+                     priority);
+
+    IMP original=XLGToastProbeOriginal(self,cmd);
+    if (original) {
+        ((void(*)(id,SEL,id,unsigned long long))original)(
+            self,cmd,arg,priority);
+    }
+
+    XLGToastProbeLog(@"CALL %@.%@ AFTER",
+                     NSStringFromClass([self class]),
+                     NSStringFromSelector(cmd));
+    XLGToastProbeWindowSnapshot(@"after-toast-priority");
+}
+
+static BOOL XLGToastProbeBoolTwoObjects(id self,
+                                        SEL cmd,
+                                        id arg1,
+                                        id arg2) {
+    IMP original=XLGToastProbeOriginal(self,cmd);
+    BOOL result=NO;
+    if (original) {
+        result=((BOOL(*)(id,SEL,id,id))original)(
+            self,cmd,arg1,arg2);
+    }
+    XLGToastProbeLog(
+        @"CALL %@.%@ arg1=%@ arg2=%@ -> %@",
+        NSStringFromClass([self class]),
+        NSStringFromSelector(cmd),
+        XLGToastProbeObject(arg1),
+        XLGToastProbeObject(arg2),
+        result ? @"YES" : @"NO");
+    return result;
+}
+
+static BOOL XLGToastProbeCanDisplay(id self,
+                                    SEL cmd,
+                                    id toaster,
+                                    id toast,
+                                    unsigned long long priority) {
+    IMP original=XLGToastProbeOriginal(self,cmd);
+    BOOL result=NO;
+    if (original) {
+        result=((BOOL(*)(id,SEL,id,id,unsigned long long))original)(
+            self,cmd,toaster,toast,priority);
+    }
+
+    XLGToastProbeLog(
+        @"CAN_DISPLAY class=%@ toaster=%@ toast=%@ priority=%llu -> %@",
+        NSStringFromClass([self class]),
+        XLGToastProbeObject(toaster),
+        XLGToastProbeObject(toast),
+        priority,
+        result ? @"YES" : @"NO");
+    XLGToastProbeWindowSnapshot(@"can-display");
+    return result;
+}
+
+static BOOL XLGToastProbeMethodHasObjectArg(Method method,
+                                            unsigned int index) {
+    if (!method || index>=method_getNumberOfArguments(method)) return NO;
+    char type[64]={0};
+    method_getArgumentType(method,index,type,sizeof(type));
+    const char *p=type;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    return *p=='@' || *p=='#';
+}
+
+static BOOL XLGToastProbeMethodHasIntegerArg(Method method,
+                                             unsigned int index) {
+    if (!method || index>=method_getNumberOfArguments(method)) return NO;
+    char type[64]={0};
+    method_getArgumentType(method,index,type,sizeof(type));
+    const char *p=type;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    return strchr("cislqCISLQB",*p)!=NULL;
+}
+
+static char XLGToastProbeReturnKind(Method method) {
+    if (!method) return '?';
+    char type[32]={0};
+    method_getReturnType(method,type,sizeof(type));
+    const char *p=type;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    return *p ?: '?';
+}
+
+static void XLGToastProbeHookSelectorAcrossClasses(
+    NSString *selectorName,
+    NSUInteger argumentCount,
+    char returnKind,
+    IMP replacement) {
+
+    SEL selector=NSSelectorFromString(selectorName);
+    int classCount=objc_getClassList(NULL,0);
+    if (classCount<=0) return;
+
+    Class *classes=(Class *)calloc((size_t)classCount,sizeof(Class));
+    classCount=objc_getClassList(classes,classCount);
+
+    for (int i=0;i<classCount;i++) {
+        Class cls=classes[i];
+        unsigned int count=0;
+        Method *methods=class_copyMethodList(cls,&count);
+        Method direct=NULL;
+        for (unsigned int j=0;j<count;j++) {
+            Method method=methods[j];
+            if (method_getName(method)==selector) {
+                direct=method;
+                break;
+            }
+        }
+        if (methods) free(methods);
+        if (!direct) continue;
+        if (method_getNumberOfArguments(direct)!=argumentCount+2) continue;
+        if (XLGToastProbeReturnKind(direct)!=returnKind) continue;
+
+        XLGToastProbeHookDirectMethod(cls,selector,replacement);
+    }
+
+    free(classes);
+}
+
+static void XLGToastProbeHookTFNToasterCandidates(void) {
+    Class cls=NSClassFromString(@"TFNToaster");
+    if (!cls) return;
+
+    unsigned int count=0;
+    Method *methods=class_copyMethodList(cls,&count);
+    for (unsigned int i=0;i<count;i++) {
+        Method method=methods[i];
+        SEL selector=method_getName(method);
+        NSString *name=NSStringFromSelector(selector).lowercaseString ?: @"";
+        BOOL relevant=
+            [name containsString:@"toast"] ||
+            [name containsString:@"show"] ||
+            [name containsString:@"display"] ||
+            [name containsString:@"present"] ||
+            [name containsString:@"enqueue"];
+        if (!relevant) continue;
+
+        unsigned int argc=method_getNumberOfArguments(method);
+        char ret=XLGToastProbeReturnKind(method);
+
+        if (ret=='v' &&
+            argc==3 &&
+            XLGToastProbeMethodHasObjectArg(method,2)) {
+            XLGToastProbeHookDirectMethod(
+                cls,selector,(IMP)XLGToastProbeVoidOneObject);
+            continue;
+        }
+
+        if (ret=='v' &&
+            argc==4 &&
+            XLGToastProbeMethodHasObjectArg(method,2) &&
+            XLGToastProbeMethodHasIntegerArg(method,3)) {
+            XLGToastProbeHookDirectMethod(
+                cls,selector,(IMP)XLGToastProbeVoidObjectPriority);
+            continue;
+        }
+
+        XLGToastProbeLog(
+            @"TFNTOASTER_CANDIDATE selector=%@ types=%s not-hooked",
+            NSStringFromSelector(selector),
+            method_getTypeEncoding(method) ?: "-");
+    }
+    if (methods) free(methods);
+}
+
+static void XLGInstallToastProbe(void) {
+    if (gXLGToastProbeInstalled) return;
+    gXLGToastProbeInstalled=YES;
+
+    if (!gXLGToastProbeBannerLogged) {
+        gXLGToastProbeBannerLogged=YES;
+        NSString *path=XLGToastProbeLogPath();
+        if (path.length) {
+            [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+        }
+        XLGToastProbeLog(
+            @"========== XLiquidGlass 1.9.2 Beta 1 Toast Probe ==========");
+        XLGToastProbeLog(@"logPath=%@",path ?: @"-");
+        XLGToastProbeLog(@"liquidGlass=%@",
+                         XLGEnabled() ? @"ON" : @"OFF");
+    }
+
+    for (NSString *className in @[
+            @"T1TweetSentToast",
+            @"T1UndoTweetSentToast",
+            @"TFNToaster",
+            @"TFNToastWindow"
+        ]) {
+        XLGToastProbeDumpClass(className);
+    }
+
+    // High-level sent-post path.
+    XLGToastProbeHookSelectorAcrossClasses(
+        @"_presentSentTweetToastIfActive:",
+        1,'v',(IMP)XLGToastProbeVoidOneObject);
+
+    XLGToastProbeHookSelectorAcrossClasses(
+        @"_presentUndoTweetSendingToastIfNeededFromNotification:",
+        1,'v',(IMP)XLGToastProbeVoidOneObject);
+
+    XLGToastProbeHookSelectorAcrossClasses(
+        @"_presentUndoTweetSentToastIfNeededFromNotification:",
+        1,'v',(IMP)XLGToastProbeVoidOneObject);
+
+    // Detect whether Liquid Glass makes the X context reject the sent toast.
+    XLGToastProbeHookSelectorAcrossClasses(
+        @"_t1_shouldSuppressSentTweetToastForComposition:account:",
+        2,'B',(IMP)XLGToastProbeBoolTwoObjects);
+
+    SEL canDisplaySEL=
+        NSSelectorFromString(@"toaster:canDisplayToast:withPriority:");
+    int classCount=objc_getClassList(NULL,0);
+    if (classCount>0) {
+        Class *classes=(Class *)calloc((size_t)classCount,sizeof(Class));
+        classCount=objc_getClassList(classes,classCount);
+        for (int i=0;i<classCount;i++) {
+            Class cls=classes[i];
+            unsigned int count=0;
+            Method *methods=class_copyMethodList(cls,&count);
+            for (unsigned int j=0;j<count;j++) {
+                Method method=methods[j];
+                if (method_getName(method)!=canDisplaySEL) continue;
+                if (method_getNumberOfArguments(method)!=5) continue;
+                if (XLGToastProbeReturnKind(method)!='B' &&
+                    XLGToastProbeReturnKind(method)!='c') continue;
+                if (!XLGToastProbeMethodHasObjectArg(method,2) ||
+                    !XLGToastProbeMethodHasObjectArg(method,3) ||
+                    !XLGToastProbeMethodHasIntegerArg(method,4)) continue;
+                XLGToastProbeHookDirectMethod(
+                    cls,canDisplaySEL,(IMP)XLGToastProbeCanDisplay);
+            }
+            if (methods) free(methods);
+        }
+        free(classes);
+    }
+
+    XLGToastProbeHookTFNToasterCandidates();
+    XLGToastProbeWindowSnapshot(@"probe-installed");
+}
+
 static BOOL gXLGGuideRouterHookInstalled = NO;
 
 static void XLGInstallGuideRouterHook(void) {
@@ -5900,6 +6389,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
     XLGInstallGuideRouterHook();
+    XLGInstallToastProbe();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -5915,7 +6405,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.1 stable loaded: direct remote notification badge promotion + native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.2 Beta 1 loaded: sent-toast probe + 1.9.1 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
