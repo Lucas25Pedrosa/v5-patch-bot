@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.7.1 Beta 20
+#pragma mark - XLiquidGlass 1.7.2 Beta 21
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -47,6 +47,7 @@ static IMP gOrigNotificationsViewDidAppear = NULL;
 static IMP gOrigNavProbePushViewController = NULL;
 static IMP gOrigNavProbePresentViewController = NULL;
 static IMP gOrigNavProbeOpenURL = NULL;
+static IMP gOrigNavProbeSendAction = NULL;
 static IMP gOrigNavProbeT1OpenURL = NULL;
 static IMP gOrigNavProbeTrendingFactoryCreate = NULL;
 static NSMutableDictionary<NSString *, NSValue *> *gXLGNavProbeViewAppearOriginals = nil;
@@ -613,7 +614,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlassBeta20FullNavigationProbe.log"];
+            @"XLiquidGlassBeta21ProfileGuideProbe.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -728,6 +729,7 @@ static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
         @"stack=%@",XLGNavigationProbeStackDescription(navigation));
 
     NSArray<NSString *> *selectors=@[
+        @"showProfileForUsername:orUserID:fromPanel:source:sourceNavigationMetadata:completion:",
         @"showAiTrendDetailsWithID:mode:account:source:completion:",
         @"showTrendsWithSource:scribeContext:completion:",
         @"showTrendsSettingsWithSource:completion:",
@@ -778,7 +780,9 @@ static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
                 [lower containsString:@"search"] ||
                 [lower containsString:@"news"] ||
                 [lower containsString:@"premium"] ||
-                [lower containsString:@"subscription"]) {
+                [lower containsString:@"subscription"] ||
+                [lower containsString:@"profile"] ||
+                [lower containsString:@"user"]) {
                 const char *types=method_getTypeEncoding(methods[i]);
                 XLGNavigationProbeLog(
                     @"APPNAV_METHOD %@ types=%s",
@@ -790,7 +794,11 @@ static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
     }
 
     for (NSString *className in @[
+        @"T1TwitterSwift.GuideContainerViewController",
+        @"_TtC14T1TwitterSwift28GuideContainerViewController",
         @"T1TrendingPageViewControllerFactory",
+        @"T1TwitterSwift.GuideContainerViewController",
+        @"_TtC14T1TwitterSwift28GuideContainerViewController",
         @"T1TrendsLandingViewController",
         @"T1SearchViewController",
         @"T1SearchResultsViewController",
@@ -1022,6 +1030,95 @@ static void XLGInstallNavigationProbeTargetViewHook(
         method_getTypeEncoding(method));
 }
 
+static NSString *XLGNavProbeControlLabel(id sender) {
+    if (!sender) return @"-";
+
+    NSMutableArray<NSString *> *parts=[NSMutableArray array];
+    if ([sender isKindOfClass:UIButton.class]) {
+        NSString *title=((UIButton *)sender).titleLabel.text;
+        if (title.length) [parts addObject:title];
+    }
+
+    if ([sender respondsToSelector:@selector(accessibilityLabel)]) {
+        NSString *label=[sender accessibilityLabel];
+        if (label.length) [parts addObject:label];
+    }
+    if ([sender respondsToSelector:@selector(accessibilityIdentifier)]) {
+        NSString *identifier=[sender accessibilityIdentifier];
+        if (identifier.length) [parts addObject:identifier];
+    }
+
+    return parts.count
+        ? [parts componentsJoinedByString:@" | "]
+        : @"-";
+}
+
+static BOOL XLGNavProbeTopIsGuideContainer(void) {
+    UIViewController *presenter=XLGSidebarContentPresentingViewController();
+    UINavigationController *navigation=
+        XLGNavigationControllerForPresenter(presenter);
+    NSString *name=navigation.topViewController
+        ? NSStringFromClass(navigation.topViewController.class)
+        : @"";
+    return [name containsString:@"GuideContainerViewController"];
+}
+
+static BOOL XLGNavProbeSendAction(
+    id self,
+    SEL cmd,
+    SEL action,
+    id target,
+    id sender,
+    UIEvent *event) {
+
+    if (gXLGNavigationProbeActive) {
+        NSString *actionName=action ? NSStringFromSelector(action) : @"-";
+        NSString *targetName=target
+            ? NSStringFromClass([target class]) : @"nil";
+        NSString *senderName=sender
+            ? NSStringFromClass([sender class]) : @"nil";
+        NSString *label=XLGNavProbeControlLabel(sender);
+        NSString *combined=
+            [NSString stringWithFormat:@"%@ %@ %@ %@",
+             actionName,targetName,senderName,label].lowercaseString;
+
+        BOOL interesting=
+            XLGNavProbeTopIsGuideContainer() ||
+            [combined containsString:@"guide"] ||
+            [combined containsString:@"trend"] ||
+            [combined containsString:@"news"] ||
+            [combined containsString:@"explore"] ||
+            [combined containsString:@"search"];
+
+        if (interesting) {
+            XLGNavigationProbeLog(
+                @"UI_ACTION action=%@ target=%@ ptr=%p sender=%@ ptr=%p label=%@ event=%@",
+                actionName,
+                targetName,
+                target,
+                senderName,
+                sender,
+                label,
+                event ? NSStringFromClass(event.class) : @"nil");
+
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                              (int64_t)(0.20*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    XLGNavigationProbeRuntimeSnapshot(
+                        @"after-guide-ui-action");
+                });
+        }
+    }
+
+    if (gOrigNavProbeSendAction) {
+        return ((BOOL(*)(id,SEL,SEL,id,id,id))
+                gOrigNavProbeSendAction)(
+                    self,cmd,action,target,sender,event);
+    }
+    return NO;
+}
+
 static void XLGInstallNavigationProbeHooks(void) {
     if (gXLGNavigationProbeHooksInstalled) return;
 
@@ -1046,6 +1143,19 @@ static void XLGInstallNavigationProbeHooks(void) {
     }
 
     Class appClass=UIApplication.class;
+
+    SEL sendActionSEL=
+        @selector(sendAction:to:from:forEvent:);
+    if (!gOrigNavProbeSendAction &&
+        [appClass instancesRespondToSelector:sendActionSEL]) {
+        XLGHookMethod(
+            appClass,
+            sendActionSEL,
+            NO,
+            (IMP)XLGNavProbeSendAction,
+            &gOrigNavProbeSendAction);
+    }
+
     SEL openSEL=
         @selector(openURL:options:completionHandler:);
     if (!gOrigNavProbeOpenURL &&
@@ -1137,7 +1247,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Inicie a captura. Teste Explorar, Notícias, uma Trending, X Premium, a notificação 'seguiu você' e um swipe da esquerda para a direita. Depois volte e copie o relatório. Faça primeiro com Liquid Glass. Este probe não faz dump recursivo de objetos Swift.";
+    return @"Inicie a captura. Teste Explorar > Notícias/Trending e a notificação 'seguiu você'. O swipe agora usa somente o gesto nativo: confirme visualmente se deixou de abrir duas vezes. Depois copie o relatório. Este probe não faz dump recursivo de objetos Swift.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1197,7 +1307,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.7.1 Beta 20 Navigation Probe ==========");
+            @"========== XLiquidGlass 1.7.2 Beta 21 Navigation Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1209,7 +1319,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.7.1 Beta 20 Navigation Probe ==========");
+                @"========== XLiquidGlass 1.7.2 Beta 21 Navigation Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -1605,6 +1715,48 @@ static void XLGOwnNotifHandleTap(
     BOOL grouped=(statusID<=0) && XLGNotifIsGroupedNewPostCell(self);
 
     if (gXLGNavigationProbeActive) {
+        id viewModel=XLGNotifObjectIvar(self,"viewModel");
+        if (!viewModel) {
+            @try {
+                viewModel=[self valueForKey:@"viewModel"];
+            } @catch (__unused NSException *exception) {
+            }
+        }
+
+        id displayUsers=XLGNotifObjectGetter(viewModel,@"displayUsers");
+        if (!displayUsers) {
+            displayUsers=XLGNotifObjectIvar(viewModel,"displayUsers");
+        }
+
+        NSArray *users=
+            [displayUsers isKindOfClass:NSArray.class]
+                ? (NSArray *)displayUsers
+                : (displayUsers ? @[displayUsers] : @[]);
+
+        XLGNavigationProbeLog(
+            @"NOTIFICATION_MODEL viewModelClass=%@ displayUsersClass=%@ count=%lu",
+            viewModel ? NSStringFromClass([viewModel class]) : @"nil",
+            displayUsers ? NSStringFromClass([displayUsers class]) : @"nil",
+            (unsigned long)users.count);
+
+        NSUInteger userIndex=0;
+        for (id user in users) {
+            if (userIndex>=8) break;
+            id username=XLGNotifObjectGetter(user,@"username");
+            if (!username) username=XLGNotifObjectGetter(user,@"screenName");
+            if (!username) username=XLGNotifObjectGetter(user,@"userName");
+            id name=XLGNotifObjectGetter(user,@"name");
+            XLGNavigationProbeLog(
+                @"NOTIFICATION_USER index=%lu class=%@ ptr=%p userID=%@ username=%@ name=%@",
+                (unsigned long)userIndex,
+                NSStringFromClass([user class]),
+                user,
+                XLGTryResolveUserID(user,0) ?: @"-",
+                username ?: @"-",
+                name ?: @"-");
+            userIndex++;
+        }
+
         NSString *visibleText=
             [self isKindOfClass:UIView.class]
                 ? XLGNotifVisibleText((UIView *)self)
@@ -4347,7 +4499,9 @@ static void XLGInstallHooks(void) {
     }
 
     XLGSyncCompatibilityGate();
-    XLGInstallSidebarFix();
+    // Beta 21: do not install our extra UIScreenEdgePanGestureRecognizer.
+    // X 12.28.1 already owns a UIPanGestureRecognizer on T1Window; Beta 20
+    // proved both were recognizing the same left-edge swipe simultaneously.
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
@@ -4367,7 +4521,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.7.1 Beta 20 loaded: full passive navigation probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.7.2 Beta 21 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
