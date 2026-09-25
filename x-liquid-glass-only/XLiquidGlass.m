@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.1 Beta 2
+#pragma mark - XLiquidGlass 1.9.1 Beta 4
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -2926,6 +2926,7 @@ static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeSourceSt
 static const NSTimeInterval kXLGBadgeReconcileWindow = 0.75;
 static const NSTimeInterval kXLGNotificationsViewedGraceWindow = 5.0;
 static const NSTimeInterval kXLGNativeBadgeSignalGraceWindow = 1.25;
+static const NSTimeInterval kXLGDirectRemoteAuthorityWindow = 1.0;
 static BOOL gXLGBadgePersistenceLoaded = NO;
 static IMP gOrigXNavItemLayout = NULL;
 static IMP gOrigActiveAccountDidChange = NULL;
@@ -3559,6 +3560,50 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
             (long)*dm,
             (long)*xchat,
             (long)*total);
+        return YES;
+    }
+
+    // 1.9.1 Beta 4: the timing probe proved that the authoritative
+    // TFNTwitterAccount callback can be followed 10-20 ms later by two broken
+    // aggregate maps: first ntab->dm, then all zero. During that tiny window,
+    // prefer the exact positive notification-only remote tuple even if the
+    // local DM setter has not run recently. A real read is handled above by
+    // XLGNotificationsRecentlyViewedForUserID.
+    NSTimeInterval directNow=NSDate.date.timeIntervalSince1970;
+    NSTimeInterval directRemoteTimestamp=
+        [source[@"remoteTimestamp"] respondsToSelector:@selector(doubleValue)]
+            ? [source[@"remoteTimestamp"] doubleValue] : 0;
+    NSTimeInterval directRemoteAge=
+        directRemoteTimestamp>0
+            ? directNow-directRemoteTimestamp
+            : DBL_MAX;
+    BOOL directRemoteFresh=
+        directRemoteAge>=0 &&
+        directRemoteAge<=kXLGDirectRemoteAuthorityWindow;
+    BOOL directRemoteNotificationOnly=
+        remoteNtab>0 &&
+        remoteDM==0 &&
+        remoteXChat==0 &&
+        remoteTotal==remoteNtab;
+
+    if (directRemoteFresh &&
+        directRemoteNotificationOnly &&
+        (rawMisroute || rawZero)) {
+        *ntab=remoteNtab;
+        *dm=0;
+        *xchat=0;
+        *total=remoteTotal;
+
+        XLGDiagLog(
+            @"PRESERVE_FRESH_DIRECT_REMOTE user=%@ age=%.3f raw(ntab=%ld dm=%ld xchat=%ld total=%ld) -> ntab=%ld dm=0 xchat=0 total=%ld",
+            userID,
+            directRemoteAge,
+            (long)rawNtab,
+            (long)rawDM,
+            (long)rawXChat,
+            (long)rawTotal,
+            (long)remoteNtab,
+            (long)remoteTotal);
         return YES;
     }
 
@@ -4625,6 +4670,59 @@ static void XLGAppBadgingSetLocalUnseenXChatCountUserIDDate(id self,
 
 }
 
+static void XLGPromoteDirectRemoteNotificationBadgeState(
+    NSString *userID,
+    uintptr_t ntabRaw,
+    uintptr_t dmRaw,
+    uintptr_t xchatRaw,
+    uintptr_t totalRaw) {
+
+    if (!userID.length) return;
+
+    NSInteger ntab=XLGIntegerFromObjectPointer(ntabRaw,-1);
+    NSInteger dm=XLGIntegerFromObjectPointer(dmRaw,-1);
+    NSInteger xchat=XLGIntegerFromObjectPointer(xchatRaw,-1);
+    NSInteger total=XLGIntegerFromObjectPointer(totalRaw,-1);
+
+    // The Beta 3 timing probe showed this exact tuple is the first correct
+    // notification state. Restrict the fast path to it so chat semantics stay
+    // on the already-validated reconciler.
+    if (ntab<=0 || dm!=0 || xchat!=0 || total!=ntab) return;
+
+    NSMutableDictionary *state=
+        XLGMutableBadgeStateForUserID(userID,YES);
+    state[@"ntab"]=@(ntab);
+    state[@"dm"]=@0;
+    state[@"xchat"]=@0;
+    state[@"total"]=@(total);
+    state[@"timestamp"]=@(NSDate.date.timeIntervalSince1970);
+
+    XLGPersistBadgeStates();
+
+    // Do this before X's original implementation emits the broken aggregate
+    // maps. XLGCurrentActiveUserID keeps inactive-account updates from being
+    // rendered on the visible account.
+    XLGRefreshGlobalTabBar();
+
+    // Rebind across the same run-loop transition in case X rebuilds the
+    // TabBarItemView while processing the original callback.
+    for (NSNumber *delayNumber in @[@0.02,@0.08,@0.20]) {
+        NSTimeInterval delay=delayNumber.doubleValue;
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                XLGRefreshGlobalTabBar();
+            });
+    }
+
+    XLGDiagLog(
+        @"DIRECT_REMOTE_PROMOTE user=%@ ntab=%ld dm=0 xchat=0 total=%ld",
+        userID,
+        (long)ntab,
+        (long)total);
+}
+
 static void XLGTFNApplyRemoteBadgeCounts(id self,
                                          SEL cmd,
                                          uintptr_t ntab,
@@ -4636,6 +4734,11 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
 
     if (![userID isEqualToString:@"-"]) {
         XLGRememberRemoteBadgeSource(userID, ntab, dm, xchat, total);
+
+        // Beta 3 proved the correct ntab count exists here before X emits the
+        // bad aggregate maps. Promote before calling the original method.
+        XLGPromoteDirectRemoteNotificationBadgeState(
+            userID,ntab,dm,xchat,total);
     }
 
     if (gOrigTFNApplyRemoteBadgeCounts) {
@@ -5812,7 +5915,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.1 Beta 2 loaded: native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.1 Beta 4 loaded: direct remote notification badge promotion + native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
