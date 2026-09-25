@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.0
+#pragma mark - XLiquidGlass 1.9.1 Beta 2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -2923,6 +2923,7 @@ static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeStateByU
 static NSMutableDictionary<NSString *, NSMutableDictionary *> *gXLGBadgeSourceStateByUserID = nil;
 static const NSTimeInterval kXLGBadgeReconcileWindow = 0.75;
 static const NSTimeInterval kXLGNotificationsViewedGraceWindow = 5.0;
+static const NSTimeInterval kXLGNativeBadgeSignalGraceWindow = 1.25;
 static BOOL gXLGBadgePersistenceLoaded = NO;
 static IMP gOrigXNavItemLayout = NULL;
 static IMP gOrigActiveAccountDidChange = NULL;
@@ -2931,6 +2932,8 @@ static IMP gOrigAppBadgingSetUserIDsCurrentUserID = NULL;
 static IMP gOrigAppBadgingSetLocalUnseenDMCountUserIDDate = NULL;
 static IMP gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate = NULL;
 static IMP gOrigTFNApplyRemoteBadgeCounts = NULL;
+static IMP gOrigT1TabViewSetBadgeCountAnimated = NULL;
+static IMP gOrigT1TabViewSetBadgeCount = NULL;
 static id gXLGBadgeNotificationObserver = nil;
 static id gXLGDefaultsObserver = nil;
 static char kXLGBadgeLabelKey;
@@ -3452,6 +3455,74 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         rawDM == 0 &&
         rawXChat == 0 &&
         rawTotal == 0;
+
+    // 1.9.1 Beta 2: mirror the native T1TabView badge signal during the
+    // short interval before AccountBadgesDidChange catches up. The native
+    // classic tab receives the same visible count immediately, even while
+    // Liquid Glass is rendering XNavigation.TabBarItemView.
+    NSTimeInterval nativeNow=NSDate.date.timeIntervalSince1970;
+    NSTimeInterval nativeNtabTimestamp=
+        [source[@"nativeNtabTimestamp"] respondsToSelector:@selector(doubleValue)]
+            ? [source[@"nativeNtabTimestamp"] doubleValue] : 0;
+    NSTimeInterval nativeChatTimestamp=
+        [source[@"nativeChatTimestamp"] respondsToSelector:@selector(doubleValue)]
+            ? [source[@"nativeChatTimestamp"] doubleValue] : 0;
+    NSTimeInterval nativeNtabAge=
+        nativeNtabTimestamp>0 ? nativeNow-nativeNtabTimestamp : DBL_MAX;
+    NSTimeInterval nativeChatAge=
+        nativeChatTimestamp>0 ? nativeNow-nativeChatTimestamp : DBL_MAX;
+    BOOL nativeNtabFresh=
+        nativeNtabAge>=0 &&
+        nativeNtabAge<=kXLGNativeBadgeSignalGraceWindow &&
+        [source[@"nativeNtab"] respondsToSelector:@selector(integerValue)];
+    BOOL nativeChatFresh=
+        nativeChatAge>=0 &&
+        nativeChatAge<=kXLGNativeBadgeSignalGraceWindow &&
+        [source[@"nativeChat"] respondsToSelector:@selector(integerValue)];
+
+    if (nativeNtabFresh || nativeChatFresh) {
+        NSDictionary *cached=XLGBadgeStateForUserID(userID);
+        NSInteger cachedDM=XLGStateInteger(cached,@"dm",0);
+        NSInteger cachedXChat=XLGStateInteger(cached,@"xchat",0);
+        NSInteger cachedChat=
+            cachedXChat>0 ? cachedXChat : MAX((NSInteger)0,cachedDM);
+        NSInteger cachedNotifications=
+            XLGNotificationDisplayCountForState(cached);
+        if (cachedNotifications<0) cachedNotifications=0;
+
+        NSInteger effectiveNtab=
+            nativeNtabFresh
+                ? MAX((NSInteger)0,[source[@"nativeNtab"] integerValue])
+                : MAX((NSInteger)0,rawNtab);
+        NSInteger effectiveChat=
+            nativeChatFresh
+                ? MAX((NSInteger)0,[source[@"nativeChat"] integerValue])
+                : MAX((NSInteger)0,cachedChat);
+
+        *ntab=effectiveNtab;
+        if (nativeChatFresh) {
+            *dm=effectiveChat;
+            *xchat=effectiveChat;
+        } else {
+            *dm=MAX((NSInteger)0,cachedDM);
+            *xchat=MAX((NSInteger)0,cachedXChat);
+        }
+        *total=MAX((NSInteger)0,effectiveNtab+effectiveChat);
+
+        XLGDiagLog(
+            @"NATIVE_BADGE_GRACE user=%@ ntabFresh=%@ chatFresh=%@ nativeNtabAge=%.3f nativeChatAge=%.3f -> ntab=%ld dm=%ld xchat=%ld total=%ld cachedNotifications=%ld",
+            userID,
+            nativeNtabFresh ? @"YES" : @"NO",
+            nativeChatFresh ? @"YES" : @"NO",
+            nativeNtabAge,
+            nativeChatAge,
+            (long)*ntab,
+            (long)*dm,
+            (long)*xchat,
+            (long)*total,
+            (long)cachedNotifications);
+        return YES;
+    }
 
     NSTimeInterval viewedAge=DBL_MAX;
     BOOL recentlyViewed=
@@ -4673,6 +4744,170 @@ static void XLGXNavItemLayout(id self, SEL cmd) {
     }
 }
 
+static void XLGConsumeNativeT1TabBadgeSignal(id tabView,
+                                             unsigned long long rawCount) {
+    if (!XLGEnabled() || !tabView) return;
+
+    NSString *identifier=nil;
+    NSString *label=nil;
+    if ([tabView respondsToSelector:@selector(accessibilityIdentifier)]) {
+        identifier=((id(*)(id,SEL))objc_msgSend)(
+            tabView,@selector(accessibilityIdentifier));
+    }
+    if ([tabView respondsToSelector:@selector(accessibilityLabel)]) {
+        label=((id(*)(id,SEL))objc_msgSend)(
+            tabView,@selector(accessibilityLabel));
+    }
+
+    NSString *identity=
+        [NSString stringWithFormat:@"%@ %@",
+         identifier ?: @"",
+         label ?: @""].lowercaseString;
+
+    BOOL notifications=
+        [identifier.lowercaseString isEqualToString:@"notifications_tab"] ||
+        [identity containsString:@"notification"] ||
+        [identity containsString:@"notifica"];
+    BOOL chat=
+        [identifier.lowercaseString isEqualToString:@"dm_tab"] ||
+        [identity containsString:@"bate-papo"] ||
+        [identity containsString:@"chat"] ||
+        [identity containsString:@"message"] ||
+        [identity containsString:@"mensag"];
+
+    if (!notifications && !chat) return;
+
+    NSString *userID=
+        XLGTryResolveUserID(XLGSidebarCurrentAccount(),0);
+    if (!userID.length) userID=XLGCurrentActiveUserID();
+    if (!userID.length) return;
+
+    NSInteger count=(NSInteger)MIN(
+        rawCount,(unsigned long long)NSIntegerMax);
+    count=MAX((NSInteger)0,count);
+
+    NSMutableDictionary *state=
+        XLGMutableBadgeStateForUserID(userID,YES);
+    NSMutableDictionary *source=
+        XLGSourceStateForUserID(userID,YES);
+    NSTimeInterval now=NSDate.date.timeIntervalSince1970;
+
+    if (notifications) {
+        NSInteger chatCount=XLGChatDisplayCountForState(state);
+        if (chatCount<0) chatCount=0;
+
+        state[@"ntab"]=@(count);
+        state[@"total"]=@(count+MAX((NSInteger)0,chatCount));
+        source[@"nativeNtab"]=@(count);
+        source[@"nativeNtabTimestamp"]=@(now);
+
+        // A native zero is X's own visible badge transition. Do not let an
+        // older trusted remote snapshot immediately resurrect it.
+        if (count==0) {
+            source[@"trustedNotifications"]=@NO;
+            source[@"remoteNtab"]=@0;
+            source[@"remoteTotal"]=@(MAX((NSInteger)0,chatCount));
+            source[@"remoteTimestamp"]=@(now);
+        }
+    } else if (chat) {
+        NSInteger notificationCount=
+            XLGNotificationDisplayCountForState(state);
+        if (notificationCount<0) notificationCount=0;
+
+        // DM_tab is the visible chat badge source. Mirror it to both chat
+        // fields; the later account map still disambiguates DM versus XChat.
+        state[@"dm"]=@(count);
+        state[@"xchat"]=@(count);
+        state[@"total"]=@(MAX((NSInteger)0,notificationCount)+count);
+        source[@"nativeChat"]=@(count);
+        source[@"nativeChatTimestamp"]=@(now);
+    }
+
+    state[@"timestamp"]=@(now);
+    XLGPersistBadgeStates();
+    XLGRefreshGlobalTabBar();
+
+    // The Liquid Glass bar can rebuild within the same run-loop transition.
+    // Re-apply the already-cached native count after those short rebuilds.
+    for (NSNumber *delayNumber in @[@0.04,@0.18]) {
+        NSTimeInterval delay=delayNumber.doubleValue;
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                XLGRefreshGlobalTabBar();
+            });
+    }
+}
+
+static void XLGT1TabViewSetBadgeCountAnimated(id self,
+                                               SEL cmd,
+                                               unsigned long long count,
+                                               BOOL animated) {
+    if (gOrigT1TabViewSetBadgeCountAnimated) {
+        ((void(*)(id,SEL,unsigned long long,BOOL))
+            gOrigT1TabViewSetBadgeCountAnimated)(
+                self,cmd,count,animated);
+    }
+    XLGConsumeNativeT1TabBadgeSignal(self,count);
+}
+
+static void XLGT1TabViewSetBadgeCount(id self,
+                                      SEL cmd,
+                                      unsigned long long count) {
+    if (gOrigT1TabViewSetBadgeCount) {
+        ((void(*)(id,SEL,unsigned long long))
+            gOrigT1TabViewSetBadgeCount)(
+                self,cmd,count);
+    }
+    XLGConsumeNativeT1TabBadgeSignal(self,count);
+}
+
+static void XLGInstallNativeT1TabBadgeBridge(void) {
+    Class tabViewClass=NSClassFromString(@"T1TabView");
+    if (!tabViewClass) return;
+
+    SEL animatedSEL=NSSelectorFromString(@"setBadgeCount:animated:");
+    Method animatedMethod=
+        class_getInstanceMethod(tabViewClass,animatedSEL);
+    if (animatedMethod &&
+        method_getNumberOfArguments(animatedMethod)==4 &&
+        !gOrigT1TabViewSetBadgeCountAnimated) {
+        char ret[16]={0};
+        method_getReturnType(animatedMethod,ret,sizeof(ret));
+        const char *r=ret;
+        while (*r && strchr("rnNoORV",*r)) r++;
+        if (*r=='v') {
+            XLGHookMethod(
+                tabViewClass,
+                animatedSEL,
+                NO,
+                (IMP)XLGT1TabViewSetBadgeCountAnimated,
+                &gOrigT1TabViewSetBadgeCountAnimated);
+        }
+    }
+
+    SEL plainSEL=NSSelectorFromString(@"setBadgeCount:");
+    Method plainMethod=
+        class_getInstanceMethod(tabViewClass,plainSEL);
+    if (plainMethod &&
+        method_getNumberOfArguments(plainMethod)==3 &&
+        !gOrigT1TabViewSetBadgeCount) {
+        char ret[16]={0};
+        method_getReturnType(plainMethod,ret,sizeof(ret));
+        const char *r=ret;
+        while (*r && strchr("rnNoORV",*r)) r++;
+        if (*r=='v') {
+            XLGHookMethod(
+                tabViewClass,
+                plainSEL,
+                NO,
+                (IMP)XLGT1TabViewSetBadgeCount,
+                &gOrigT1TabViewSetBadgeCount);
+        }
+    }
+}
+
 static void XLGInstallGlobalTabBarFixes(void) {
     XLGLoadPersistedBadgeCounts();
 
@@ -4778,6 +5013,7 @@ static void XLGInstallGlobalTabBarFixes(void) {
     }
 
     XLGInstallBadgeReconciliationHooks();
+    XLGInstallNativeT1TabBadgeBridge();
     XLGRefreshGlobalTabBar();
 }
 
@@ -5574,7 +5810,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.0 stable loaded: Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.1 Beta 2 loaded: native T1TabView badge bridge + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
