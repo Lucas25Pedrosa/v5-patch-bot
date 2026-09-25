@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.6.3 Final
+#pragma mark - XLiquidGlass 1.6.8 Beta 17
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -418,7 +418,10 @@ static void XLGInstallNFBSettingsIntegration(void) {
 
 static IMP gOrigTabLoad = NULL;
 static IMP gOrigTabAppear = NULL;
+static IMP gOrigOwnNotificationCellDidMoveToWindow = NULL;
 static char kXLGSidebarEdgePanKey;
+static char kXLGOwnNotificationTapKey;
+static BOOL gXLGOwnNotificationRouterHooked = NO;
 
 @class XLiquidGlassSidebarDrawerViewController;
 
@@ -555,6 +558,467 @@ static UINavigationController *XLGNavigationControllerForPresenter(
         return (UINavigationController *)presenter;
     }
     return presenter.navigationController;
+}
+
+#pragma mark - XLiquidGlass native notification router
+
+static id XLGNotifObjectIvar(id object, const char *ivarName) {
+    if (!object || !ivarName) return nil;
+    Ivar ivar=class_getInstanceVariable([object class],ivarName);
+    if (!ivar) return nil;
+    @try {
+        return object_getIvar(object,ivar);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static id XLGNotifObjectGetter(id object, NSString *selectorName) {
+    if (!object || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) return nil;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method) return nil;
+
+    char returnType[64]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *type=returnType;
+    while (*type=='r' || *type=='n' || *type=='N' ||
+           *type=='o' || *type=='O' || *type=='R' || *type=='V') {
+        type++;
+    }
+    if (*type!='@' && *type!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static long long XLGNotifIntegerGetter(id object, NSString *selectorName) {
+    if (!object || !selectorName.length) return 0;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) return 0;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method) return 0;
+
+    char returnType[64]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *type=returnType;
+    while (*type=='r' || *type=='n' || *type=='N' ||
+           *type=='o' || *type=='O' || *type=='R' || *type=='V') {
+        type++;
+    }
+
+    @try {
+        if (*type=='@' || *type=='#') {
+            id value=((id(*)(id,SEL))objc_msgSend)(object,selector);
+            if ([value respondsToSelector:@selector(longLongValue)]) {
+                return [value longLongValue];
+            }
+            return 0;
+        }
+
+        switch (*type) {
+            case 'q':
+            case 'Q':
+            case 'l':
+            case 'L':
+            case 'i':
+            case 'I':
+            case 's':
+            case 'S':
+            case 'c':
+            case 'C':
+                return ((long long(*)(id,SEL))objc_msgSend)(object,selector);
+            default:
+                return 0;
+        }
+    } @catch (__unused NSException *exception) {
+        return 0;
+    }
+}
+
+static long long XLGNotifStatusIDRecursive(id object,
+                                           NSUInteger depth,
+                                           NSHashTable *visited) {
+    if (!object || depth>4) return 0;
+    if ([visited containsObject:object]) return 0;
+    [visited addObject:object];
+
+    if ([object isKindOfClass:NSNumber.class] ||
+        [object isKindOfClass:NSString.class]) {
+        long long value=[object longLongValue];
+        return value>0 ? value : 0;
+    }
+
+    for (NSString *selectorName in @[
+        @"statusIDNumber",
+        @"targetStatusIDNumber",
+        @"statusIDString",
+        @"statusID"
+    ]) {
+        long long value=XLGNotifIntegerGetter(object,selectorName);
+        if (value>0) return value;
+    }
+
+    for (NSString *selectorName in @[
+        @"targetStatusModel",
+        @"targetStatus",
+        @"status",
+        @"tweet",
+        @"representedStatus",
+        @"representeeStatus",
+        @"underlyingViewModel",
+        @"canonicalStatus"
+    ]) {
+        id nested=XLGNotifObjectGetter(object,selectorName);
+        long long value=XLGNotifStatusIDRecursive(
+            nested,depth+1,visited);
+        if (value>0) return value;
+    }
+
+    for (NSString *ivarName in @[
+        @"targetStatusModel",
+        @"targetStatus",
+        @"status",
+        @"tweet"
+    ]) {
+        id nested=XLGNotifObjectIvar(object,ivarName.UTF8String);
+        long long value=XLGNotifStatusIDRecursive(
+            nested,depth+1,visited);
+        if (value>0) return value;
+    }
+
+    return 0;
+}
+
+static long long XLGNotifStatusIDFromCell(id cell) {
+    if (!cell) return 0;
+
+    id viewModel=XLGNotifObjectIvar(cell,"viewModel");
+    if (!viewModel) {
+        @try {
+            viewModel=[cell valueForKey:@"viewModel"];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+
+    NSHashTable *visited=[NSHashTable weakObjectsHashTable];
+    return XLGNotifStatusIDRecursive(viewModel ?: cell,0,visited);
+}
+
+static NSString *XLGNotifFoldedText(NSString *text) {
+    if (![text isKindOfClass:NSString.class] || !text.length) return @"";
+    NSString *folded=[text stringByFoldingWithOptions:
+                      (NSDiacriticInsensitiveSearch|NSCaseInsensitiveSearch)
+                                               locale:NSLocale.currentLocale];
+    return folded.lowercaseString ?: @"";
+}
+
+static NSString *XLGNotifVisibleText(UIView *root) {
+    if (!root) return @"";
+
+    NSMutableString *output=[NSMutableString string];
+    NSMutableArray<UIView *> *queue=[NSMutableArray arrayWithObject:root];
+
+    for (NSUInteger i=0;i<queue.count && i<180;i++) {
+        UIView *view=queue[i];
+        NSString *piece=nil;
+
+        if ([view isKindOfClass:UILabel.class]) {
+            piece=((UILabel *)view).text;
+        } else if ([view isKindOfClass:UITextView.class]) {
+            piece=((UITextView *)view).text;
+        } else if ([view isKindOfClass:UIButton.class]) {
+            piece=((UIButton *)view).titleLabel.text;
+        }
+
+        if (!piece.length) piece=view.accessibilityLabel;
+        if (piece.length) {
+            if (output.length) [output appendString:@" | "];
+            [output appendString:piece];
+        }
+
+        for (UIView *subview in view.subviews ?: @[]) {
+            if (![queue containsObject:subview]) {
+                [queue addObject:subview];
+            }
+        }
+    }
+
+    return output;
+}
+
+static BOOL XLGNotifIsGroupedNewPostCell(id cell) {
+    if (![cell isKindOfClass:UIView.class]) return NO;
+
+    NSString *text=
+        XLGNotifFoldedText(XLGNotifVisibleText((UIView *)cell));
+
+    for (NSString *needle in @[
+        @"novas notificacoes do post",
+        @"novas notificacoes de post",
+        @"new post notifications",
+        @"new posts from",
+        @"new tweet notifications",
+        @"new tweets from"
+    ]) {
+        if ([text containsString:needle]) return YES;
+    }
+
+    return NO;
+}
+
+static BOOL XLGNotifOpenConversation(long long statusID) {
+    if (statusID<=0) return NO;
+
+    id appNavigation=XLGSidebarAppNavigation();
+    id account=XLGSidebarCurrentAccount();
+    UIViewController *presenter=
+        XLGSidebarContentPresentingViewController();
+
+    SEL selector=NSSelectorFromString(
+        @"showConversationViewControllerForViewModel:statusID:account:"
+         "statusNavigationContext:scribeContext:sourceNavigationMetadata:"
+         "fromViewController:animated:");
+
+    if (appNavigation &&
+        account &&
+        presenter &&
+        [appNavigation respondsToSelector:selector]) {
+        typedef void (*ConversationFn)(
+            id,SEL,id,long long,id,id,id,id,id,BOOL);
+        ((ConversationFn)objc_msgSend)(
+            appNavigation,
+            selector,
+            nil,
+            statusID,
+            account,
+            nil,
+            nil,
+            nil,
+            presenter,
+            YES);
+        return YES;
+    }
+
+    NSString *urlString=
+        [NSString stringWithFormat:@"twitter://status?id=%lld",statusID];
+    NSURL *url=[NSURL URLWithString:urlString];
+    if (!url) return NO;
+
+    [UIApplication.sharedApplication
+        openURL:url
+        options:@{}
+        completionHandler:nil];
+    return YES;
+}
+
+static BOOL XLGNotifOpenGroupedNewPosts(void) {
+    id account=XLGSidebarCurrentAccount();
+    if (!account) return NO;
+
+    Class factory=NSClassFromString(
+        @"_TtC14T1TwitterSwift30URTNotificationTimelineFactory");
+    SEL selector=NSSelectorFromString(
+        @"makeTweetNotificationViewControllerWithTimelineType:account:");
+
+    if (!factory || ![factory respondsToSelector:selector]) return NO;
+
+    // X 12.28.1:
+    // 0 = device_follow
+    // 1 = subscriber_device_follow
+    // 2 = verified_device_follow
+    id controller=((id(*)(id,SEL,long long,id))objc_msgSend)(
+        factory,
+        selector,
+        0,
+        account);
+
+    if (![controller isKindOfClass:UIViewController.class]) return NO;
+
+    UIViewController *presenter=
+        XLGSidebarContentPresentingViewController();
+    UINavigationController *navigation=
+        XLGNavigationControllerForPresenter(presenter);
+
+    if (navigation) {
+        [navigation pushViewController:(UIViewController *)controller
+                              animated:YES];
+        return YES;
+    }
+
+    if (presenter) {
+        [presenter presentViewController:(UIViewController *)controller
+                                animated:YES
+                              completion:nil];
+        return YES;
+    }
+
+    return NO;
+}
+
+static BOOL XLGNotifTouchIsInteractive(UIView *view, UIView *cell) {
+    UIView *cursor=view;
+    for (NSUInteger depth=0;
+         cursor && cursor!=cell && depth<16;
+         depth++,cursor=cursor.superview) {
+        if ([cursor isKindOfClass:UIControl.class]) return YES;
+
+        NSString *name=NSStringFromClass(cursor.class).lowercaseString;
+        if ([name containsString:@"button"] ||
+            [name containsString:@"link"] ||
+            [name containsString:@"avatar"] ||
+            [name containsString:@"feedback"] ||
+            [name containsString:@"dismiss"]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL XLGOwnNotifShouldReceiveTouch(
+    id self,
+    SEL _cmd,
+    UIGestureRecognizer *gesture,
+    UITouch *touch) {
+    (void)_cmd;
+    (void)gesture;
+    UIView *view=touch.view;
+    if (!view) return YES;
+    return !XLGNotifTouchIsInteractive(view,(UIView *)self);
+}
+
+static BOOL XLGNotifNavigationChanged(
+    UIViewController *beforePresenter,
+    UIViewController *beforeTop,
+    UIViewController *beforePresented) {
+
+    UIViewController *afterPresenter=
+        XLGSidebarContentPresentingViewController();
+    UINavigationController *afterNavigation=
+        XLGNavigationControllerForPresenter(afterPresenter);
+    UIViewController *afterTop=afterNavigation.topViewController;
+    UIViewController *afterPresented=
+        afterPresenter.presentedViewController;
+
+    if (beforeTop && afterTop && beforeTop!=afterTop) return YES;
+    if (afterPresented && afterPresented!=beforePresented) return YES;
+    if (beforePresenter && afterPresenter &&
+        beforePresenter!=afterPresenter) return YES;
+
+    return NO;
+}
+
+static void XLGOwnNotifHandleTap(
+    id self,
+    SEL _cmd,
+    UITapGestureRecognizer *recognizer) {
+    (void)_cmd;
+
+    if (!XLGEnabled()) return;
+    if (recognizer.state!=UIGestureRecognizerStateEnded) return;
+
+    long long statusID=XLGNotifStatusIDFromCell(self);
+    BOOL grouped=(statusID<=0) && XLGNotifIsGroupedNewPostCell(self);
+
+    if (statusID<=0 && !grouped) return;
+
+    UIViewController *beforePresenter=
+        XLGSidebarContentPresentingViewController();
+    UINavigationController *beforeNavigation=
+        XLGNavigationControllerForPresenter(beforePresenter);
+    UIViewController *beforeTop=beforeNavigation.topViewController;
+    UIViewController *beforePresented=
+        beforePresenter.presentedViewController;
+
+    // Native-first: let X handle the tap. Only repair the route if the
+    // Liquid Glass navigation hierarchy did not change.
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(0.18*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            if (XLGNotifNavigationChanged(
+                    beforePresenter,
+                    beforeTop,
+                    beforePresented)) {
+                return;
+            }
+
+            if (statusID>0) {
+                XLGNotifOpenConversation(statusID);
+            } else if (grouped) {
+                XLGNotifOpenGroupedNewPosts();
+            }
+        });
+}
+
+static void XLGOwnNotifCellDidMoveToWindow(id self, SEL _cmd) {
+    if (gOrigOwnNotificationCellDidMoveToWindow) {
+        ((void(*)(id,SEL))gOrigOwnNotificationCellDidMoveToWindow)(
+            self,_cmd);
+    }
+
+    if (!XLGEnabled()) return;
+    if (![self isKindOfClass:UIView.class]) return;
+
+    UIView *cell=(UIView *)self;
+    if (!cell.window) return;
+
+    UITapGestureRecognizer *recognizer=
+        objc_getAssociatedObject(self,&kXLGOwnNotificationTapKey);
+    if (recognizer) return;
+
+    recognizer=[[UITapGestureRecognizer alloc]
+        initWithTarget:self
+                action:NSSelectorFromString(@"xlg_handleOwnNotificationTap:")];
+    recognizer.cancelsTouchesInView=NO;
+    recognizer.delegate=(id<UIGestureRecognizerDelegate>)self;
+
+    [cell addGestureRecognizer:recognizer];
+
+    objc_setAssociatedObject(
+        self,
+        &kXLGOwnNotificationTapKey,
+        recognizer,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void XLGInstallOwnNotificationRouter(void) {
+    if (gXLGOwnNotificationRouterHooked) return;
+
+    Class cls=NSClassFromString(@"T1URTTimelineNotificationCell");
+    if (!cls) return;
+
+    SEL tapSEL=NSSelectorFromString(@"xlg_handleOwnNotificationTap:");
+    if (![cls instancesRespondToSelector:tapSEL]) {
+        class_addMethod(
+            cls,
+            tapSEL,
+            (IMP)XLGOwnNotifHandleTap,
+            "v@:@");
+    }
+
+    SEL receiveSEL=@selector(gestureRecognizer:shouldReceiveTouch:);
+    if (![cls instancesRespondToSelector:receiveSEL]) {
+        class_addMethod(
+            cls,
+            receiveSEL,
+            (IMP)XLGOwnNotifShouldReceiveTouch,
+            "B@:@@");
+    }
+
+    gXLGOwnNotificationRouterHooked=
+        XLGHookMethod(
+            cls,
+            @selector(didMoveToWindow),
+            NO,
+            (IMP)XLGOwnNotifCellDidMoveToWindow,
+            &gOrigOwnNotificationCellDidMoveToWindow);
 }
 
 static UIViewController *XLGDeepestVisibleViewController(
@@ -2984,6 +3448,7 @@ static void XLGInstallHooks(void) {
     XLGInstallSidebarFix();
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
+    XLGInstallOwnNotificationRouter();
 }
 
 static void XLGScheduleRetry(NSTimeInterval delay) {
@@ -2999,7 +3464,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.3 Final loaded: native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.6.8 Beta 17 loaded: own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
