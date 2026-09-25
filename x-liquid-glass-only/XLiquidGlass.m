@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.0 Beta 1
+#pragma mark - XLiquidGlass 1.9.0 Beta 3
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -65,6 +65,7 @@ static IMP gOrigXAppPremiumProfileCustomization = NULL;
 static IMP gOrigXAppPremiumCustomizeNavigation = NULL;
 static IMP gOrigXAppPremiumAppIcon = NULL;
 static IMP gOrigXAppPremiumSettings = NULL;
+static IMP gOrigXAppShowDisplaySettings = NULL;
 static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
@@ -632,7 +633,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass190Beta1.log"];
+            @"XLiquidGlass190Beta3.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -762,6 +763,7 @@ static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
         @"showPremiumHubWithSource:withCompletion:",
         @"showPremiumHubAfterPurchaseWithSource:withCompletion:",
         @"showPremiumHubPremiumSettingsWithSource:withCompletion:",
+        @"showDisplaySettingsWithSource:withCompletion:",
         @"showPremiumPageWithReferringPage:tier:plan:source:paywallThresholdTier:withCompletion:",
         @"showPremiumPageWithReferringPage:tier:plan:source:withCompletion:",
         @"showPremiumPageWithReferringPage:tier:source:withCompletion:",
@@ -798,6 +800,7 @@ static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
                 [lower containsString:@"search"] ||
                 [lower containsString:@"news"] ||
                 [lower containsString:@"premium"] ||
+                [lower containsString:@"display"] ||
                 [lower containsString:@"subscription"] ||
                 [lower containsString:@"profile"] ||
                 [lower containsString:@"user"]) {
@@ -829,7 +832,8 @@ static void XLGNavigationProbeRuntimeSnapshot(NSString *reason) {
         @"_TtC14T1TwitterSwift30PremiumHubNavigationController",
         @"_TtC14T1TwitterSwift31PremiumHubAppNavigationTabEntry",
         @"_TtC14T1TwitterSwift22T1PremiumHubNavigation",
-        @"T1PremiumSettingsViewController"
+        @"T1PremiumSettingsViewController",
+        @"T1DisplaySettingsViewController"
     ]) {
         Class cls=NSClassFromString(className);
         XLGNavigationProbeLog(
@@ -1746,7 +1750,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"1.9.0 Beta 1 preserva o roteador de busca da 1.8.0, corrige rotas internas seguras do X Premium e remove o blur superior apenas do TTSSearchContainerViewControllerV2. Procure PREMIUM_ROUTER e SEARCH_BLUR no relatório.";
+    return @"1.9.0 Beta 3 parte diretamente da Beta 1 validada. Aplicar tema usa T1DisplaySettingsViewController com o inicializador nativo initWithAccount:. O único blur fix continua sendo o TTSSearchContainerViewControllerV2 da Beta 1. Procure PREMIUM_ROUTER e SEARCH_BLUR no relatório.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1806,7 +1810,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.9.0 Beta 1 Premium + Search Visual Probe ==========");
+            @"========== XLiquidGlass 1.9.0 Beta 3 Display Settings Router Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -5248,6 +5252,39 @@ static UIViewController *XLGPremiumAppIconController(
         ? result : nil;
 }
 
+static UIViewController *XLGPremiumDisplaySettingsController(
+    id account) {
+
+    Class controllerClass=
+        NSClassFromString(@"T1DisplaySettingsViewController");
+    if (!controllerClass || !account) return nil;
+
+    id allocated=((id(*)(id,SEL))objc_msgSend)(
+        controllerClass,@selector(alloc));
+    SEL initSEL=NSSelectorFromString(@"initWithAccount:");
+    if (![allocated respondsToSelector:initSEL]) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"PREMIUM_ROUTER display-settings failed=missing-initWithAccount:");
+        }
+        return nil;
+    }
+
+    id result=((id(*)(id,SEL,id))objc_msgSend)(
+        allocated,initSEL,account);
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"PREMIUM_ROUTER display-settings controller-create class=%@ ptr=%p account=%@",
+            result ? NSStringFromClass([result class]) : @"nil",
+            result,
+            NSStringFromClass([account class]));
+    }
+
+    return [result isKindOfClass:UIViewController.class]
+        ? result : nil;
+}
+
 static BOOL XLGRoutePremiumDestination(
     id appNavigation,
     NSString *destinationClass,
@@ -5339,15 +5376,62 @@ static void XLGXAppPremiumAppIcon(
     }
 }
 
+static BOOL XLGRouteDisplaySettings(
+    id appNavigation,
+    long long source,
+    id completion,
+    NSString *routeName) {
+
+    if (!XLGEnabled()) return NO;
+
+    id account=XLGSidebarCurrentAccount();
+    UIViewController *controller=
+        XLGPremiumDisplaySettingsController(account);
+
+    if (!controller) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"PREMIUM_ROUTER route=%@ failed=display-controller-create account=%@",
+                routeName ?: @"-",
+                account ? NSStringFromClass([account class]) : @"nil");
+        }
+        return NO;
+    }
+
+    return XLGPremiumPresentController(
+        appNavigation,
+        controller,
+        source,
+        completion,
+        routeName);
+}
+
+static void XLGXAppShowDisplaySettings(
+    id self, SEL cmd, long long source, id completion) {
+
+    if (XLGRouteDisplaySettings(
+            self,
+            source,
+            completion,
+            @"display-settings")) {
+        return;
+    }
+
+    if (gOrigXAppShowDisplaySettings) {
+        ((void(*)(id,SEL,long long,id))
+            gOrigXAppShowDisplaySettings)(
+                self,cmd,source,completion);
+    }
+}
+
 static void XLGXAppPremiumSettings(
     id self, SEL cmd, long long source, id completion) {
 
-    if (XLGRoutePremiumDestination(
+    if (XLGRouteDisplaySettings(
             self,
-            @"T1PremiumSettingsViewController",
             source,
             completion,
-            @"premium-settings")) {
+            @"premium-display-settings")) {
         return;
     }
 
@@ -5389,6 +5473,11 @@ static void XLGInstallXAppPremiumRouter(void) {
             "showPremiumHubPremiumSettingsWithSource:withCompletion:",
             (IMP)XLGXAppPremiumSettings,
             &gOrigXAppPremiumSettings
+        },
+        {
+            "showDisplaySettingsWithSource:withCompletion:",
+            (IMP)XLGXAppShowDisplaySettings,
+            &gOrigXAppShowDisplaySettings
         }
     };
 
@@ -5608,7 +5697,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.0 Beta 1 loaded: Premium internal routes + Search blur fix + XTabbedAppNavigation search router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.0 Beta 3 loaded: native Display Settings initWithAccount route + Beta 1 validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
