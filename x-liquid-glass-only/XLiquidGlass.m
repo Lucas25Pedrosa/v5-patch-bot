@@ -4,75 +4,10 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - Beta 13 integrated badge probe
+#pragma mark - XLiquidGlass 1.6.0 Final
 
-static NSString *const kXLGB13ProbeLogFileName = @"XLiquidGlassBeta13Probe.log";
-static const NSUInteger kXLGB7ProbeMaxLogBytes = 512 * 1024;
+#define XLGDiagLog(...) do { } while (0)
 
-static NSString *XLGB13ProbeLogPath(void) {
-    NSString *documents = NSSearchPathForDirectoriesInDomains(
-        NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    if (!documents.length) documents = NSTemporaryDirectory();
-    return [documents stringByAppendingPathComponent:kXLGB13ProbeLogFileName];
-}
-
-static NSString *XLGB13ProbeStamp(void) {
-    static NSDateFormatter *formatter;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        formatter = [NSDateFormatter new];
-        formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-        formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
-    });
-    return [formatter stringFromDate:NSDate.date];
-}
-
-static void XLGB13ProbeTrimLog(void) {
-    NSString *path = XLGB13ProbeLogPath();
-    NSDictionary *attrs =
-        [NSFileManager.defaultManager attributesOfItemAtPath:path error:nil];
-    unsigned long long size = [attrs fileSize];
-    if (size <= kXLGB7ProbeMaxLogBytes) return;
-
-    NSData *data = [NSData dataWithContentsOfFile:path];
-    if (data.length <= kXLGB7ProbeMaxLogBytes) return;
-    NSUInteger keep = kXLGB7ProbeMaxLogBytes / 2;
-    NSData *tail = [data subdataWithRange:NSMakeRange(data.length - keep, keep)];
-    [tail writeToFile:path atomically:YES];
-}
-
-static void XLGB13ProbeLog(NSString *format, ...) NS_FORMAT_FUNCTION(1,2);
-static void XLGB13ProbeLog(NSString *format, ...) {
-    if (!format) return;
-    va_list args;
-    va_start(args, format);
-    NSString *body = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-
-    NSLog(@"[XLiquidGlass B13] %@", body ?: @"");
-    NSString *line = [NSString stringWithFormat:@"[%@] %@\n",
-                      XLGB13ProbeStamp(), body ?: @""];
-
-    @synchronized(NSFileManager.defaultManager) {
-        NSString *path = XLGB13ProbeLogPath();
-        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
-            [@"" writeToFile:path atomically:YES
-                    encoding:NSUTF8StringEncoding error:nil];
-        }
-        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (handle) {
-            [handle seekToEndOfFile];
-            [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-            [handle closeFile];
-        }
-        XLGB13ProbeTrimLog();
-    }
-}
-
-static void XLGB13ProbeCaptureSnapshot(NSString *reason);
-static void XLGB13ProbeRuntimeSnapshot(void);
-static void XLGB13ProbeVisibleItems(NSString *reason);
-static NSString *XLGProbeMethodEncoding(Class cls, SEL selector);
 static BOOL XLGApplyStartupHoldIfNeeded(
     NSString *userID,
     BOOL hasNtab, NSInteger *ntab,
@@ -295,104 +230,6 @@ static void XLGSyncCompatibilityGate(void) {
 
 @end
 
-@interface XLiquidGlassBadgeProbeViewController : UITableViewController
-@end
-
-@implementation XLiquidGlassBadgeProbeViewController
-
-- (instancetype)init {
-    return [super initWithStyle:UITableViewStyleInsetGrouped];
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.title = @"XLiquidGlass Probe Beta 13";
-}
-
-- (NSInteger)tableView:(UITableView *)tableView
- numberOfRowsInSection:(NSInteger)section {
-    (void)tableView; (void)section;
-    return 4;
-}
-
-- (NSString *)tableView:(UITableView *)tableView
- titleForFooterInSection:(NSInteger)section {
-    (void)tableView; (void)section;
-    return @"Beta 13: tentativa de correção + diagnóstico integrado de conta e badges.";
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView
-         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *identifier = @"XLGB71ProbeCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (!cell) {
-        cell = [[UITableViewCell alloc]
-                initWithStyle:UITableViewCellStyleSubtitle
-                reuseIdentifier:identifier];
-    }
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-
-    if (indexPath.row == 0) {
-        cell.textLabel.text = @"Capturar estado";
-        cell.detailTextLabel.text = @"Conta visível, owner e contadores atuais.";
-    } else if (indexPath.row == 1) {
-        cell.textLabel.text = @"Probe de runtime";
-        cell.detailTextLabel.text = @"Classes e seletores usados pelo Beta 13.";
-    } else if (indexPath.row == 2) {
-        cell.textLabel.text = @"Copiar relatório";
-        cell.detailTextLabel.text = kXLGB13ProbeLogFileName;
-    } else {
-        cell.textLabel.text = @"Limpar relatório";
-        cell.detailTextLabel.text = @"Reinicia somente o arquivo de diagnóstico.";
-    }
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView
- didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-
-    if (indexPath.row == 0) {
-        XLGB13ProbeCaptureSnapshot(@"manual-capture");
-        XLGB13ProbeVisibleItems(@"manual-capture");
-        [tableView reloadData];
-        return;
-    }
-
-    if (indexPath.row == 1) {
-        XLGB13ProbeRuntimeSnapshot();
-        XLGB13ProbeCaptureSnapshot(@"manual-runtime");
-        XLGB13ProbeVisibleItems(@"manual-runtime");
-        [tableView reloadData];
-        return;
-    }
-
-    if (indexPath.row == 2) {
-        NSString *report =
-            [NSString stringWithContentsOfFile:XLGB13ProbeLogPath()
-                                      encoding:NSUTF8StringEncoding
-                                         error:nil] ?: @"";
-        UIPasteboard.generalPasteboard.string = report;
-        UIAlertController *alert =
-            [UIAlertController alertControllerWithTitle:@"Badge Probe"
-                                                message:
-             [NSString stringWithFormat:@"Relatório copiado (%lu caracteres).",
-              (unsigned long)report.length]
-                                         preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                                  style:UIAlertActionStyleDefault
-                                                handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-
-    [NSFileManager.defaultManager removeItemAtPath:XLGB13ProbeLogPath() error:nil];
-    XLGB13ProbeLog(@"LOG RESET");
-    [tableView reloadData];
-}
-
-@end
-
 static BOOL XLGSectionsContainAction(NSArray *sections, NSString *action) {
     for (id entry in sections) {
         if (![entry isKindOfClass:NSDictionary.class]) continue;
@@ -419,7 +256,7 @@ static void XLGInjectNFBSection(id controller) {
         NSDictionary *entry = @{
             @"title": @"Liquid Glass",
             @"subtitle": @"Ativar ou desativar o redesign Liquid Glass.",
-            @"icon": @"paintbrush_stroke",
+            @"icon": @"drop",
             @"action": @"showXLiquidGlassSettings"
         };
         NSUInteger insertIndex = MIN((NSUInteger)2, updated.count);
@@ -427,17 +264,6 @@ static void XLGInjectNFBSection(id controller) {
         changed = YES;
     }
 
-    if (!XLGSectionsContainAction(updated, @"showXLiquidGlassBadgeProbe")) {
-        NSDictionary *probeEntry = @{
-            @"title": @"XLiquidGlass Probe Beta 13",
-            @"subtitle": @"Badges e diagnóstico native-first do drawer.",
-            @"icon": @"person_2",
-            @"action": @"showXLiquidGlassBadgeProbe"
-        };
-        NSUInteger probeIndex = MIN((NSUInteger)3, updated.count);
-        [updated insertObject:probeEntry atIndex:probeIndex];
-        changed = YES;
-    }
 
     if (!changed) return;
     @try {
@@ -489,24 +315,6 @@ static void XLGShowSettings(id self, SEL _cmd) {
     }
 }
 
-static void XLGShowBadgeProbe(id self, SEL _cmd) {
-    (void)_cmd;
-    if (![self isKindOfClass:UIViewController.class]) return;
-
-    XLiquidGlassBadgeProbeViewController *probe =
-        [[XLiquidGlassBadgeProbeViewController alloc] init];
-    UINavigationController *navigation =
-        ((UIViewController *)self).navigationController;
-    if (navigation) {
-        [navigation pushViewController:probe animated:YES];
-    } else {
-        UINavigationController *wrapper =
-            [[UINavigationController alloc] initWithRootViewController:probe];
-        [(UIViewController *)self presentViewController:wrapper
-                                              animated:YES completion:nil];
-    }
-}
-
 static void XLGInstallNFBSettingsIntegration(void) {
     if (gNFBSettingsHooked) return;
 
@@ -515,9 +323,6 @@ static void XLGInstallNFBSettingsIntegration(void) {
 
     SEL showSEL = NSSelectorFromString(@"showXLiquidGlassSettings");
     class_addMethod(cls, showSEL, (IMP)XLGShowSettings, "v@:");
-
-    SEL probeSEL = NSSelectorFromString(@"showXLiquidGlassBadgeProbe");
-    class_addMethod(cls, probeSEL, (IMP)XLGShowBadgeProbe, "v@:");
 
     BOOL setupHooked =
         XLGHookMethod(cls,
@@ -795,7 +600,7 @@ static void XLGRouteDrawerNativeFirst(
     UIViewController *beforeTop=beforeNavigation.topViewController;
     UIViewController *beforePresented=beforePresenter.presentedViewController;
 
-    XLGB13ProbeLog(@"DRAWER_ROUTE phase=begin mode=%@ target=%@ beforePresenter=%@ beforeTop=%@ beforePresented=%@",
+    XLGDiagLog(@"DRAWER_ROUTE phase=begin mode=%@ target=%@ beforePresenter=%@ beforeTop=%@ beforePresented=%@",
                    modal ? @"modal" : @"content",
                    NSStringFromClass(viewController.class),
                    beforePresenter ? NSStringFromClass(beforePresenter.class) : @"-",
@@ -817,14 +622,14 @@ static void XLGRouteDrawerNativeFirst(
                     &reason);
 
                 if (handled) {
-                    XLGB13ProbeLog(@"DRAWER_ROUTE native-handled mode=%@ target=%@ reason=%@",
+                    XLGDiagLog(@"DRAWER_ROUTE native-handled mode=%@ target=%@ reason=%@",
                                    modal ? @"modal" : @"content",
                                    NSStringFromClass(viewController.class),
                                    reason ?: @"hierarchy-changed");
                     return;
                 }
 
-                XLGB13ProbeLog(@"DRAWER_ROUTE fallback-manual mode=%@ target=%@",
+                XLGDiagLog(@"DRAWER_ROUTE fallback-manual mode=%@ target=%@",
                                modal ? @"modal" : @"content",
                                NSStringFromClass(viewController.class));
 
@@ -1206,7 +1011,7 @@ static void XLGRouteModalViewController(UIViewController *viewController) {
             NO,
             ^{
                 // Do not pass our route as the completion anymore. Let X finish
-                // its own selection/dismiss flow; Beta 13 verifies afterwards.
+                // its own selection/dismiss flow; Final verifies afterwards.
                 dismiss(YES,nil);
             });
     } else {
@@ -1419,7 +1224,7 @@ static NSString *XLGCurrentActiveUserID(void) {
     if (navigationUserID.length &&
         XLGBadgeStateForUserID(navigationUserID)) {
         if (![gXLGBadgeActiveUserID isEqualToString:navigationUserID]) {
-            XLGB13ProbeLog(@"OWNER navigation=%@ previous=%@ action=promote-navigation",
+            XLGDiagLog(@"OWNER navigation=%@ previous=%@ action=promote-navigation",
                   navigationUserID,
                   gXLGBadgeActiveUserID ?: @"-");
             gXLGBadgeActiveUserID = [navigationUserID copy];
@@ -1618,7 +1423,7 @@ static void XLGSetTrustedNotificationSource(NSString *userID,
         state[@"trustedNotifications"] = @YES;
         state[@"trustedTimestamp"] = @(NSDate.date.timeIntervalSince1970);
         if (!wasTrusted) {
-            XLGB13ProbeLog(@"TRUST_SET user=%@ reason=%@ ntab=%ld dm=%ld xchat=%ld total=%ld localDM=%ld localXChat=%ld",
+            XLGDiagLog(@"TRUST_SET user=%@ reason=%@ ntab=%ld dm=%ld xchat=%ld total=%ld localDM=%ld localXChat=%ld",
                            userID,
                            reason ?: @"-",
                            (long)XLGStateInteger(state, @"remoteNtab", -1),
@@ -1631,7 +1436,7 @@ static void XLGSetTrustedNotificationSource(NSString *userID,
     } else {
         state[@"trustedNotifications"] = @NO;
         if (wasTrusted) {
-            XLGB13ProbeLog(@"TRUST_INVALIDATED user=%@ reason=%@ remote(ntab=%ld dm=%ld xchat=%ld total=%ld) localDM=%ld localXChat=%ld",
+            XLGDiagLog(@"TRUST_INVALIDATED user=%@ reason=%@ remote(ntab=%ld dm=%ld xchat=%ld total=%ld) localDM=%ld localXChat=%ld",
                            userID,
                            reason ?: @"-",
                            (long)XLGStateInteger(state, @"remoteNtab", -1),
@@ -1690,7 +1495,7 @@ static void XLGRememberRemoteBadgeSource(NSString *userID,
         MAX((NSInteger)0, xchat),
         MAX((NSInteger)0, total));
 
-    XLGB13ProbeLog(@"RECONCILE_SOURCE user=%@ remote ntab=%ld dm=%ld xchat=%ld total=%ld",
+    XLGDiagLog(@"RECONCILE_SOURCE user=%@ remote ntab=%ld dm=%ld xchat=%ld total=%ld",
                    userID,
                    (long)MAX((NSInteger)0, ntab),
                    (long)MAX((NSInteger)0, dm),
@@ -1709,7 +1514,7 @@ static void XLGRememberLocalDMSource(unsigned long long userID,
     NSMutableDictionary *state = XLGSourceStateForUserID(key, YES);
     state[@"localDM"] = @(MAX((NSInteger)0, count));
     state[@"localDMTimestamp"] = @(NSDate.date.timeIntervalSince1970);
-    XLGB13ProbeLog(@"RECONCILE_SOURCE user=%@ localDM=%ld",
+    XLGDiagLog(@"RECONCILE_SOURCE user=%@ localDM=%ld",
                    key,
                    (long)MAX((NSInteger)0, count));
     XLGEvaluateTrustedNotificationSource(
@@ -1723,7 +1528,7 @@ static void XLGRememberLocalXChatSource(unsigned long long userID,
     NSMutableDictionary *state = XLGSourceStateForUserID(key, YES);
     state[@"localXChat"] = @(MAX((NSInteger)0, count));
     state[@"localXChatTimestamp"] = @(NSDate.date.timeIntervalSince1970);
-    XLGB13ProbeLog(@"RECONCILE_SOURCE user=%@ localXChat=%ld",
+    XLGDiagLog(@"RECONCILE_SOURCE user=%@ localXChat=%ld",
                    key,
                    (long)MAX((NSInteger)0, count));
     XLGEvaluateTrustedNotificationSource(
@@ -1780,7 +1585,7 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         rawXChat == 0 &&
         rawTotal == 0;
 
-    // Beta 13: once direct TFNTwitterAccount + local DM establish a trusted
+    // Final: once direct TFNTwitterAccount + local DM establish a trusted
     // notifications-only state, aggregate AccountBadgesDidChange maps are not
     // allowed to erase or relabel it. Trust has no arbitrary time expiry; only
     // a new direct source/local category update can invalidate it.
@@ -1796,7 +1601,7 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
                 ? @"trusted-zero-active-no-new-source"
                 : @"trusted-zero-inactive-account");
 
-        XLGB13ProbeLog(@"PRESERVE_TRUSTED user=%@ reason=%@ active=%@ raw(ntab=%ld dm=%ld xchat=%ld total=%ld) trusted(ntab=%ld dm=%ld xchat=%ld total=%ld) -> keep(ntab=%ld dm=0 xchat=0 total=%ld)",
+        XLGDiagLog(@"PRESERVE_TRUSTED user=%@ reason=%@ active=%@ raw(ntab=%ld dm=%ld xchat=%ld total=%ld) trusted(ntab=%ld dm=%ld xchat=%ld total=%ld) -> keep(ntab=%ld dm=0 xchat=0 total=%ld)",
                        userID,
                        reason,
                        active ?: @"-",
@@ -1851,7 +1656,7 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         ? @"ntab-misrouted-to-dm"
         : @"transient-zero-after-remote";
 
-    XLGB13ProbeLog(@"NORMALIZE user=%@ reason=%@ age=%.3f localDMAge=%.3f raw(ntab=%ld dm=%ld xchat=%ld total=%ld) remote(ntab=%ld dm=%ld xchat=%ld total=%ld) localDM=%ld -> normalized(ntab=%ld dm=0 xchat=0 total=%ld)",
+    XLGDiagLog(@"NORMALIZE user=%@ reason=%@ age=%.3f localDMAge=%.3f raw(ntab=%ld dm=%ld xchat=%ld total=%ld) remote(ntab=%ld dm=%ld xchat=%ld total=%ld) localDM=%ld -> normalized(ntab=%ld dm=0 xchat=0 total=%ld)",
                    userID,
                    reason,
                    remoteAge,
@@ -1908,7 +1713,7 @@ static void XLGArmStartupHoldForPersistedState(
     source[@"startupPersistedTotal"] = @(MAX((NSInteger)0, total));
     source[@"startupHoldTimestamp"] = @(NSDate.date.timeIntervalSince1970);
 
-    XLGB13ProbeLog(@"STARTUP_ARM user=%@ persisted(ntab=%ld dm=%ld xchat=%ld total=%ld)",
+    XLGDiagLog(@"STARTUP_ARM user=%@ persisted(ntab=%ld dm=%ld xchat=%ld total=%ld)",
                    userID,
                    (long)MAX((NSInteger)0, ntab),
                    (long)MAX((NSInteger)0, dm),
@@ -1962,7 +1767,7 @@ static BOOL XLGApplyStartupHoldIfNeeded(
         return NO;
     }
 
-    XLGB13ProbeLog(@"STARTUP_HOLD user=%@ raw(0/0/0/0) persisted(ntab=%ld dm=%ld xchat=%ld total=%ld) reason=waiting-direct-source",
+    XLGDiagLog(@"STARTUP_HOLD user=%@ raw(0/0/0/0) persisted(ntab=%ld dm=%ld xchat=%ld total=%ld) reason=waiting-direct-source",
                    userID,
                    (long)persistedNtab,
                    (long)persistedDM,
@@ -2014,7 +1819,7 @@ static void XLGResolveStartupHoldWithRemote(
         remoteXChat == 0 &&
         remoteTotal == 0;
 
-    XLGB13ProbeLog(@"%@ user=%@ persisted(ntab=%ld dm=%ld xchat=%ld total=%ld) remote(ntab=%ld dm=%ld xchat=%ld total=%ld)",
+    XLGDiagLog(@"%@ user=%@ persisted(ntab=%ld dm=%ld xchat=%ld total=%ld) remote(ntab=%ld dm=%ld xchat=%ld total=%ld)",
                    same ? @"STARTUP_VALIDATED" : @"STARTUP_RELEASED",
                    userID,
                    (long)persistedNtab,
@@ -2027,7 +1832,7 @@ static void XLGResolveStartupHoldWithRemote(
                    (long)remoteTotal);
 
     if (remoteZero) {
-        XLGB13ProbeLog(@"STARTUP_INVALIDATED user=%@ reason=direct-source-zero",
+        XLGDiagLog(@"STARTUP_INVALIDATED user=%@ reason=direct-source-zero",
                        userID);
     }
 }
@@ -2127,7 +1932,7 @@ static void XLGB13ProbeCaptureSnapshot(NSString *reason) {
     NSString *active = XLGCurrentActiveUserID();
     NSString *nav = XLGTryResolveUserID(XLGSidebarCurrentAccount(), 0);
     NSDictionary *activeState = XLGBadgeStateForUserID(active);
-    XLGB13ProbeLog(@"SNAPSHOT reason=%@ active=%@ nav=%@ storedOwner=%@ root=%ld accounts=%lu ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
+    XLGDiagLog(@"SNAPSHOT reason=%@ active=%@ nav=%@ storedOwner=%@ root=%ld accounts=%lu ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
                   reason ?: @"-",
                   active ?: @"-",
                   nav ?: @"-",
@@ -2145,7 +1950,7 @@ static void XLGB13ProbeCaptureSnapshot(NSString *reason) {
         sortedArrayUsingSelector:@selector(compare:)];
     for (NSString *userID in keys) {
         NSDictionary *state = gXLGBadgeStateByUserID[userID];
-        XLGB13ProbeLog(@"SNAPSHOT_ACCOUNT user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld%@",
+        XLGDiagLog(@"SNAPSHOT_ACCOUNT user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld%@",
                       userID,
                       (long)XLGStateInteger(state, @"ntab", -1),
                       (long)XLGStateInteger(state, @"dm", -1),
@@ -2156,7 +1961,7 @@ static void XLGB13ProbeCaptureSnapshot(NSString *reason) {
                       [userID isEqualToString:active] ? @" ACTIVE" : @"");
         NSDictionary *source = XLGSourceStateForUserID(userID, NO);
         if (source) {
-            XLGB13ProbeLog(@"SNAPSHOT_SOURCE user=%@ remoteNtab=%ld remoteDM=%ld remoteXChat=%ld remoteTotal=%ld localDM=%ld localXChat=%ld trusted=%d startupHold=%d directSeen=%d startupPersisted=%ld/%ld/%ld/%ld remoteAge=%.3f",
+            XLGDiagLog(@"SNAPSHOT_SOURCE user=%@ remoteNtab=%ld remoteDM=%ld remoteXChat=%ld remoteTotal=%ld localDM=%ld localXChat=%ld trusted=%d startupHold=%d directSeen=%d startupPersisted=%ld/%ld/%ld/%ld remoteAge=%.3f",
                            userID,
                            (long)XLGStateInteger(source, @"remoteNtab", -1),
                            (long)XLGStateInteger(source, @"remoteDM", -1),
@@ -2179,7 +1984,7 @@ static void XLGB13ProbeCaptureSnapshot(NSString *reason) {
 }
 
 static void XLGB13ProbeRuntimeSnapshot(void) {
-    XLGB13ProbeLog(@"RUNTIME_BEGIN");
+    XLGDiagLog(@"RUNTIME_BEGIN");
     for (NSString *className in @[@"T1AppBadging",
                                   @"T1AppEventHandler",
                                   @"T1TwitterSwift.XTabbedAppNavigation",
@@ -2189,14 +1994,14 @@ static void XLGB13ProbeRuntimeSnapshot(void) {
                                   @"T1TwitterSwift.RootBadgerImpl",
                                   @"TFNTwitterAccount"]) {
         Class cls = NSClassFromString(className);
-        XLGB13ProbeLog(@"RUNTIME_CLASS name=%@ present=%d", className, cls != Nil);
+        XLGDiagLog(@"RUNTIME_CLASS name=%@ present=%d", className, cls != Nil);
     }
     Class badging = NSClassFromString(@"T1AppBadging");
-    XLGB13ProbeLog(@"RUNTIME_SELECTOR class=T1AppBadging setCurrentUserID=%d setUserIDsCurrentUserID=%d",
+    XLGDiagLog(@"RUNTIME_SELECTOR class=T1AppBadging setCurrentUserID=%d setUserIDsCurrentUserID=%d",
                   [badging instancesRespondToSelector:NSSelectorFromString(@"setCurrentUserID:")],
                   [badging instancesRespondToSelector:NSSelectorFromString(@"setUserIDs:currentUserID:")]);
     Class appEvent = NSClassFromString(@"T1AppEventHandler");
-    XLGB13ProbeLog(@"RUNTIME_SELECTOR class=T1AppEventHandler activeAccountDidChange=%d",
+    XLGDiagLog(@"RUNTIME_SELECTOR class=T1AppEventHandler activeAccountDidChange=%d",
                   [appEvent instancesRespondToSelector:NSSelectorFromString(@"_t1_activeAccountDidChange:")]);
 
     for (NSArray *pair in @[
@@ -2211,13 +2016,13 @@ static void XLGB13ProbeRuntimeSnapshot(void) {
     ]) {
         Class probeClass = NSClassFromString(pair[0]);
         SEL selector = NSSelectorFromString(pair[1]);
-        XLGB13ProbeLog(@"RUNTIME_ENCODING class=%@ selector=%@ encoding=%@",
+        XLGDiagLog(@"RUNTIME_ENCODING class=%@ selector=%@ encoding=%@",
                       pair[0],
                       pair[1],
                       XLGProbeMethodEncoding(probeClass, selector));
     }
 
-    XLGB13ProbeLog(@"RUNTIME_END");
+    XLGDiagLog(@"RUNTIME_END");
 }
 
 static NSArray<UIWindow *> *XLGVisibleWindows(void) {
@@ -2507,7 +2312,7 @@ static void XLGB13ProbeAppliedItem(UIView *item,
         beforeVisible &&
         ((wanted < 0) || (wanted == 0));
 
-    XLGB13ProbeLog(@"ITEM ptr=%p index=%ld active=%@ kind=%@ wanted=%ld action=%@ beforeText=%@ beforeVisible=%d afterText=%@ afterVisible=%d stalePrevented=%d identity=%@",
+    XLGDiagLog(@"ITEM ptr=%p index=%ld active=%@ kind=%@ wanted=%ld action=%@ beforeText=%@ beforeVisible=%d afterText=%@ afterVisible=%d stalePrevented=%d identity=%@",
                   item,
                   (long)index,
                   active,
@@ -2532,7 +2337,7 @@ static void XLGApplyBadgeToXNavItem(UIView *item) {
     NSString *beforeText = existing.text.length ? [existing.text copy] : @"-";
     BOOL beforeVisible = existing ? !existing.hidden : NO;
 
-    // Beta 13 stale-badge fix: an item can temporarily lose its identity while
+    // Final stale-badge fix: an item can temporarily lose its identity while
     // XNavigation rebuilds/reuses TabBarItemView during account switching.
     // Never leave a previously visible badge attached to an unknown item.
     if (count < 0) {
@@ -2603,7 +2408,7 @@ static void XLGApplyBadgeToXNavItem(UIView *item) {
 
 static void XLGB13ProbeVisibleItems(NSString *reason) {
     NSString *active = XLGCurrentActiveUserID() ?: @"-";
-    XLGB13ProbeLog(@"VISUAL_BEGIN reason=%@ active=%@",
+    XLGDiagLog(@"VISUAL_BEGIN reason=%@ active=%@",
                   reason ?: @"-",
                   active);
 
@@ -2617,7 +2422,7 @@ static void XLGB13ProbeVisibleItems(NSString *reason) {
                 XLGBadgeCountForKind(kind, XLGActiveBadgeState());
             UILabel *badge =
                 objc_getAssociatedObject(item, &kXLGBadgeLabelKey);
-            XLGB13ProbeLog(@"VISUAL_ITEM ptr=%p index=%ld kind=%@ wanted=%ld text=%@ visible=%d frame=%@ identity=%@",
+            XLGDiagLog(@"VISUAL_ITEM ptr=%p index=%ld kind=%@ wanted=%ld text=%@ visible=%d frame=%@ identity=%@",
                           item,
                           (long)XLGIndexForXNavItem(item),
                           kind,
@@ -2630,7 +2435,7 @@ static void XLGB13ProbeVisibleItems(NSString *reason) {
         }
     }
 
-    XLGB13ProbeLog(@"VISUAL_END reason=%@ items=%lu",
+    XLGDiagLog(@"VISUAL_END reason=%@ items=%lu",
                   reason ?: @"-",
                   (unsigned long)seen);
 }
@@ -2698,7 +2503,7 @@ static void XLGRefreshGlobalTabBar(void) {
 
         if (![gXLGLastRenderProbeSignature isEqualToString:signature]) {
             gXLGLastRenderProbeSignature = [signature copy];
-            XLGB13ProbeLog(@"RENDER active=%@ nav=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
+            XLGDiagLog(@"RENDER active=%@ nav=%@ ntab=%ld dm=%ld xchat=%ld total=%ld chat=%ld notifications=%ld",
                   activeUserID ?: @"-",
                   navigationUserID ?: @"-",
                   (long)ntab,
@@ -2778,7 +2583,7 @@ static BOOL XLGSetBadgeCountsFromObject(id object, NSString *userID) {
               (long)XLGStateInteger(state, @"dm", -1),
               (long)XLGStateInteger(state, @"xchat", -1),
               (long)XLGStateInteger(state, @"total", -1));
-        XLGB13ProbeLog(@"CACHE user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld",
+        XLGDiagLog(@"CACHE user=%@ ntab=%ld dm=%ld xchat=%ld total=%ld",
               userID,
               (long)XLGStateInteger(state, @"ntab", -1),
               (long)XLGStateInteger(state, @"dm", -1),
@@ -2829,7 +2634,7 @@ static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
         gXLGBadgeActiveUserID = [userID copy];
         NSLog(@"[XLiquidGlass] active badge account=%@ source=%@",
               userID, source ?: @"-");
-        XLGB13ProbeLog(@"LIFECYCLE active=%@ source=%@",
+        XLGDiagLog(@"LIFECYCLE active=%@ source=%@",
                       userID, source ?: @"-");
         XLGPersistBadgeStates();
     }
@@ -2838,7 +2643,7 @@ static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
     // so redraw even when the numeric userID itself did not change.
     XLGRefreshGlobalTabBar();
 
-    // Beta 13: X can rebuild/reuse TabBarItemView shortly after the lifecycle
+    // Final: X can rebuild/reuse TabBarItemView shortly after the lifecycle
     // callback. Rebind after the transition so the final visual identity gets
     // a fresh badge decision, not just the pre-rebuild view tree.
     for (NSNumber *delayNumber in @[@0.06, @0.22]) {
@@ -2847,7 +2652,7 @@ static void XLGSetActiveBadgeUserID(NSString *userID, NSString *source) {
             dispatch_time(DISPATCH_TIME_NOW,
                           (int64_t)(delay * NSEC_PER_SEC)),
             dispatch_get_main_queue(), ^{
-                XLGB13ProbeLog(@"REBIND active=%@ delay=%.2f",
+                XLGDiagLog(@"REBIND active=%@ delay=%.2f",
                               XLGCurrentActiveUserID() ?: @"-",
                               delay);
                 XLGRefreshGlobalTabBar();
@@ -2864,7 +2669,7 @@ static void XLGAppBadgingSetCurrentUserID(id self, SEL cmd, unsigned long long u
     // Beta 7: advisory only. T1AppBadging owns global badge bookkeeping, not
     // the identity of the XNavigation bar currently visible to the user.
     NSString *reported = [@(userID) stringValue];
-    XLGB13ProbeLog(@"ADVISORY source=T1AppBadging.setCurrentUserID reported=%@ active=%@",
+    XLGDiagLog(@"ADVISORY source=T1AppBadging.setCurrentUserID reported=%@ active=%@",
           reported,
           gXLGBadgeActiveUserID ?: @"-");
     XLGRefreshGlobalTabBar();
@@ -2880,7 +2685,7 @@ static void XLGAppBadgingSetUserIDsCurrentUserID(id self,
     }
 
     NSString *reported = XLGNormalizedUserID(currentUserID);
-    XLGB13ProbeLog(@"ADVISORY source=T1AppBadging.setUserIDs:currentUserID: reported=%@ active=%@",
+    XLGDiagLog(@"ADVISORY source=T1AppBadging.setUserIDs:currentUserID: reported=%@ active=%@",
           reported ?: @"-",
           gXLGBadgeActiveUserID ?: @"-");
     XLGRefreshGlobalTabBar();
@@ -2969,7 +2774,7 @@ static void XLGProbeLogBadgeObject(NSString *source,
                                    NSString *userID,
                                    id object) {
     if (!object) {
-        XLGB13ProbeLog(@"SOURCE_OBJECT source=%@ user=%@ object=nil",
+        XLGDiagLog(@"SOURCE_OBJECT source=%@ user=%@ object=nil",
                       source ?: @"-",
                       userID ?: @"-");
         return;
@@ -2981,7 +2786,7 @@ static void XLGProbeLogBadgeObject(NSString *source,
     BOOL hasXChat = XLGReadXChatCount(object, &xchat);
     BOOL hasTotal = XLGReadTotalCount(object, &total);
 
-    XLGB13ProbeLog(@"SOURCE_OBJECT source=%@ user=%@ class=%@ ntab=%@ dm=%@ xchat=%@ total=%@",
+    XLGDiagLog(@"SOURCE_OBJECT source=%@ user=%@ class=%@ ntab=%@ dm=%@ xchat=%@ total=%@",
                   source ?: @"-",
                   userID ?: @"-",
                   NSStringFromClass([object class]),
@@ -3001,13 +2806,13 @@ static void XLGProbeLogBadgeMap(NSString *source, id candidate) {
     }
 
     if (![map isKindOfClass:NSDictionary.class]) {
-        XLGB13ProbeLog(@"SOURCE_MAP source=%@ mapClass=%@ valid=0",
+        XLGDiagLog(@"SOURCE_MAP source=%@ mapClass=%@ valid=0",
                       source ?: @"-",
                       candidate ? NSStringFromClass([candidate class]) : @"nil");
         return;
     }
 
-    XLGB13ProbeLog(@"SOURCE_MAP_BEGIN source=%@ entries=%lu active=%@ nav=%@",
+    XLGDiagLog(@"SOURCE_MAP_BEGIN source=%@ entries=%lu active=%@ nav=%@",
                   source ?: @"-",
                   (unsigned long)map.count,
                   XLGCurrentActiveUserID() ?: @"-",
@@ -3023,13 +2828,13 @@ static void XLGProbeLogBadgeMap(NSString *source, id candidate) {
         XLGProbeLogBadgeObject(source, userID, map[key]);
     }
 
-    XLGB13ProbeLog(@"SOURCE_MAP_END source=%@", source ?: @"-");
+    XLGDiagLog(@"SOURCE_MAP_END source=%@", source ?: @"-");
 }
 
 static void XLGPushRouterSetBadgeCountsForUserID(id self,
                                                   SEL cmd,
                                                   id argument) {
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=T1PushNotificationRouter selector=%@ argClass=%@",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=T1PushNotificationRouter selector=%@ argClass=%@",
                   NSStringFromSelector(cmd),
                   argument ? NSStringFromClass([argument class]) : @"nil");
     XLGProbeLogBadgeMap(@"T1PushNotificationRouter.setBadgeCountsForUserID:.arg",
@@ -3047,7 +2852,7 @@ static void XLGPushRouterSetBadgeCountsForUserID(id self,
 static void XLGPushRouterUpdateBadgeCountFromNotification(id self,
                                                           SEL cmd,
                                                           id argument) {
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=T1PushNotificationRouter selector=%@ argClass=%@",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=T1PushNotificationRouter selector=%@ argClass=%@",
                   NSStringFromSelector(cmd),
                   argument ? NSStringFromClass([argument class]) : @"nil");
     XLGProbeLogBadgeMap(@"T1PushNotificationRouter._updateBadgeCountFromNotification:.arg",
@@ -3067,7 +2872,7 @@ static void XLGAppBadgingSetRemoteBadgeCountUserID(id self,
                                                     uintptr_t arg1,
                                                     uintptr_t arg2) {
     Class cls = [self class];
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@}",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@}",
                   NSStringFromClass(cls),
                   NSStringFromSelector(cmd),
                   XLGProbeDescribeRawArgument(cls, cmd, 2, arg1),
@@ -3089,7 +2894,7 @@ static void XLGAppBadgingSetLocalUnseenDMCountUserIDDate(id self,
                                                          uintptr_t arg3) {
     Class cls = [self class];
     XLGRememberLocalDMSource((unsigned long long)arg2, (NSInteger)arg1);
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
                   NSStringFromClass(cls),
                   NSStringFromSelector(cmd),
                   XLGProbeDescribeRawArgument(cls, cmd, 2, arg1),
@@ -3102,8 +2907,6 @@ static void XLGAppBadgingSetLocalUnseenDMCountUserIDDate(id self,
             self, cmd, arg1, arg2, arg3);
     }
 
-    XLGProbeLogBadgeMap(@"T1AppBadging.setLocalUnseenDMCount:userID:date:.self.after",
-                        self);
 }
 
 static void XLGAppBadgingSetLocalUnseenXChatCountUserIDDate(id self,
@@ -3113,7 +2916,7 @@ static void XLGAppBadgingSetLocalUnseenXChatCountUserIDDate(id self,
                                                             uintptr_t arg3) {
     Class cls = [self class];
     XLGRememberLocalXChatSource((unsigned long long)arg2, (NSInteger)arg1);
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
                   NSStringFromClass(cls),
                   NSStringFromSelector(cmd),
                   XLGProbeDescribeRawArgument(cls, cmd, 2, arg1),
@@ -3126,8 +2929,6 @@ static void XLGAppBadgingSetLocalUnseenXChatCountUserIDDate(id self,
             self, cmd, arg1, arg2, arg3);
     }
 
-    XLGProbeLogBadgeMap(@"T1AppBadging.setLocalUnseenXChatCount:userID:date:.self.after",
-                        self);
 }
 
 static void XLGAppBadgingSetLocalActivityCountUserIDDate(id self,
@@ -3136,7 +2937,7 @@ static void XLGAppBadgingSetLocalActivityCountUserIDDate(id self,
                                                          uintptr_t arg2,
                                                          uintptr_t arg3) {
     Class cls = [self class];
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ arg1={%@} arg2={%@} arg3={%@}",
                   NSStringFromClass(cls),
                   NSStringFromSelector(cmd),
                   XLGProbeDescribeRawArgument(cls, cmd, 2, arg1),
@@ -3167,7 +2968,7 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
         XLGRememberRemoteBadgeSource(userID, ntab, dm, xchat, total);
     }
 
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=%@ selector=%@ user=%@ ntab={%@} dm={%@} xchat={%@} total={%@} date={%@}",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ user=%@ ntab={%@} dm={%@} xchat={%@} total={%@} date={%@}",
                   NSStringFromClass(cls),
                   NSStringFromSelector(cmd),
                   userID,
@@ -3183,16 +2984,13 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
             self, cmd, ntab, dm, xchat, total, dateRaw);
     }
 
-    XLGProbeLogBadgeObject(@"TFNTwitterAccount._applyRemoteBadgeCounts.after",
-                           userID,
-                           self);
 }
 
 static void XLGRootBadgerUpdateBadgeCount(id self,
                                           SEL cmd,
                                           NSInteger value) {
     NSString *userID = XLGTryResolveUserID(XLGSafeValueForKey(self, @"account"), 0);
-    XLGB13ProbeLog(@"SOURCE_CALL phase=before class=%@ selector=%@ user=%@ value=%ld",
+    XLGDiagLog(@"SOURCE_CALL phase=before class=%@ selector=%@ user=%@ value=%ld",
                   NSStringFromClass([self class]),
                   NSStringFromSelector(cmd),
                   userID ?: @"-",
@@ -3214,7 +3012,7 @@ static BOOL XLGInstallSourceProbeHook(Class cls,
     NSString *encoding = XLGProbeMethodEncoding(cls, selector);
 
     if (!XLGProbeMethodIsVoidWithExtraArgs(cls, selector, extraArgs)) {
-        XLGB13ProbeLog(@"SOURCE_HOOK class=%@ selector=%@ encoding=%@ installed=0 reason=incompatible-signature",
+        XLGDiagLog(@"SOURCE_HOOK class=%@ selector=%@ encoding=%@ installed=0 reason=incompatible-signature",
                       NSStringFromClass(cls),
                       selectorName,
                       encoding);
@@ -3223,7 +3021,7 @@ static BOOL XLGInstallSourceProbeHook(Class cls,
 
     BOOL installed =
         XLGHookMethod(cls, selector, NO, replacement, originalOut);
-    XLGB13ProbeLog(@"SOURCE_HOOK class=%@ selector=%@ encoding=%@ installed=%d",
+    XLGDiagLog(@"SOURCE_HOOK class=%@ selector=%@ encoding=%@ installed=%d",
                   NSStringFromClass(cls),
                   selectorName,
                   encoding,
@@ -3231,39 +3029,25 @@ static BOOL XLGInstallSourceProbeHook(Class cls,
     return installed;
 }
 
-static void XLGInstallBadgeSourceProbe(void) {
-    Class router = NSClassFromString(@"T1PushNotificationRouter");
-    if (router) {
-        if (!gOrigPushRouterSetBadgeCountsForUserID) {
-            XLGInstallSourceProbeHook(
-                router,
-                @"setBadgeCountsForUserID:",
-                1,
-                (IMP)XLGPushRouterSetBadgeCountsForUserID,
-                &gOrigPushRouterSetBadgeCountsForUserID);
-        }
-        if (!gOrigPushRouterUpdateBadgeCountFromNotification) {
-            XLGInstallSourceProbeHook(
-                router,
-                @"_updateBadgeCountFromNotification:",
-                1,
-                (IMP)XLGPushRouterUpdateBadgeCountFromNotification,
-                &gOrigPushRouterUpdateBadgeCountFromNotification);
-        }
-    }
+static BOOL XLGInstallCheckedFunctionalHook(Class cls,
+                                                NSString *selectorName,
+                                                unsigned int extraArgs,
+                                                IMP replacement,
+                                                IMP *originalOut) {
+    if (!cls || !selectorName.length || !replacement || !originalOut) return NO;
+    SEL selector = NSSelectorFromString(selectorName);
+    if (!XLGProbeMethodIsVoidWithExtraArgs(cls, selector, extraArgs)) return NO;
+    return XLGHookMethod(cls, selector, NO, replacement, originalOut);
+}
 
+static void XLGInstallBadgeReconciliationHooks(void) {
+    // These three hooks are functional, not diagnostic:
+    // TFNTwitterAccount provides the authoritative remote counts, while the
+    // local DM/XChat setters disambiguate notification-only state.
     Class appBadging = NSClassFromString(@"T1AppBadging");
     if (appBadging) {
-        if (!gOrigAppBadgingSetRemoteBadgeCountUserID) {
-            XLGInstallSourceProbeHook(
-                appBadging,
-                @"setRemoteBadgeCount:userID:",
-                2,
-                (IMP)XLGAppBadgingSetRemoteBadgeCountUserID,
-                &gOrigAppBadgingSetRemoteBadgeCountUserID);
-        }
         if (!gOrigAppBadgingSetLocalUnseenDMCountUserIDDate) {
-            XLGInstallSourceProbeHook(
+            XLGInstallCheckedFunctionalHook(
                 appBadging,
                 @"setLocalUnseenDMCount:userID:date:",
                 3,
@@ -3271,41 +3055,23 @@ static void XLGInstallBadgeSourceProbe(void) {
                 &gOrigAppBadgingSetLocalUnseenDMCountUserIDDate);
         }
         if (!gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate) {
-            XLGInstallSourceProbeHook(
+            XLGInstallCheckedFunctionalHook(
                 appBadging,
                 @"setLocalUnseenXChatCount:userID:date:",
                 3,
                 (IMP)XLGAppBadgingSetLocalUnseenXChatCountUserIDDate,
                 &gOrigAppBadgingSetLocalUnseenXChatCountUserIDDate);
         }
-        if (!gOrigAppBadgingSetLocalActivityCountUserIDDate) {
-            XLGInstallSourceProbeHook(
-                appBadging,
-                @"setLocalActivityCount:userID:date:",
-                3,
-                (IMP)XLGAppBadgingSetLocalActivityCountUserIDDate,
-                &gOrigAppBadgingSetLocalActivityCountUserIDDate);
-        }
     }
 
     Class account = NSClassFromString(@"TFNTwitterAccount");
     if (account && !gOrigTFNApplyRemoteBadgeCounts) {
-        XLGInstallSourceProbeHook(
+        XLGInstallCheckedFunctionalHook(
             account,
             @"_applyRemoteBadgeCountsWithNtab:dm:xchat:total:date:",
             5,
             (IMP)XLGTFNApplyRemoteBadgeCounts,
             &gOrigTFNApplyRemoteBadgeCounts);
-    }
-
-    Class rootBadger = NSClassFromString(@"T1TwitterSwift.RootBadgerImpl");
-    if (rootBadger && !gOrigRootBadgerUpdateBadgeCount) {
-        XLGInstallSourceProbeHook(
-            rootBadger,
-            @"updateBadgeCount:",
-            1,
-            (IMP)XLGRootBadgerUpdateBadgeCount,
-            &gOrigRootBadgerUpdateBadgeCount);
     }
 }
 
@@ -3324,11 +3090,10 @@ static void XLGHandleBadgeNotification(NSNotification *notification) {
 
     if ([name isEqualToString:@"AccountBadgesDidChange"]) {
         id map = notification.userInfo[@"AccountBadgesDidChangeUpdatedValues"];
-        XLGB13ProbeLog(@"SOURCE_NOTIFICATION name=AccountBadgesDidChange objectClass=%@",
+        XLGDiagLog(@"SOURCE_NOTIFICATION name=AccountBadgesDidChange objectClass=%@",
                       notification.object
                           ? NSStringFromClass([notification.object class])
                           : @"nil");
-        XLGProbeLogBadgeMap(@"NSNotification.AccountBadgesDidChange", map);
         if ([map isKindOfClass:NSDictionary.class]) {
             XLGCacheAllBadgeAccountsFromMap(map);
         }
@@ -3455,7 +3220,7 @@ static void XLGInstallGlobalTabBarFixes(void) {
         }];
     }
 
-    XLGInstallBadgeSourceProbe();
+    XLGInstallBadgeReconciliationHooks();
     XLGRefreshGlobalTabBar();
 }
 
@@ -3551,9 +3316,9 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.6.0 Beta 13 loaded: native-first drawer routing + startup hold + trusted badge state + ntab-to-DM reconciliation + renderer fix + source tracing + per-account isolation + NFB + sidebar + theme sync");
-        XLGB13ProbeLog(@"========== XLiquidGlass Beta 13 native-first drawer + startup hold probe loaded ==========");
-        XLGB13ProbeLog(@"logPath=%@", XLGB13ProbeLogPath());
+        NSLog(@"[XLiquidGlass] 1.6.0 Final loaded: native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        XLGDiagLog(@"========== XLiquidGlass Final native-first drawer + startup hold probe loaded ==========");
+        XLGDiagLog(@"logPath=%@", XLGB13ProbeLogPath());
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
