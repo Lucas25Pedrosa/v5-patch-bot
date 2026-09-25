@@ -1433,10 +1433,10 @@ static void XLGSetBadgeCountsFromObject(id object, NSString *userID) {
     if (!object) return;
 
     NSInteger ntab = 0, dm = 0, xchat = 0, total = 0;
-    BOOL hasNtab = XLGReadCountField(object, @"ntabUnreadCount", &ntab);
-    BOOL hasDM = XLGReadCountField(object, @"dmUnreadCount", &dm);
-    BOOL hasXChat = XLGReadCountField(object, @"xchatUnreadCount", &xchat);
-    BOOL hasTotal = XLGReadCountField(object, @"totalUnreadCount", &total);
+    BOOL hasNtab = XLGReadNTabCount(object, &ntab);
+    BOOL hasDM = XLGReadDMCount(object, &dm);
+    BOOL hasXChat = XLGReadXChatCount(object, &xchat);
+    BOOL hasTotal = XLGReadTotalCount(object, &total);
     if (!hasNtab && !hasDM && !hasXChat && !hasTotal) return;
 
     BOOL changed = NO;
@@ -1483,7 +1483,7 @@ static BOOL XLGLooksLikeAccountBadgeMap(NSDictionary *dictionary) {
     for (id key in dictionary) {
         id object = dictionary[key];
         NSInteger total = 0;
-        if (XLGReadCountField(object, @"totalUnreadCount", &total)) valid++;
+        if (XLGReadTotalCount(object, &total)) valid++;
     }
     return valid == dictionary.count;
 }
@@ -1510,7 +1510,7 @@ static void XLGSelectBadgeAccountFromMap(NSDictionary *dictionary) {
         for (id key in dictionary) {
             id object = dictionary[key];
             NSInteger total = -1;
-            if (XLGReadCountField(object, @"totalUnreadCount", &total) &&
+            if (XLGReadTotalCount(object, &total) &&
                 total == gXLGLastRootBadgeCount) {
                 selected = object;
                 selectedUserID = XLGNormalizedUserID(key);
