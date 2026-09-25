@@ -4552,6 +4552,76 @@ static void XLGAppBadgingSetLocalUnseenXChatCountUserIDDate(id self,
 
 }
 
+static void XLGPromoteDirectRemoteBadgeState(NSString *userID,
+                                                uintptr_t ntabRaw,
+                                                uintptr_t dmRaw,
+                                                uintptr_t xchatRaw,
+                                                uintptr_t totalRaw) {
+    if (!userID.length) return;
+
+    NSInteger ntab = XLGIntegerFromObjectPointer(ntabRaw, -1);
+    NSInteger dm = XLGIntegerFromObjectPointer(dmRaw, -1);
+    NSInteger xchat = XLGIntegerFromObjectPointer(xchatRaw, -1);
+    NSInteger total = XLGIntegerFromObjectPointer(totalRaw, -1);
+
+    BOOL hasNtab = ntab >= 0;
+    BOOL hasDM = dm >= 0;
+    BOOL hasXChat = xchat >= 0;
+    BOOL hasTotal = total >= 0;
+    if (!hasNtab && !hasDM && !hasXChat && !hasTotal) return;
+
+    XLGNormalizeBadgeMapForKnownNtabMisroute(
+        userID,
+        hasNtab, &ntab,
+        hasDM, &dm,
+        hasXChat, &xchat,
+        hasTotal, &total);
+
+    NSMutableDictionary *state =
+        XLGMutableBadgeStateForUserID(userID, YES);
+    BOOL changed = NO;
+
+    if (hasNtab) {
+        NSInteger value = MAX((NSInteger)0, ntab);
+        if (XLGStateInteger(state, @"ntab", -1) != value) {
+            state[@"ntab"] = @(value);
+            changed = YES;
+        }
+    }
+    if (hasDM) {
+        NSInteger value = MAX((NSInteger)0, dm);
+        if (XLGStateInteger(state, @"dm", -1) != value) {
+            state[@"dm"] = @(value);
+            changed = YES;
+        }
+    }
+    if (hasXChat) {
+        NSInteger value = MAX((NSInteger)0, xchat);
+        if (XLGStateInteger(state, @"xchat", -1) != value) {
+            state[@"xchat"] = @(value);
+            changed = YES;
+        }
+    }
+    if (hasTotal) {
+        NSInteger value = MAX((NSInteger)0, total);
+        if (XLGStateInteger(state, @"total", -1) != value) {
+            state[@"total"] = @(value);
+            changed = YES;
+        }
+    }
+
+    state[@"timestamp"] = @(NSDate.date.timeIntervalSince1970);
+
+    if (changed) {
+        XLGPersistBadgeStates();
+    }
+
+    NSString *active = XLGCurrentActiveUserID();
+    if ([active isEqualToString:userID]) {
+        XLGRefreshGlobalTabBar();
+    }
+}
+
 static void XLGTFNApplyRemoteBadgeCounts(id self,
                                          SEL cmd,
                                          uintptr_t ntab,
@@ -4569,6 +4639,14 @@ static void XLGTFNApplyRemoteBadgeCounts(id self,
         ((void(*)(id,SEL,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t))
          gOrigTFNApplyRemoteBadgeCounts)(
             self, cmd, ntab, dm, xchat, total, dateRaw);
+    }
+
+    // 1.9.1 Beta 1: the direct TFNTwitterAccount callback arrives before the
+    // aggregate AccountBadgesDidChange map. Promote that already-reconciled
+    // source into the render cache immediately so the visible badge does not
+    // wait for the later aggregate notification.
+    if (![userID isEqualToString:@"-"]) {
+        XLGPromoteDirectRemoteBadgeState(userID, ntab, dm, xchat, total);
     }
 
 }
@@ -5574,7 +5652,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.0 stable loaded: Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.9.1 Beta 1 loaded: immediate direct badge sync + Display Settings route + validated Search blur fix + Premium internal routes + XTabbedAppNavigation search router + Guide router + native swipe + read-aware badges + own notification router + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
