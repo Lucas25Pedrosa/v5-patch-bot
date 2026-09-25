@@ -6,6 +6,7 @@
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
+static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
 
 static IMP gOrigInstallGate = NULL;
 static IMP gOrigInstallGateForAccount = NULL;
@@ -25,6 +26,12 @@ static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     id stored = [defaults objectForKey:kXLGEnabledKey];
     return stored ? [stored boolValue] : YES;
+}
+
+static BOOL XLGTabLabelsEnabled(void) {
+    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+    id stored=[defaults objectForKey:kXLGTabLabelsKey];
+    return stored ? [stored boolValue] : NO;
 }
 
 static BOOL XLGHookMethod(Class cls,
@@ -139,7 +146,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 1;
+    return 2;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -159,21 +166,31 @@ static void XLGSyncCompatibilityGate(void) {
                                       reuseIdentifier:identifier];
     }
 
-    cell.textLabel.text = @"Ativar Liquid Glass";
-    cell.detailTextLabel.text = @"Usa o redesign nativo presente no X.";
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
-    toggle.on = XLGEnabled();
-    [toggle addTarget:self
-               action:@selector(xlgToggleChanged:)
-     forControlEvents:UIControlEventValueChanged];
-    cell.accessoryView = toggle;
 
+    if (indexPath.row == 0) {
+        cell.textLabel.text = @"Ativar Liquid Glass";
+        cell.detailTextLabel.text = @"Usa o redesign nativo presente no X.";
+        toggle.on = XLGEnabled();
+        [toggle addTarget:self
+                   action:@selector(xlgLiquidGlassToggleChanged:)
+         forControlEvents:UIControlEventValueChanged];
+    } else {
+        cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
+        cell.detailTextLabel.text = @"Exibe os nomes das abas no modo Liquid Glass.";
+        toggle.on = XLGTabLabelsEnabled();
+        [toggle addTarget:self
+                   action:@selector(xlgTabLabelsToggleChanged:)
+         forControlEvents:UIControlEventValueChanged];
+    }
+
+    cell.accessoryView = toggle;
     return cell;
 }
 
-- (void)xlgToggleChanged:(UISwitch *)sender {
+- (void)xlgLiquidGlassToggleChanged:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGEnabledKey];
     XLGSyncCompatibilityGate();
 
@@ -182,6 +199,19 @@ static void XLGSyncCompatibilityGate(void) {
                                             message:@"Reinicie o X para aplicar completamente a alteração."
                                      preferredStyle:UIAlertControllerStyleAlert];
 
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                             style:UIAlertActionStyleDefault
+                                           handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)xlgTabLabelsToggleChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
+
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"Liquid Glass"
+                                            message:@"A alteração dos rótulos será aplicada ao voltar para a timeline."
+                                     preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                              style:UIAlertActionStyleDefault
                                            handler:nil]];
@@ -1034,12 +1064,389 @@ static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
     );
 }
 
+
+#pragma mark - Liquid Glass Tab Bar visual fixes
+
+static char kXLGInjectedTabLabelKey;
+
+static UIColor *XLGResolvedAccentColor(id controller, UITabBar *tabBar) {
+    UIColor *color=nil;
+
+    if ([controller isKindOfClass:UIViewController.class]) {
+        UIViewController *vc=(UIViewController *)controller;
+        if (vc.isViewLoaded) color=vc.view.tintColor;
+    }
+
+    if (!color) color=tabBar.tintColor;
+
+    UIWindow *window=tabBar.window;
+    if (!color && window) color=window.tintColor;
+
+    return color ?: UIColor.systemBlueColor;
+}
+
+static NSArray<UIView *> *XLGCollectViewsMatching(UIView *root, BOOL (^predicate)(UIView *view)) {
+    if (!root || !predicate) return @[];
+
+    NSMutableArray<UIView *> *result=[NSMutableArray array];
+    NSMutableArray<UIView *> *queue=[NSMutableArray arrayWithObject:root];
+
+    for (NSUInteger i=0;i<queue.count && i<512;i++) {
+        UIView *view=queue[i];
+        if (predicate(view)) [result addObject:view];
+        for (UIView *subview in view.subviews ?: @[]) {
+            [queue addObject:subview];
+        }
+    }
+
+    return result;
+}
+
+static NSArray<UIView *> *XLGSystemTabButtons(UITabBar *tabBar) {
+    NSArray<UIView *> *buttons=
+        XLGCollectViewsMatching(tabBar,^BOOL(UIView *view) {
+            NSString *name=NSStringFromClass(view.class);
+            return [name containsString:@"UITabBarButton"] ||
+                   [name containsString:@"TabBarButton"];
+        });
+
+    return [buttons sortedArrayUsingComparator:^NSComparisonResult(UIView *a,UIView *b) {
+        CGFloat ax=CGRectGetMidX([a convertRect:a.bounds toView:tabBar]);
+        CGFloat bx=CGRectGetMidX([b convertRect:b.bounds toView:tabBar]);
+        if (ax<bx) return NSOrderedAscending;
+        if (ax>bx) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+}
+
+static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
+    if (!root) return nil;
+
+    NSArray<UIView *> *matches=
+        XLGCollectViewsMatching(root,^BOOL(UIView *view) {
+            NSString *name=NSStringFromClass(view.class);
+            return [name containsString:@"_UITabSelectionView"] ||
+                   [name containsString:@"TabSelectionView"] ||
+                   [name containsString:@"TabSelection"] ||
+                   [name containsString:@"_UITabBarPlatterView"];
+        });
+
+    return matches.firstObject;
+}
+
+static BOOL XLGViewLooksSelected(UIView *button, UITabBar *tabBar, NSUInteger index) {
+    if ([button isKindOfClass:UIControl.class]) {
+        UIControl *control=(UIControl *)button;
+        if (control.selected || control.highlighted) return YES;
+    }
+
+    if ((button.accessibilityTraits & UIAccessibilityTraitSelected) != 0) return YES;
+
+    if (index < tabBar.items.count && tabBar.selectedItem == tabBar.items[index]) return YES;
+
+    UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
+    if (chrome && !chrome.hidden && chrome.alpha>0.01) {
+        CGRect buttonFrame=[button convertRect:button.bounds toView:tabBar];
+        CGRect chromeFrame=[chrome convertRect:chrome.bounds toView:tabBar];
+        if (CGRectIntersectsRect(buttonFrame,chromeFrame)) return YES;
+    }
+
+    return NO;
+}
+
+static BOOL XLGTitleLooksLikeProfile(NSString *title) {
+    if (![title isKindOfClass:NSString.class] || title.length==0) return NO;
+    NSString *s=title.lowercaseString;
+    return [s containsString:@"profile"] ||
+           [s containsString:@"perfil"] ||
+           [s containsString:@"account"] ||
+           [s containsString:@"conta"];
+}
+
+static void XLGStripAvatarCircleStyling(UIView *view) {
+    if (!view) return;
+
+    CALayer *layer=view.layer;
+    layer.cornerRadius=0.0;
+    layer.masksToBounds=NO;
+    layer.borderWidth=0.0;
+    layer.borderColor=UIColor.clearColor.CGColor;
+    layer.shadowOpacity=0.0;
+    layer.shadowRadius=0.0;
+    layer.backgroundColor=UIColor.clearColor.CGColor;
+    view.backgroundColor=UIColor.clearColor;
+
+    // Moe also neutralizes decorative circular sublayers around the avatar.
+    for (CALayer *sublayer in layer.sublayers ?: @[]) {
+        if (sublayer.cornerRadius>0.0 ||
+            sublayer.borderWidth>0.0 ||
+            sublayer.shadowOpacity>0.0) {
+            sublayer.hidden=YES;
+            sublayer.opacity=0.0;
+            sublayer.borderWidth=0.0;
+            sublayer.cornerRadius=0.0;
+            sublayer.masksToBounds=NO;
+        }
+    }
+}
+
+static void XLGTintImageViews(UIView *root, UIColor *color, BOOL stripAvatar) {
+    if (!root || !color) return;
+
+    if ([root isKindOfClass:UIImageView.class]) {
+        UIImageView *imageView=(UIImageView *)root;
+        UIImage *image=imageView.image;
+        if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+            imageView.image=[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        }
+        imageView.tintColor=color;
+        if (stripAvatar) XLGStripAvatarCircleStyling(imageView);
+    }
+
+    for (UIView *subview in root.subviews ?: @[]) {
+        XLGTintImageViews(subview,color,stripAvatar);
+    }
+}
+
+static void XLGApplySelectedAccentToItemAppearance(UITabBarItemAppearance *appearance,
+                                                   UIColor *accent) {
+    if (!appearance || !accent) return;
+
+    appearance.selected.iconColor=accent;
+
+    NSMutableDictionary<NSAttributedStringKey,id> *selected=
+        [appearance.selected.titleTextAttributes mutableCopy] ?:
+        [NSMutableDictionary dictionary];
+    selected[NSForegroundColorAttributeName]=accent;
+    appearance.selected.titleTextAttributes=selected;
+
+    UIColor *secondary=UIColor.secondaryLabelColor;
+    if (!appearance.normal.iconColor) appearance.normal.iconColor=secondary;
+
+    NSMutableDictionary<NSAttributedStringKey,id> *normal=
+        [appearance.normal.titleTextAttributes mutableCopy] ?:
+        [NSMutableDictionary dictionary];
+    if (!normal[NSForegroundColorAttributeName]) {
+        normal[NSForegroundColorAttributeName]=secondary;
+    }
+    appearance.normal.titleTextAttributes=normal;
+}
+
+static void XLGApplyAccentToTabBar(UITabBar *tabBar, UIColor *accent) {
+    if (!tabBar || !accent) return;
+
+    tabBar.tintColor=accent;
+    if (!tabBar.unselectedItemTintColor) {
+        tabBar.unselectedItemTintColor=UIColor.secondaryLabelColor;
+    }
+
+    UITabBarAppearance *appearance=[tabBar.standardAppearance copy];
+    if (!appearance) appearance=[UITabBarAppearance new];
+
+    XLGApplySelectedAccentToItemAppearance(appearance.stackedLayoutAppearance,accent);
+    XLGApplySelectedAccentToItemAppearance(appearance.inlineLayoutAppearance,accent);
+    XLGApplySelectedAccentToItemAppearance(appearance.compactInlineLayoutAppearance,accent);
+
+    // Preserve the badge fixes already applied by 1.4.0.
+    XLGApplyCompactBadgeToAppearance(appearance);
+
+    tabBar.standardAppearance=appearance;
+    if (@available(iOS 15.0,*)) {
+        tabBar.scrollEdgeAppearance=appearance;
+    }
+}
+
+static void XLGApplySelectionChrome(UIView *chrome, UIColor *accent) {
+    if (!chrome || !accent) return;
+
+    chrome.tintColor=accent;
+
+    UIColor *background=chrome.backgroundColor;
+    CGFloat r=0,g=0,b=0,a=0;
+    BOOL resolved=[background getRed:&r green:&g blue:&b alpha:&a];
+    if (!resolved) {
+        CGFloat w=0;
+        resolved=[background getWhite:&w alpha:&a];
+    }
+
+    // Preserve Apple's glass translucency; replace only the hue.
+    if (resolved && a>0.01) {
+        chrome.backgroundColor=[accent colorWithAlphaComponent:a];
+    }
+
+    for (UIView *subview in chrome.subviews ?: @[]) {
+        subview.tintColor=accent;
+    }
+}
+
+static UILabel *XLGInjectedLabelForButton(UIView *button, BOOL create) {
+    UILabel *label=objc_getAssociatedObject(button,&kXLGInjectedTabLabelKey);
+    if (label || !create) return label;
+
+    label=[[UILabel alloc] initWithFrame:CGRectZero];
+    label.translatesAutoresizingMaskIntoConstraints=NO;
+    label.font=[UIFont systemFontOfSize:10.0 weight:UIFontWeightMedium];
+    label.textAlignment=NSTextAlignmentCenter;
+    label.adjustsFontSizeToFitWidth=YES;
+    label.minimumScaleFactor=0.75;
+    label.lineBreakMode=NSLineBreakByTruncatingTail;
+    label.isAccessibilityElement=NO;
+    [button addSubview:label];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [label.leadingAnchor constraintEqualToAnchor:button.leadingAnchor constant:2.0],
+        [label.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-2.0],
+        [label.bottomAnchor constraintEqualToAnchor:button.bottomAnchor constant:-1.0],
+        [label.heightAnchor constraintEqualToConstant:12.0]
+    ]];
+
+    objc_setAssociatedObject(
+        button,
+        &kXLGInjectedTabLabelKey,
+        label,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC
+    );
+
+    return label;
+}
+
+static void XLGSyncLiquidGlassLabels(UITabBar *tabBar,
+                                    NSArray<UIView *> *buttons,
+                                    UIColor *accent) {
+    BOOL showLabels=XLGTabLabelsEnabled();
+    UIColor *secondary=UIColor.secondaryLabelColor;
+
+    NSUInteger count=MIN(buttons.count,tabBar.items.count);
+    for (NSUInteger i=0;i<count;i++) {
+        UIView *button=buttons[i];
+        UITabBarItem *item=tabBar.items[i];
+        BOOL selected=XLGViewLooksSelected(button,tabBar,i);
+
+        // Theme any native labels the system already created.
+        NSArray<UIView *> *nativeLabels=
+            XLGCollectViewsMatching(button,^BOOL(UIView *view) {
+                return [view isKindOfClass:UILabel.class] &&
+                       objc_getAssociatedObject(button,&kXLGInjectedTabLabelKey) != view;
+            });
+
+        for (UILabel *label in (NSArray<UILabel *> *)nativeLabels) {
+            label.textColor=selected ? accent : secondary;
+        }
+
+        UILabel *label=XLGInjectedLabelForButton(button,showLabels);
+        if (label) {
+            NSString *title=item.title;
+            if (title.length==0) title=item.accessibilityLabel;
+            if (title.length==0) title=button.accessibilityLabel;
+            label.text=title ?: @"";
+            label.hidden=!showLabels || label.text.length==0;
+            label.textColor=selected ? accent : secondary;
+            [button bringSubviewToFront:label];
+        }
+    }
+
+    // Hide labels from stale buttons after a tab-count change.
+    for (NSUInteger i=count;i<buttons.count;i++) {
+        UILabel *label=XLGInjectedLabelForButton(buttons[i],NO);
+        label.hidden=YES;
+    }
+}
+
+static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
+    if (!controller || !XLGEnabled()) return;
+    if (![controller isKindOfClass:UIViewController.class]) return;
+
+    UIViewController *vc=(UIViewController *)controller;
+    if (!vc.isViewLoaded) return;
+
+    SEL tabBarSEL=NSSelectorFromString(@"tabBar");
+    if (![controller respondsToSelector:tabBarSEL]) return;
+
+    id object=((id(*)(id,SEL))objc_msgSend)(controller,tabBarSEL);
+    if (![object isKindOfClass:UITabBar.class]) return;
+
+    UITabBar *tabBar=(UITabBar *)object;
+    UIColor *accent=XLGResolvedAccentColor(controller,tabBar);
+    UIColor *secondary=tabBar.unselectedItemTintColor ?: UIColor.secondaryLabelColor;
+
+    XLGApplyAccentToTabBar(tabBar,accent);
+
+    NSArray<UIView *> *buttons=XLGSystemTabButtons(tabBar);
+    NSUInteger count=buttons.count;
+
+    for (NSUInteger i=0;i<count;i++) {
+        UIView *button=buttons[i];
+        BOOL selected=XLGViewLooksSelected(button,tabBar,i);
+        UIColor *color=selected ? accent : secondary;
+
+        NSString *title=button.accessibilityLabel;
+        if (i<tabBar.items.count) {
+            UITabBarItem *item=tabBar.items[i];
+            if (item.title.length) title=item.title;
+            else if (item.accessibilityLabel.length) title=item.accessibilityLabel;
+        }
+
+        BOOL profile=XLGTitleLooksLikeProfile(title);
+        XLGTintImageViews(button,color,profile);
+        if (profile) XLGStripAvatarCircleStyling(button);
+    }
+
+    UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
+    XLGApplySelectionChrome(chrome,accent);
+
+    XLGSyncLiquidGlassLabels(tabBar,buttons,accent);
+
+    [tabBar setNeedsLayout];
+}
+
+static IMP gOrigXLGNavigationTabBarViewLayoutSubviews=NULL;
+
+static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
+    if (gOrigXLGNavigationTabBarViewLayoutSubviews) {
+        ((void(*)(id,SEL))gOrigXLGNavigationTabBarViewLayoutSubviews)(self,cmd);
+    }
+
+    if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
+
+    UIView *view=(UIView *)self;
+    UIViewController *controller=nil;
+    UIResponder *responder=view.nextResponder;
+    for (NSInteger i=0;responder && i<16;i++,responder=responder.nextResponder) {
+        if ([responder isKindOfClass:UIViewController.class]) {
+            controller=(UIViewController *)responder;
+            break;
+        }
+    }
+
+    UIColor *accent=controller && controller.isViewLoaded ?
+        controller.view.tintColor : view.tintColor;
+    if (!accent) accent=UIColor.systemBlueColor;
+
+    XLGTintImageViews(view,accent,NO);
+    UIView *chrome=XLGFindLiquidSelectionChrome(view);
+    XLGApplySelectionChrome(chrome,accent);
+}
+
+static void XLGInstallXNavigationVisualFix(void) {
+    Class cls=NSClassFromString(@"_TtC11XNavigation10TabBarView");
+    if (!cls) return;
+
+    XLGHookMethod(
+        cls,
+        @selector(layoutSubviews),
+        NO,
+        (IMP)XLGNavigationTabBarViewLayoutSubviews,
+        &gOrigXLGNavigationTabBarViewLayoutSubviews
+    );
+}
+
 static void XLGLGBadgeViewDidLoad(id self,SEL cmd) {
     if (gOrigLGBadgeViewDidLoad)
         ((void(*)(id,SEL))gOrigLGBadgeViewDidLoad)(self,cmd);
 
     XLGInvalidateLiquidGlassCompactBadge(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
     XLGScheduleLiquidGlassBadgeRefresh(self);
 }
 
@@ -1078,6 +1485,7 @@ static void XLGLGBadgeSyncBadges(id self,SEL cmd) {
     XLGNormalizeLiquidGlassUnreadBadgeValues(self);
     XLGInvalidateLiquidGlassCompactBadge(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
 }
 
 static void XLGLGBadgeTraitCollectionDidChange(id self,SEL cmd,id previousTraitCollection) {
@@ -1088,6 +1496,7 @@ static void XLGLGBadgeTraitCollectionDidChange(id self,SEL cmd,id previousTraitC
 
     XLGInvalidateLiquidGlassCompactBadge(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
 }
 
 static void XLGLGBadgeViewDidLayoutSubviews(id self,SEL cmd) {
@@ -1096,6 +1505,7 @@ static void XLGLGBadgeViewDidLayoutSubviews(id self,SEL cmd) {
 
     XLGNormalizeLiquidGlassUnreadBadgeValues(self);
     XLGNormalizeLiquidGlassBadges(self);
+    XLGApplyLiquidGlassTabBarVisualFixes(self);
 }
 
 static void XLGInstallLiquidGlassBadgeFixes(void) {
@@ -1201,6 +1611,7 @@ static void XLGInstallHooks(void) {
     XLGSyncCompatibilityGate();
     XLGInstallSidebarFix();
     XLGInstallLiquidGlassBadgeFixes();
+    XLGInstallXNavigationVisualFix();
     XLGInstallNFBSettingsIntegration();
 }
 
@@ -1217,7 +1628,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.4.0 standalone + NFB toggle + Moe swipe/navigation + badge fixes loaded");
+        NSLog(@"[XLiquidGlass] 1.5.0 standalone + Moe Liquid Glass tab bar visual fixes loaded");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
