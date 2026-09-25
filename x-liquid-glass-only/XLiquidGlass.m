@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-#pragma mark - XLiquidGlass 1.8.0 Beta 1
+#pragma mark - XLiquidGlass 1.8.0 Beta 2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -55,6 +55,8 @@ static BOOL gXLGNavigationProbeActive = NO;
 static BOOL gXLGNavigationProbeHooksInstalled = NO;
 static NSMutableDictionary<NSString *, NSValue *> *gXLGContainerProbeOriginals = nil;
 static BOOL gXLGContainerProbeHooksInstalled = NO;
+static char kXLGContainerHostKey;
+static char kXLGContainerHostRootKey;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -164,6 +166,64 @@ static void XLGSyncCompatibilityGate(void) {
         ((void (*)(id, SEL, BOOL))objc_msgSend)(installer, gateSEL, YES);
     }
 }
+
+@interface XLiquidGlassLegacyNavigationHostViewController : UIViewController
+@property(nonatomic,strong) UINavigationController *embeddedNavigationController;
+- (instancetype)initWithNavigationController:(UINavigationController *)navigationController;
+@end
+
+@implementation XLiquidGlassLegacyNavigationHostViewController
+
+- (instancetype)initWithNavigationController:(UINavigationController *)navigationController {
+    self=[super initWithNibName:nil bundle:nil];
+    if (self) {
+        _embeddedNavigationController=navigationController;
+    }
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor=UIColor.systemBackgroundColor;
+
+    UINavigationController *navigation=self.embeddedNavigationController;
+    if (!navigation) return;
+
+    if (navigation.parentViewController!=self) {
+        [self addChildViewController:navigation];
+        navigation.view.frame=self.view.bounds;
+        navigation.view.autoresizingMask=
+            UIViewAutoresizingFlexibleWidth |
+            UIViewAutoresizingFlexibleHeight;
+        [self.view addSubview:navigation.view];
+        [navigation didMoveToParentViewController:self];
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    self.embeddedNavigationController.view.frame=self.view.bounds;
+}
+
+- (UIViewController *)childViewControllerForStatusBarStyle {
+    return self.embeddedNavigationController;
+}
+
+- (UIViewController *)childViewControllerForStatusBarHidden {
+    return self.embeddedNavigationController;
+}
+
+- (UIViewController *)childViewControllerForHomeIndicatorAutoHidden {
+    return self.embeddedNavigationController;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return self.embeddedNavigationController
+        ? self.embeddedNavigationController.supportedInterfaceOrientations
+        : [super supportedInterfaceOrientations];
+}
+
+@end
 
 @interface XLiquidGlassNavigationProbeViewController : UITableViewController
 @end
@@ -616,7 +676,7 @@ static NSString *XLGNavigationProbeLogPath(void) {
     if (!documents.length) return nil;
     return [documents
         stringByAppendingPathComponent:
-            @"XLiquidGlass180Beta1ContainerProbe.log"];
+            @"XLiquidGlass180Beta2LegacyHost.log"];
 }
 
 static NSString *XLGNavigationProbeTimestamp(void) {
@@ -1173,6 +1233,117 @@ static NSString *XLGContainerProbeControllerSummary(id object) {
         stack];
 }
 
+static BOOL XLGContainerNeedsLegacyHost(id entry) {
+    if (!entry || !XLGEnabled()) return NO;
+    NSString *name=NSStringFromClass([entry class]);
+    return [name containsString:@"GuideAppNavigationTabEntry"] ||
+           [name containsString:@"NotificationsAppNavigationTabEntry"];
+}
+
+static BOOL XLGContainerNavigationClassMatchesEntry(
+    id entry,
+    UINavigationController *navigation) {
+
+    if (!entry || !navigation) return NO;
+
+    NSString *entryName=NSStringFromClass([entry class]);
+    NSString *navName=NSStringFromClass([navigation class]);
+
+    if ([entryName containsString:@"GuideAppNavigationTabEntry"]) {
+        return [navName isEqualToString:@"T1GuideNavigationController"];
+    }
+
+    if ([entryName containsString:@"NotificationsAppNavigationTabEntry"]) {
+        return [navName containsString:@"NotificationsNavigationController"];
+    }
+
+    return NO;
+}
+
+static id XLGContainerCompatibilityHost(
+    id entry,
+    UIViewController *rawRoot) {
+
+    if (!XLGContainerNeedsLegacyHost(entry) || !rawRoot) {
+        return rawRoot;
+    }
+
+    XLiquidGlassLegacyNavigationHostViewController *cached=
+        objc_getAssociatedObject(entry,&kXLGContainerHostKey);
+    UIViewController *cachedRoot=
+        objc_getAssociatedObject(entry,&kXLGContainerHostRootKey);
+
+    if (cached && cachedRoot==rawRoot) {
+        return cached;
+    }
+
+    SEL createSEL=NSSelectorFromString(@"createContentController");
+    IMP createIMP=XLGContainerProbeOriginalIMP(entry,createSEL);
+    if (!createIMP) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"CONTAINER_FIX owner=%@ failed=no-createContentController-IMP",
+                NSStringFromClass([entry class]));
+        }
+        return rawRoot;
+    }
+
+    id created=((id(*)(id,SEL))createIMP)(entry,createSEL);
+    if (![created isKindOfClass:UINavigationController.class]) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"CONTAINER_FIX owner=%@ failed=create-result-%@",
+                NSStringFromClass([entry class]),
+                created ? NSStringFromClass([created class]) : @"nil");
+        }
+        return rawRoot;
+    }
+
+    UINavigationController *legacyNavigation=
+        (UINavigationController *)created;
+
+    if (!XLGContainerNavigationClassMatchesEntry(
+            entry,legacyNavigation)) {
+        if (gXLGNavigationProbeActive) {
+            XLGNavigationProbeLog(
+                @"CONTAINER_FIX owner=%@ failed=unexpected-nav-%@",
+                NSStringFromClass([entry class]),
+                NSStringFromClass(legacyNavigation.class));
+        }
+        return rawRoot;
+    }
+
+    [legacyNavigation setViewControllers:@[rawRoot] animated:NO];
+
+    XLiquidGlassLegacyNavigationHostViewController *host=
+        [[XLiquidGlassLegacyNavigationHostViewController alloc]
+            initWithNavigationController:legacyNavigation];
+
+    host.title=rawRoot.title;
+
+    objc_setAssociatedObject(
+        entry,
+        &kXLGContainerHostKey,
+        host,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(
+        entry,
+        &kXLGContainerHostRootKey,
+        rawRoot,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    if (gXLGNavigationProbeActive) {
+        XLGNavigationProbeLog(
+            @"CONTAINER_FIX owner=%@ root=%@ legacyNav=%@ host=%@",
+            NSStringFromClass([entry class]),
+            NSStringFromClass(rawRoot.class),
+            NSStringFromClass(legacyNavigation.class),
+            NSStringFromClass(host.class));
+    }
+
+    return host;
+}
+
 static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
     IMP original=XLGContainerProbeOriginalIMP(self,cmd);
     id result=nil;
@@ -1180,15 +1351,24 @@ static id XLGContainerProbeObjectNoArg(id self, SEL cmd) {
         result=((id(*)(id,SEL))original)(self,cmd);
     }
 
+    id finalResult=result;
+
+    if (sel_isEqual(cmd,NSSelectorFromString(@"rootTabViewController")) &&
+        [result isKindOfClass:UIViewController.class]) {
+        finalResult=XLGContainerCompatibilityHost(
+            self,(UIViewController *)result);
+    }
+
     if (gXLGNavigationProbeActive) {
         XLGNavigationProbeLog(
-            @"CONTAINER %@ owner=%@ ptr=%p result={%@}",
+            @"CONTAINER %@ owner=%@ ptr=%p raw={%@} final={%@}",
             NSStringFromSelector(cmd),
             NSStringFromClass([self class]),
             self,
-            XLGContainerProbeControllerSummary(result));
+            XLGContainerProbeControllerSummary(result),
+            XLGContainerProbeControllerSummary(finalResult));
     }
-    return result;
+    return finalResult;
 }
 
 static void XLGContainerProbeVoidNoArg(id self, SEL cmd) {
@@ -1464,7 +1644,7 @@ static void XLGInstallNavigationProbeHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Inicie a captura, feche e reabra as áreas de Notificações, Explorar e X Premium. Faça uma captura com Liquid Glass e outra sem. O foco desta beta é comparar createContentController, rootTabViewController e setupForTabBarPresentation dos AppNavigationTabEntry.";
+    return @"Beta 2 aplica o Legacy Container Host em Notificações e Explorar quando Liquid Glass está ativo. Inicie a captura e teste: notificação 'seguiu você', Notícias/Trending em Explorar e X Premium. O relatório mostra CONTAINER_FIX e os PUSH resultantes.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1524,7 +1704,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         XLGNavigationProbeClear();
         gXLGNavigationProbeActive=YES;
         XLGNavigationProbeLog(
-            @"========== XLiquidGlass 1.8.0 Beta 1 Navigation Container Probe ==========");
+            @"========== XLiquidGlass 1.8.0 Beta 2 Navigation Container Probe ==========");
         XLGNavigationProbeLog(
             @"probePath=%@",XLGNavigationProbeLogPath() ?: @"-");
         XLGNavigationProbeRuntimeSnapshot(@"capture-start");
@@ -1536,7 +1716,7 @@ static void XLGInstallNavigationProbeHooks(void) {
         if (!gXLGNavigationProbeActive) {
             gXLGNavigationProbeActive=YES;
             XLGNavigationProbeLog(
-                @"========== XLiquidGlass 1.8.0 Beta 1 Navigation Container Probe ==========");
+                @"========== XLiquidGlass 1.8.0 Beta 2 Navigation Container Probe ==========");
         }
         XLGNavigationProbeRuntimeSnapshot(@"manual");
         [tableView reloadData];
@@ -4739,7 +4919,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.8.0 Beta 1 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
+        NSLog(@"[XLiquidGlass] 1.8.0 Beta 2 loaded: native swipe + profile/guide probe + read-aware badges + own notification router + native Appearance integration + native-first drawer + startup hold + trusted badge state + ntab-to-DM reconciliation + per-account badges + NFB + sidebar + theme sync");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
