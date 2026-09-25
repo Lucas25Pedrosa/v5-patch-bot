@@ -994,6 +994,8 @@ static NSString *XLGCurrentUserIDFromAppEventHandler(id handler) {
     return nil;
 }
 
+static NSDictionary *XLGBadgeStateForUserID(NSString *userID);
+
 static NSString *XLGCurrentActiveUserID(void) {
     // Prefer the account explicitly supplied by X's badging/account lifecycle.
     // If persistence points to an account for which we have no state (for
