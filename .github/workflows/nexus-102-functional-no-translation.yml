@@ -1,0 +1,124 @@
+name: Build Nexus 1.0.2 PT-BR Functional No Translation
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/nexus-102-functional-no-translation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout exact functional source
+        uses: actions/checkout@v5
+        with:
+          ref: 9dea598f152b644b82e2ce5013248ad26a6db669
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Remove only iQFace translation from exact functional build
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("nexus/prepare_makefile_v2.py")
+          s = p.read_text(encoding="utf-8")
+          old = "Nexus_FILES = EnhancerTweak.m WordmarkActivation.m Translation.m HideButton11.m IconsTweak.m IconsPicker.m CacheTweak.m OLEDTweak.m NexusSettings.m NexusAvatarFix.m NexusVersion102.m"
+          new = "Nexus_FILES = EnhancerTweak.m WordmarkActivation.m HideButton11.m IconsTweak.m IconsPicker.m CacheTweak.m OLEDTweak.m NexusSettings.m NexusAvatarFix.m NexusVersion102.m"
+          if old not in s:
+              raise SystemExit("Exact functional Nexus_FILES line not found")
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding="utf-8")
+          print("Translation.m removed from Nexus_FILES; no other module changed.")
+          PY
+
+      - name: Build exact functional Nexus without Translation.m
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Reproduce run #52 exactly, except for not linking Translation.m.
+          python3 nexus/patch_presentation_v2.py nexus/NexusSettings.m
+          cp nexus/prepare_makefile_v2.py nexus/prepare_makefile.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("nexus/build.sh")
+          s = p.read_text(encoding="utf-8")
+
+          # Exact run #52 workflow patch.
+          s = s.replace("grep -F 'Alterar ícone' \"$ARTIFACTS/strings.txt\"\n", "")
+          needle = 'python3 "$ROOT/nexus/prepare_enhancer.py" "$WORK/EnhancerTweak.m" "$WORK/Translation.m"\n'
+          sync = 'python3 "$ROOT/nexus/sync_translation_11.py" "$WORK/Translation.m" "$ROOT/iqface-enhancer-1.1/Localization11.m"\n'
+          timing = 'python3 "$ROOT/nexus/patch_translation_timing.py" "$WORK/Translation.m"\n'
+          replacement = needle + sync + timing
+          if needle not in s:
+              raise RuntimeError("prepare_enhancer invocation not found")
+          s = s.replace(needle, replacement, 1)
+
+          # Only adjust binary validations that specifically require Translation.m.
+          s = s.replace("grep -F '1.1-core-ptbr' \"$ARTIFACTS/strings.txt\"\n", "")
+          s = s.replace("grep -F 'RECURSOS' \"$ARTIFACTS/strings.txt\"\n", "")
+
+          # Prove the generated Makefile excludes only Translation.m.
+          marker = 'python3 "$ROOT/nexus/prepare_makefile.py" "$ROOT/iqface-4in1/Makefile" "$WORK/Makefile"\n'
+          check = marker + '! grep -F "Translation.m" "$WORK/Makefile"\n'
+          if marker not in s:
+              raise RuntimeError("prepare_makefile invocation not found")
+          s = s.replace(marker, check, 1)
+
+          # Prove the resulting binary contains no old translation module.
+          compile_marker = 'grep -F \'@rpath/Nexus.dylib\' "$ARTIFACTS/install-name.txt"\n'
+          translation_absence = (
+              compile_marker
+              + "! grep -F '1.1-core-ptbr' \"$ARTIFACTS/strings.txt\"\n"
+              + "! grep -F 'IQFEnhancerLocalizationVersion' \"$ARTIFACTS/strings.txt\"\n"
+          )
+          if compile_marker not in s:
+              raise RuntimeError("binary validation marker not found")
+          s = s.replace(compile_marker, translation_absence, 1)
+
+          p.write_text(s, encoding="utf-8")
+          PY
+
+          bash nexus/build.sh
+
+      - name: Verify preserved functional modules
+        run: |
+          set -euo pipefail
+          STRINGS="nexus/artifacts/strings.txt"
+
+          grep -F 'v1.0.2' "$STRINGS"
+          grep -F 'iqfDismiss' "$STRINGS"
+          grep -F 'iqf_tapped' "$STRINGS"
+          grep -F 'IQFIconsPickerController' "$STRINGS"
+          grep -F 'Modo OLED' "$STRINGS"
+          grep -F 'Separadores no feed' "$STRINGS"
+          grep -F 'Limpar cache' "$STRINGS"
+          grep -F 'Limpar cache automaticamente' "$STRINGS"
+          grep -F 'nexus_avatar_addSubview:' "$STRINGS"
+          grep -F 'nexus_avatar_setImage:' "$STRINGS"
+
+          if grep -F '1.1-core-ptbr' "$STRINGS"; then
+            echo "Old iQFace PT-BR translation module is still present"
+            exit 1
+          fi
+
+      - name: Upload Nexus
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-1.0.2-PTBR-Functional-No-iQFace-Translation-arm64
+          path: nexus/artifacts/
+          if-no-files-found: error
