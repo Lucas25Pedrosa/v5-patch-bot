@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2 Beta 5
+#pragma mark - XLiquidGlass 1.9.2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -34,7 +34,6 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
-static NSString *XLGToastBridgeLogPath(void);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -221,7 +220,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 3;
+    return 2;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -244,15 +243,6 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryView=nil;
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
-
-    if (indexPath.row == 2) {
-        cell.textLabel.text = @"Copiar relatório de toast";
-        cell.detailTextLabel.text =
-            @"Copia o diagnóstico da ponte de “Post enviado”.";
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        return cell;
-    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -295,35 +285,6 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
-}
-
-- (void)tableView:(UITableView *)tableView
- didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row != 2) return;
-
-    NSString *path=XLGToastBridgeLogPath();
-    NSData *data=path.length ? [NSData dataWithContentsOfFile:path] : nil;
-    NSString *report=data.length
-        ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
-        : @"";
-
-    if (report.length) {
-        UIPasteboard.generalPasteboard.string=report;
-    }
-
-    UIAlertController *alert=
-        [UIAlertController
-            alertControllerWithTitle:@"Relatório de toast"
-                             message:report.length
-                                ? @"Relatório copiado para a área de transferência."
-                                : @"Ainda não há eventos registrados."
-                      preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:
-        [UIAlertAction actionWithTitle:@"OK"
-                                 style:UIAlertActionStyleDefault
-                               handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -658,57 +619,12 @@ static UINavigationController *XLGNavigationControllerForPresenter(
 }
 
 
-#pragma mark - XLiquidGlass 1.9.2 Beta 2 native toast bridge
-
-static NSString *XLGToastBridgeLogPath(void) {
-    NSString *documents=
-        NSSearchPathForDirectoriesInDomains(
-            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
-    if (!documents.length) return nil;
-    return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass192Beta5NativeSentToast.log"];
-}
-
-static NSString *XLGToastBridgeTimestamp(void) {
-    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
-    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
-    return [formatter stringFromDate:NSDate.date] ?: @"-";
-}
+#pragma mark - XLiquidGlass 1.9.2 native toast bridge
 
 static void XLGToastBridgeLog(NSString *format, ...) {
-    if (!format.length) return;
-
-    va_list args;
-    va_start(args,format);
-    NSString *message=
-        [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-
-    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
-                    XLGToastBridgeTimestamp(),
-                    message ?: @"-"];
-    NSLog(@"[XLiquidGlass/ToastBridge] %@",message ?: @"-");
-
-    NSString *path=XLGToastBridgeLogPath();
-    if (!path.length) return;
-
-    @synchronized(NSFileManager.defaultManager) {
-        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
-        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
-            [NSFileManager.defaultManager createFileAtPath:path
-                                                  contents:nil
-                                                attributes:nil];
-        }
-        @try {
-            NSFileHandle *handle=
-                [NSFileHandle fileHandleForWritingAtPath:path];
-            [handle seekToEndOfFile];
-            [handle writeData:data];
-            [handle closeFile];
-        } @catch (__unused NSException *exception) {
-        }
-    }
+    // Stable build: keep call sites for low-risk diagnostics but do not
+    // persist reports or emit runtime logging.
+    (void)format;
 }
 
 static BOOL XLGToastBridgeIsToaster(id object) {
@@ -1378,12 +1294,6 @@ static void XLGInstallToastBridge(void) {
     gXLGToastBridgeInstalled=any;
 
     if (any) {
-        NSString *path=XLGToastBridgeLogPath();
-        if (path.length) {
-            [NSFileManager.defaultManager removeItemAtPath:path error:nil];
-        }
-        XLGToastBridgeLog(
-            @"========== XLiquidGlass 1.9.2 Beta 5 Native Sent Toast ==========");
         XLGToastBridgeLog(
             @"liquidGlass=%@ appNavigation=%@",
             XLGEnabled() ? @"ON" : @"OFF",
@@ -6721,7 +6631,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 Beta 5 loaded: retained composition payload + native timeline presenter + sent-toast bridge + 1.9.1 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
