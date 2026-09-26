@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Surface Scroll Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-surface-scroll-probe/**"
+      - ".github/workflows/x-liquid-glass-surface-scroll-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-surface-scroll-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassSurfaceScrollProbe.dylib ! -path '*/XLiquidGlassSurfaceScrollProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassSurfaceScrollProbe.dylib
+          file artifacts/XLiquidGlassSurfaceScrollProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassSurfaceScrollProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassSurfaceScrollProbe-0.3.0-X12.28.1-arm64
+          path: x-liquid-glass-surface-scroll-probe/artifacts/
+          if-no-files-found: error

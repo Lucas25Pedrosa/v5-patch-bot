@@ -77,12 +77,14 @@ static BOOL gXLGSearchBlurFixInstalled = NO;
 static BOOL gXLGSearchEffectGuardInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
 
-// 2.0 Beta 5: timeline edge blur only. These hooks are isolated from the
-// validated 1.9.2 renderer, badge pipeline, color selector and Search Blur.
+// 2.0 Beta 6: ScrollEdgeTreatment blur removal. Home Beta 5 behavior remains
+// intact; Beta 6 extends the same narrow treatment to other visible sections.
 static IMP gOrigHomeTimelineViewDidLayoutSubviews = NULL;
 static IMP gOrigHomeTimelineViewDidAppear = NULL;
 static IMP gOrigTimelineScrollEdgeBackdropLayoutSubviews = NULL;
+static IMP gOrigScrollEdgeTreatmentLayoutSubviews = NULL;
 static BOOL gXLGTimelineEdgeBlurFixInstalled = NO;
+static BOOL gXLGGlobalScrollEdgeBlurFixInstalled = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -6634,6 +6636,54 @@ static BOOL XLGViewBelongsToHomeTimeline(UIView *view) {
            [view isDescendantOfView:controller.view];
 }
 
+static BOOL XLGViewTouchesVisibleScrollEdge(UIView *view) {
+    if (!view || !view.window) return NO;
+
+    UIWindow *window=view.window;
+    CGRect frame=[view convertRect:view.bounds toView:window];
+    if (!CGRectIntersectsRect(frame,window.bounds)) return NO;
+
+    CGFloat height=CGRectGetHeight(window.bounds);
+    BOOL top=
+        CGRectGetMaxY(frame)>0.0 &&
+        CGRectGetMinY(frame)<180.0;
+    BOOL bottom=
+        CGRectGetMaxY(frame)>height-140.0;
+
+    return top || bottom;
+}
+
+static BOOL XLGScrollEdgeEffectViewIsProtected(
+    UIVisualEffectView *effectView) {
+
+    if (!XLGEnabled() || !effectView) return NO;
+
+    UIView *treatment=
+        XLGAncestorNamed(
+            effectView,
+            @"XDesignSystem.ScrollEdgeTreatment");
+    if (!treatment) return NO;
+
+    return XLGViewTouchesVisibleScrollEdge(effectView);
+}
+
+static BOOL XLGScrollEdgeBackdropIsProtected(UIView *view) {
+    if (!XLGEnabled() || !view) return NO;
+    if (![NSStringFromClass(view.class)
+            isEqualToString:
+                @"_TtCC5UIKit20ScrollEdgeEffectView12BackdropView"]) {
+        return NO;
+    }
+
+    UIView *treatment=
+        XLGAncestorNamed(
+            view,
+            @"XDesignSystem.ScrollEdgeTreatment");
+    if (!treatment) return NO;
+
+    return XLGViewTouchesVisibleScrollEdge(view);
+}
+
 static BOOL XLGTimelineEdgeEffectViewIsProtected(
     UIVisualEffectView *effectView) {
 
@@ -6803,11 +6853,15 @@ static void XLGVisualEffectViewSetEffect(
             XLGSearchEffectViewIsProtected(effectView);
         BOOL timelineEdgeProtected=
             XLGTimelineEdgeEffectViewIsProtected(effectView);
+        BOOL scrollEdgeProtected=
+            XLGScrollEdgeEffectViewIsProtected(effectView);
 
-        if (searchProtected || timelineEdgeProtected) {
-            // Search keeps the already-validated persistent guard. Beta 5
-            // adds only the two Home timeline ScrollEdgeTreatment effects
-            // captured by the probe; Tab Bar glass/pill are not in this scope.
+        if (searchProtected ||
+            timelineEdgeProtected ||
+            scrollEdgeProtected) {
+            // Search keeps the validated persistent guard. Beta 6 extends
+            // Beta 5 only to visible XDesignSystem.ScrollEdgeTreatment edges.
+            // Tab Bar glass/pill are not descendants of this treatment.
             ((void(*)(id,SEL,id))
                 gOrigVisualEffectViewSetEffect)(
                     self,cmd,nil);
@@ -7004,6 +7058,67 @@ static void XLGHomeTimelineViewDidAppear(
     XLGScheduleTimelineEdgeBlurRemoval(controller);
 }
 
+static void XLGApplyScrollEdgeTreatmentBlurRemoval(
+    UIView *treatment,
+    NSString *reason) {
+
+    if (!XLGEnabled() || !treatment || !treatment.window) return;
+    if (![NSStringFromClass(treatment.class)
+            isEqualToString:@"XDesignSystem.ScrollEdgeTreatment"]) {
+        return;
+    }
+
+    NSUInteger effectsRemoved=0;
+    for (UIView *candidate in
+         XLGSubviewsMatchingClassName(
+             treatment,
+             @"UIVisualEffectView")) {
+
+        if (![candidate isKindOfClass:UIVisualEffectView.class]) continue;
+        UIVisualEffectView *effectView=(UIVisualEffectView *)candidate;
+        if (!XLGScrollEdgeEffectViewIsProtected(effectView)) continue;
+
+        if (effectView.effect) {
+            effectView.effect=nil;
+            effectsRemoved++;
+        }
+        effectView.backgroundColor=UIColor.clearColor;
+    }
+
+    NSUInteger layerFiltersRemoved=0;
+    for (UIView *backdrop in
+         XLGSubviewsMatchingClassName(
+             treatment,
+             @"_TtCC5UIKit20ScrollEdgeEffectView12BackdropView")) {
+
+        if (!XLGScrollEdgeBackdropIsProtected(backdrop)) continue;
+        layerFiltersRemoved+=
+            XLGRemoveBlurFiltersFromLayer(backdrop.layer);
+    }
+
+    if (effectsRemoved || layerFiltersRemoved) {
+        XLGDiagLog(
+            @"SCROLL_EDGE_BLUR removedEffects=%lu removedLayerFilters=%lu treatment=%p reason=%@",
+            (unsigned long)effectsRemoved,
+            (unsigned long)layerFiltersRemoved,
+            treatment,
+            reason ?: @"-");
+    }
+}
+
+static void XLGScrollEdgeTreatmentLayoutSubviews(id self, SEL cmd) {
+    if (gOrigScrollEdgeTreatmentLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigScrollEdgeTreatmentLayoutSubviews)(
+                self,cmd);
+    }
+
+    if (![self isKindOfClass:UIView.class]) return;
+    XLGApplyScrollEdgeTreatmentBlurRemoval(
+        (UIView *)self,
+        @"treatment-layout");
+}
+
 static void XLGTimelineScrollEdgeBackdropLayoutSubviews(
     id self,
     SEL cmd) {
@@ -7017,7 +7132,8 @@ static void XLGTimelineScrollEdgeBackdropLayoutSubviews(
     if (![self isKindOfClass:UIView.class]) return;
     UIView *view=(UIView *)self;
 
-    if (XLGTimelineScrollEdgeBackdropIsProtected(view)) {
+    if (XLGScrollEdgeBackdropIsProtected(view) ||
+        XLGTimelineScrollEdgeBackdropIsProtected(view)) {
         XLGRemoveBlurFiltersFromLayer(view.layer);
     }
 }
@@ -7048,6 +7164,19 @@ static void XLGInstallTimelineEdgeBlurFix(void) {
             &gOrigHomeTimelineViewDidAppear);
     }
 
+    Class treatmentClass=NSClassFromString(
+        @"XDesignSystem.ScrollEdgeTreatment");
+    if (treatmentClass &&
+        !gOrigScrollEdgeTreatmentLayoutSubviews) {
+        gXLGGlobalScrollEdgeBlurFixInstalled=
+            XLGHookMethod(
+                treatmentClass,
+                @selector(layoutSubviews),
+                NO,
+                (IMP)XLGScrollEdgeTreatmentLayoutSubviews,
+                &gOrigScrollEdgeTreatmentLayoutSubviews);
+    }
+
     Class backdropClass=NSClassFromString(
         @"_TtCC5UIKit20ScrollEdgeEffectView12BackdropView");
     if (backdropClass &&
@@ -7061,7 +7190,8 @@ static void XLGInstallTimelineEdgeBlurFix(void) {
     }
 
     gXLGTimelineEdgeBlurFixInstalled=
-        gOrigHomeTimelineViewDidLayoutSubviews!=NULL;
+        gOrigHomeTimelineViewDidLayoutSubviews!=NULL ||
+        gXLGGlobalScrollEdgeBlurFixInstalled;
 
     UIViewController *current=
         XLGCurrentVisibleHomeTimelineController();
