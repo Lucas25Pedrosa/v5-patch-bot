@@ -71,7 +71,9 @@ static IMP gOrigXAppShowDisplaySettings = NULL;
 static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
 static IMP gOrigSearchContainerViewDidAppear = NULL;
+static IMP gOrigVisualEffectViewSetEffect = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
+static BOOL gXLGSearchEffectGuardInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
 
 static BOOL gDebugSettingsHooked = NO;
@@ -6517,6 +6519,84 @@ static NSUInteger XLGRemoveSearchBlurViews(
     return removed;
 }
 
+static UIViewController *XLGSearchControllerForView(UIView *view) {
+    UIResponder *responder=view;
+    NSUInteger depth=0;
+
+    while (responder && depth<80) {
+        if ([responder isKindOfClass:UIViewController.class] &&
+            [NSStringFromClass(responder.class)
+                isEqualToString:@"TTSSearchContainerViewControllerV2"]) {
+            return (UIViewController *)responder;
+        }
+
+        responder=responder.nextResponder;
+        depth++;
+    }
+
+    return nil;
+}
+
+static BOOL XLGSearchEffectViewIsProtected(UIVisualEffectView *effectView) {
+    if (!XLGEnabled() || !effectView) return NO;
+
+    UIViewController *controller=
+        XLGSearchControllerForView(effectView);
+    if (!controller || !controller.view) return NO;
+
+    CGRect frame=[effectView convertRect:effectView.bounds
+                                  toView:controller.view];
+
+    return CGRectGetMaxY(frame)>0.0 &&
+           CGRectGetMinY(frame)<240.0;
+}
+
+static void XLGVisualEffectViewSetEffect(
+    id self,
+    SEL cmd,
+    UIVisualEffect *effect) {
+
+    if (!gOrigVisualEffectViewSetEffect) return;
+
+    if ([self isKindOfClass:UIVisualEffectView.class] &&
+        effect!=nil &&
+        XLGSearchEffectViewIsProtected(
+            (UIVisualEffectView *)self)) {
+
+        // Persistent guard: later X updates may try to recreate/reapply the
+        // search header blur. Inside the validated search-container/top-region
+        // scope, forward nil to UIKit instead of the requested blur.
+        ((void(*)(id,SEL,id))
+            gOrigVisualEffectViewSetEffect)(
+                self,cmd,nil);
+
+        ((UIVisualEffectView *)self).backgroundColor=
+            UIColor.clearColor;
+        return;
+    }
+
+    ((void(*)(id,SEL,id))
+        gOrigVisualEffectViewSetEffect)(
+            self,cmd,effect);
+}
+
+static void XLGInstallPersistentSearchEffectGuard(void) {
+    if (gXLGSearchEffectGuardInstalled) return;
+
+    Class cls=UIVisualEffectView.class;
+    SEL selector=@selector(setEffect:);
+    Method method=class_getInstanceMethod(cls,selector);
+    if (!method) return;
+
+    gXLGSearchEffectGuardInstalled=
+        XLGHookMethod(
+            cls,
+            selector,
+            NO,
+            (IMP)XLGVisualEffectViewSetEffect,
+            &gOrigVisualEffectViewSetEffect);
+}
+
 static void XLGApplySearchBlurRemoval(
     UIViewController *controller,
     NSString *reason) {
@@ -6616,6 +6696,8 @@ static void XLGSearchContainerViewDidAppear(
 }
 
 static void XLGInstallSearchBlurFix(void) {
+    XLGInstallPersistentSearchEffectGuard();
+
     if (gXLGSearchBlurFixInstalled) return;
 
     Class cls=NSClassFromString(
