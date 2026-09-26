@@ -1346,6 +1346,65 @@ static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
 }
 
 
+static id XLGSafeValueForKey(id object, NSString *key) {
+    if (!object || !key.length) return nil;
+    @try {
+        return [object valueForKey:key];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static BOOL XLGObjectLooksLikeBlock(id object) {
+    if (!object) return NO;
+    NSString *className=NSStringFromClass([object class]);
+    return [className containsString:@"Block"];
+}
+
+static void XLGActivateCurrentXNavigationItem(void) {
+    if (XLGTabBarColorModeValue() != XLGTabBarColorModeActiveOnly ||
+        XLGThemeAccentEnabled()) return;
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (!window || window.hidden) continue;
+
+            NSArray<UIView *> *bars=
+                XLGCollectViewsMatching(window,^BOOL(UIView *view) {
+                    NSString *name=NSStringFromClass(view.class);
+                    return [name isEqualToString:@"XNavigation.TabBarView"] ||
+                           [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
+                });
+
+            for (UIView *bar in bars) {
+                id itemViews=XLGSafeValueForKey(bar,@"itemViews");
+                id selectedIndexValue=XLGSafeValueForKey(bar,@"selectedIndex");
+                if (![itemViews isKindOfClass:NSArray.class] ||
+                    ![selectedIndexValue respondsToSelector:@selector(integerValue)]) {
+                    continue;
+                }
+
+                NSInteger selectedIndex=[selectedIndexValue integerValue];
+                NSArray *items=(NSArray *)itemViews;
+                if (selectedIndex < 0 || (NSUInteger)selectedIndex >= items.count) continue;
+
+                id selectedItem=items[(NSUInteger)selectedIndex];
+                id onActivate=XLGSafeValueForKey(selectedItem,@"onActivate");
+
+                // XNavigation.TabBarItemView stores the same no-argument callback
+                // used by a real tab tap. Re-fire only the already-selected item.
+                if (XLGObjectLooksLikeBlock(onActivate)) {
+                    void (^activate)(void)=onActivate;
+                    activate();
+                    return;
+                }
+            }
+        }
+    }
+}
+
 static BOOL XLGViewLooksSelected(UIView *button, UITabBar *tabBar, NSUInteger index) {
     if ([button isKindOfClass:UIControl.class]) {
         UIControl *control=(UIControl *)button;
@@ -1656,6 +1715,16 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
                     setBool:NO
                      forKey:kXLGThemeAccentEnabledKey];
                 XLGRefreshThemeAccentNow();
+
+                // The manual tab tap was the missing final state propagation.
+                // Run the selected item's own activation callback once, after
+                // the old 9473 refresh passes (0 / .04 / .12 s) have finished.
+                dispatch_after(
+                    dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.20*NSEC_PER_SEC)),
+                    dispatch_get_main_queue(), ^{
+                        XLGActivateCurrentXNavigationItem();
+                    }
+                );
             }
         );
     }
@@ -1982,7 +2051,7 @@ static void XLiquidGlassInit(void) {
             [defaults setBool:NO forKey:kXLGThemeAccentEnabledKey];
         }
 
-        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test5 loaded: delayed 9473a2be Active Only transition");
+        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test6 loaded: automatic selected-tab activation");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
