@@ -7104,7 +7104,7 @@ static void XLG2ScheduleInstall(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlass2TabBarColorInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0 color selector loaded on exact 1.9.2 stable base");
+        NSLog(@"[XLiquidGlass] 2.0 Stable loaded: exact 1.9.2 stable base + Tab Bar color modes + persistent Search blur");
 
         XLG2InstallColorFeature();
         XLG2ScheduleInstall(0.00);
