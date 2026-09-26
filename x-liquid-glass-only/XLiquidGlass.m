@@ -1346,24 +1346,21 @@ static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
 }
 
 
-static id XLGSafeValueForKey(id object, NSString *key) {
-    if (!object || !key.length) return nil;
-    @try {
-        return [object valueForKey:key];
-    } @catch (__unused NSException *exception) {
-        return nil;
+static UIColor *XLGNativeInactiveTabColor(void) {
+    Class tabViewClass=NSClassFromString(@"T1TabView");
+    SEL itemColorSEL=NSSelectorFromString(@"itemColor");
+    if (tabViewClass && [tabViewClass respondsToSelector:itemColorSEL]) {
+        id color=((id(*)(id,SEL))objc_msgSend)(tabViewClass,itemColorSEL);
+        if ([color isKindOfClass:UIColor.class]) return color;
     }
+    return UIColor.secondaryLabelColor;
 }
 
-static BOOL XLGObjectLooksLikeBlock(id object) {
-    if (!object) return NO;
-    NSString *className=NSStringFromClass([object class]);
-    return [className containsString:@"Block"];
-}
-
-static void XLGActivateCurrentXNavigationItem(void) {
+static void XLGRestorePrimaryXNavigationRow(void) {
     if (XLGTabBarColorModeValue() != XLGTabBarColorModeActiveOnly ||
         XLGThemeAccentEnabled()) return;
+
+    UIColor *inactive=XLGNativeInactiveTabColor();
 
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
@@ -1379,26 +1376,32 @@ static void XLGActivateCurrentXNavigationItem(void) {
                 });
 
             for (UIView *bar in bars) {
-                id itemViews=XLGSafeValueForKey(bar,@"itemViews");
-                id selectedIndexValue=XLGSafeValueForKey(bar,@"selectedIndex");
-                if (![itemViews isKindOfClass:NSArray.class] ||
-                    ![selectedIndexValue respondsToSelector:@selector(integerValue)]) {
-                    continue;
-                }
+                NSArray<UIView *> *primaryItems=
+                    XLGCollectViewsMatching(bar,^BOOL(UIView *view) {
+                        NSString *name=NSStringFromClass(view.class);
+                        BOOL item=[name isEqualToString:@"XNavigation.TabBarItemView"] ||
+                                  [name containsString:@"TabBarItemView"];
+                        // Probe Test7 proved that the visible primary row is the
+                        // copy whose items carry labels; Portal/Carried copies do not.
+                        return item && view.accessibilityLabel.length>0;
+                    });
 
-                NSInteger selectedIndex=[selectedIndexValue integerValue];
-                NSArray *items=(NSArray *)itemViews;
-                if (selectedIndex < 0 || (NSUInteger)selectedIndex >= items.count) continue;
+                for (UIView *item in primaryItems) {
+                    NSArray<UIView *> *images=
+                        XLGCollectViewsMatching(item,^BOOL(UIView *view) {
+                            return [view isKindOfClass:UIImageView.class];
+                        });
 
-                id selectedItem=items[(NSUInteger)selectedIndex];
-                id onActivate=XLGSafeValueForKey(selectedItem,@"onActivate");
-
-                // XNavigation.TabBarItemView stores the same no-argument callback
-                // used by a real tab tap. Re-fire only the already-selected item.
-                if (XLGObjectLooksLikeBlock(onActivate)) {
-                    void (^activate)(void)=onActivate;
-                    activate();
-                    return;
+                    for (UIImageView *imageView in (NSArray<UIImageView *> *)images) {
+                        UIImage *image=imageView.image;
+                        if (image &&
+                            image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+                            imageView.image=
+                                [image imageWithRenderingMode:
+                                    UIImageRenderingModeAlwaysTemplate];
+                        }
+                        imageView.tintColor=inactive;
+                    }
                 }
             }
         }
@@ -1716,13 +1719,14 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
                      forKey:kXLGThemeAccentEnabledKey];
                 XLGRefreshThemeAccentNow();
 
-                // The manual tab tap was the missing final state propagation.
-                // Run the selected item's own activation callback once, after
-                // the old 9473 refresh passes (0 / .04 / .12 s) have finished.
+                // Test7 probe proved the real visual transition:
+                // X restores only the labeled primary-row UIImageViews to its
+                // native inactive color while Portal/Pill copies keep the theme
+                // accent. Reproduce that state directly after the old refreshes.
                 dispatch_after(
                     dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.20*NSEC_PER_SEC)),
                     dispatch_get_main_queue(), ^{
-                        XLGActivateCurrentXNavigationItem();
+                        XLGRestorePrimaryXNavigationRow();
                     }
                 );
             }
@@ -2051,7 +2055,7 @@ static void XLiquidGlassInit(void) {
             [defaults setBool:NO forKey:kXLGThemeAccentEnabledKey];
         }
 
-        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test6 loaded: automatic selected-tab activation");
+        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test8 loaded: primary-row native / portal accent");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
