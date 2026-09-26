@@ -15,6 +15,8 @@ static NSUInteger gSSPGestureSerial = 0;
 static NSTimeInterval gSSPLastGestureSample = 0;
 static NSString *gSSPLastScreenSignature = nil;
 static NSMutableSet<NSString *> *gSSPDumpedRuntimeClasses = nil;
+static NSMutableSet<NSString *> *gSSPDumpedCollapseClasses = nil;
+static NSUInteger gSSPLastTransformStackSerial = NSNotFound;
 
 static IMP gSSPOrigUIApplicationSendEvent = NULL;
 static IMP gSSPOrigNFBSetupSections = NULL;
@@ -485,6 +487,261 @@ static void SSPDumpVisibleControllerRuntimeClasses(UIWindow *window) {
     }
 }
 
+
+#pragma mark - XLiquidGlass 2.1 native collapse diagnostics
+
+static void SSPDumpAllMethodsForCollapseClass(Class cls) {
+    if (!cls) return;
+
+    if (!gSSPDumpedCollapseClasses) {
+        gSSPDumpedCollapseClasses=[NSMutableSet set];
+    }
+
+    NSString *className=NSStringFromClass(cls) ?: @"?";
+    if ([gSSPDumpedCollapseClasses containsObject:className]) return;
+    [gSSPDumpedCollapseClasses addObject:className];
+
+    SSPLog(@"COLLAPSE_CLASS_BEGIN class=%@ ptr=%p super=%@",
+           className,
+           cls,
+           class_getSuperclass(cls)
+               ? NSStringFromClass(class_getSuperclass(cls))
+               : @"nil");
+
+    unsigned int ivarCount=0;
+    Ivar *ivars=class_copyIvarList(cls,&ivarCount);
+    for (unsigned int i=0;i<ivarCount;i++) {
+        SSPLog(@"COLLAPSE_IVAR class=%@ name=%s type=%s offset=%td",
+               className,
+               ivar_getName(ivars[i]) ?: "-",
+               ivar_getTypeEncoding(ivars[i]) ?: "-",
+               ivar_getOffset(ivars[i]));
+    }
+    free(ivars);
+
+    unsigned int propertyCount=0;
+    objc_property_t *properties=class_copyPropertyList(cls,&propertyCount);
+    for (unsigned int i=0;i<propertyCount;i++) {
+        SSPLog(@"COLLAPSE_PROPERTY class=%@ name=%s attrs=%s",
+               className,
+               property_getName(properties[i]) ?: "-",
+               property_getAttributes(properties[i]) ?: "-");
+    }
+    free(properties);
+
+    unsigned int methodCount=0;
+    Method *methods=class_copyMethodList(cls,&methodCount);
+    unsigned int limit=MIN(methodCount,240u);
+    for (unsigned int i=0;i<limit;i++) {
+        SEL sel=method_getName(methods[i]);
+        SSPLog(@"COLLAPSE_METHOD class=%@ selector=%@ encoding=%s imp=%p",
+               className,
+               NSStringFromSelector(sel),
+               method_getTypeEncoding(methods[i]) ?: "-",
+               method_getImplementation(methods[i]));
+    }
+    if (methodCount>limit) {
+        SSPLog(@"COLLAPSE_METHOD_TRUNCATED class=%@ total=%u logged=%u",
+               className,methodCount,limit);
+    }
+    free(methods);
+
+    SSPLog(@"COLLAPSE_CLASS_END class=%@",className);
+}
+
+static void SSPDumpCollapseClassHierarchy(id object) {
+    if (!object) return;
+
+    Class cls=object_getClass(object);
+    for (NSUInteger depth=0; cls && depth<8; depth++) {
+        SSPDumpAllMethodsForCollapseClass(cls);
+        cls=class_getSuperclass(cls);
+    }
+}
+
+static void SSPLogBoolCapabilityIfPresent(
+    UIViewController *vc,
+    NSString *selectorName) {
+
+    if (!vc || !selectorName.length) return;
+    SEL sel=NSSelectorFromString(selectorName);
+    if (![vc respondsToSelector:sel]) return;
+
+    Method method=class_getInstanceMethod(vc.class,sel);
+    const char *encoding=method ? method_getTypeEncoding(method) : NULL;
+
+    BOOL value=((BOOL(*)(id,SEL))objc_msgSend)(vc,sel);
+    SSPLog(@"COLLAPSE_CAPABILITY controller=%@ ptr=%p selector=%@ value=%d encoding=%s",
+           NSStringFromClass(vc.class),
+           vc,
+           selectorName,
+           value,
+           encoding ?: "-");
+}
+
+static void SSPDumpVisibleCollapseCapabilities(UIWindow *window) {
+    if (!window) return;
+
+    NSMutableArray<UIViewController *> *queue=
+        [NSMutableArray arrayWithObject:window.rootViewController];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (NSUInteger i=0;i<queue.count && i<220;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *token=[NSValue valueWithNonretainedObject:vc];
+        if ([visited containsObject:token]) continue;
+        [visited addObject:token];
+
+        BOOL visible=
+            vc==window.rootViewController ||
+            (vc.isViewLoaded && vc.view.window==window);
+
+        if (visible) {
+            SSPLogBoolCapabilityIfPresent(vc,@"tfn_supportsTabBarCollapsing");
+            SSPLogBoolCapabilityIfPresent(vc,@"tfn_prefersTabBarPinned");
+            SSPLogBoolCapabilityIfPresent(vc,@"tfn_preferManualNavBarCollapse");
+            SSPLogBoolCapabilityIfPresent(vc,@"tfn_prefersNavigationBarExpandedWhenScrolledToBottom");
+        }
+
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+        [queue addObjectsFromArray:vc.childViewControllers ?: @[]];
+    }
+}
+
+static Ivar SSPFindIvarInHierarchy(Class cls, const char *name) {
+    for (Class cursor=cls; cursor; cursor=class_getSuperclass(cursor)) {
+        Ivar ivar=class_getInstanceVariable(cursor,name);
+        if (ivar) return ivar;
+    }
+    return NULL;
+}
+
+static void SSPDumpNavigationCollapseEngine(
+    UIViewController *controller) {
+
+    if (!controller) return;
+
+    NSString *name=NSStringFromClass(controller.class) ?: @"";
+    if (![name isEqualToString:@"XNavigation.NavigationController"]) {
+        return;
+    }
+
+    Ivar engineIvar=
+        SSPFindIvarInHierarchy(
+            controller.class,
+            "$__lazy_storage_$_collapseEngine");
+
+    Ivar watcherIvar=
+        SSPFindIvarInHierarchy(
+            controller.class,
+            "scrollToTopWatcher");
+
+    id engine=nil;
+    id watcher=nil;
+
+    if (engineIvar) {
+        @try {
+            engine=object_getIvar(controller,engineIvar);
+        } @catch (__unused NSException *exception) {
+            engine=nil;
+        }
+    }
+
+    if (watcherIvar) {
+        @try {
+            watcher=object_getIvar(controller,watcherIvar);
+        } @catch (__unused NSException *exception) {
+            watcher=nil;
+        }
+    }
+
+    SSPLog(@"COLLAPSE_ENGINE nav=%p engineIvar=%p engine=%p engineClass=%@ watcher=%p watcherClass=%@",
+           controller,
+           engineIvar,
+           engine,
+           engine ? NSStringFromClass(object_getClass(engine)) : @"nil",
+           watcher,
+           watcher ? NSStringFromClass(object_getClass(watcher)) : @"nil");
+
+    if (engine) SSPDumpCollapseClassHierarchy(engine);
+    if (watcher) SSPDumpCollapseClassHierarchy(watcher);
+}
+
+static void SSPDumpVisibleNavigationCollapseEngines(UIWindow *window) {
+    if (!window) return;
+
+    NSMutableArray<UIViewController *> *queue=
+        [NSMutableArray arrayWithObject:window.rootViewController];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (NSUInteger i=0;i<queue.count && i<220;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *token=[NSValue valueWithNonretainedObject:vc];
+        if ([visited containsObject:token]) continue;
+        [visited addObject:token];
+
+        if (vc==window.rootViewController ||
+            (vc.isViewLoaded && vc.view.window==window)) {
+            SSPDumpNavigationCollapseEngine(vc);
+        }
+
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+        [queue addObjectsFromArray:vc.childViewControllers ?: @[]];
+    }
+}
+
+static void SSPDumpNativeCollapseContext(
+    UIWindow *window,
+    NSString *reason) {
+
+    if (!window) return;
+
+    SSPLog(@"========== NATIVE_COLLAPSE_CONTEXT reason=%@ ==========",
+           reason ?: @"-");
+    SSPDumpVisibleCollapseCapabilities(window);
+    SSPDumpVisibleNavigationCollapseEngines(window);
+    SSPLog(@"========== NATIVE_COLLAPSE_CONTEXT_END reason=%@ ==========",
+           reason ?: @"-");
+}
+
+static void SSPLogTabBarTransformCallStack(
+    UIView *view,
+    CGAffineTransform transform) {
+
+    if (!gSSPGestureActive ||
+        gSSPLastTransformStackSerial==gSSPGestureSerial) {
+        return;
+    }
+
+    CGFloat ty=transform.ty;
+    if (!isfinite(ty) || fabs(ty)<0.5) return;
+
+    gSSPLastTransformStackSerial=gSSPGestureSerial;
+
+    NSArray<NSString *> *symbols=[NSThread callStackSymbols] ?: @[];
+    NSUInteger start=MIN((NSUInteger)1,symbols.count);
+    NSUInteger count=
+        symbols.count>start
+            ? MIN((NSUInteger)20,symbols.count-start)
+            : 0;
+    NSArray<NSString *> *slice=
+        count ? [symbols subarrayWithRange:NSMakeRange(start,count)] : @[];
+
+    SSPLog(@"TABBAR_TRANSFORM_CALLSTACK serial=%lu ptr=%p ty=%.2f stack=%@",
+           (unsigned long)gSSPGestureSerial,
+           view,
+           ty,
+           [slice componentsJoinedByString:@" | "]);
+
+    SSPDumpNativeCollapseContext(
+        view.window ?: SSPBestWindow(),
+        @"first-transform-during-gesture");
+}
+
 #pragma mark - Surface / blur capture
 
 static BOOL SSPSurfaceClassInteresting(NSString *name) {
@@ -917,6 +1174,12 @@ static void SSPTabBarSetTransform(id self,
     if (SSPShouldLogTabBarMutation(self)) {
         SSPLog(@"TABBAR_MUTATION selector=setTransform: requested=%@ ptr=%p",
                SSPTransform(transform),self);
+
+        if ([self isKindOfClass:UIView.class]) {
+            SSPLogTabBarTransformCallStack(
+                (UIView *)self,
+                transform);
+        }
     }
 
     if (gSSPOrigTabBarSetTransform) {
@@ -1084,6 +1347,10 @@ static void SSPUIApplicationSendEvent(id self,
             window,
             @"armed-target-before-original");
 
+        SSPDumpNativeCollapseContext(
+            window,
+            @"gesture-begin-before-original");
+
         SSPSampleGestureState(window,@"begin-before-original",point);
     }
 
@@ -1162,7 +1429,7 @@ static void SSPInstallRuntimeHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Surface + Scroll Probe";
+    self.title=@"2.1 Native Collapse Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -1187,9 +1454,9 @@ static void SSPInstallRuntimeHooks(void) {
     (void)tableView;
 
     if (section==0) {
-        return @"1) Ative Monitorar telas e visite Busca, Notificações, Perfil, Premium+ e Assuntos do Momento. 2) Em seguida, arme Gravar próximo gesto na Home Timeline, faça um scroll que esconda/reexiba a Tab Bar. Repita o gesto na Busca.";
+        return @"Arme um gesto na Home e faça um scroll que esconda a Tab Bar. Depois arme novamente e repita em uma tela onde ela não esconde. Compare NATIVE_COLLAPSE_CONTEXT e TABBAR_TRANSFORM_CALLSTACK.";
     }
-    return @"O probe apenas observa. O monitor de blur foi mantido; o gesto só arma em UIScrollView. Não altera a Tab Bar.";
+    return @"O probe apenas observa. Registra collapseEngine, capacidades tfn_* e a call stack do primeiro setTransform da Tab Bar. Não altera a Tab Bar.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1259,7 +1526,7 @@ static void SSPInstallRuntimeHooks(void) {
 - (void)showInfo:(NSString *)message {
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Surface + Scroll Probe"
+            alertControllerWithTitle:@"2.1 Native Collapse Probe"
                              message:message
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -1311,7 +1578,7 @@ static void SSPInstallRuntimeHooks(void) {
 
             [self reloadState];
             [self showInfo:
-                @"Gesto armado. Navegação pela Tab Bar será ignorada. A gravação só começa quando você mover o dedo dentro de um UIScrollView. Faça primeiro na Home Timeline e depois arme novamente para repetir na Busca."];
+                @"Gesto armado. Faça um scroll vertical. Primeiro capture a Home, onde o hide é nativo; depois arme novamente e capture uma tela sem hide."];
             return;
         }
 
@@ -1325,7 +1592,9 @@ static void SSPInstallRuntimeHooks(void) {
         gSSPGestureActive=NO;
         gSSPGestureSerial++;
         gSSPLastScreenSignature=nil;
+        gSSPLastTransformStackSerial=NSNotFound;
         [gSSPDumpedRuntimeClasses removeAllObjects];
+        [gSSPDumpedCollapseClasses removeAllObjects];
 
         [[NSFileManager defaultManager]
             removeItemAtPath:SSPLogPath()
@@ -1333,11 +1602,11 @@ static void SSPInstallRuntimeHooks(void) {
 
         SSPLog(@"========== NEW SESSION ==========");
         SSPLog(@"logPath=%@",SSPLogPath());
-        SSPLog(@"INSTRUCTION monitor-screens-then-record-home-and-search-scroll");
+        SSPLog(@"INSTRUCTION record-home-native-collapse-then-target-without-hide");
 
         [self reloadState];
         [self showInfo:
-            @"Nova sessão iniciada. Ative Monitorar telas e visite as seções com blur. Depois grave um gesto na Home Timeline e outro na Busca."];
+            @"Nova sessão iniciada. Grave um gesto na Home e depois outro em uma tela onde a Tab Bar não esconde."];
         return;
     }
 
@@ -1399,8 +1668,8 @@ static void SSPInjectNFBSection(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Surface + Scroll Probe",
-        @"subtitle": @"Blur por tela + autohide da Tab Bar.",
+        @"title": @"2.1 Native Collapse Probe",
+        @"subtitle": @"Descobre o collapseEngine nativo da Tab Bar.",
         @"icon": @"waveform.path.ecg",
         @"action": @"showXLiquidGlassSurfaceScrollProbe"
     }];
@@ -1509,7 +1778,7 @@ static void XLiquidGlassSurfaceScrollProbeInit(void) {
             gSSPDumpedRuntimeClasses=[NSMutableSet set];
         }
 
-        SSPLog(@"========== XLiquidGlass Surface + Scroll Probe 0.3.0 loaded ==========");
+        SSPLog(@"========== XLiquidGlass 2.1 Native Collapse Probe 0.4.0 loaded ==========");
         SSPLog(@"logPath=%@",SSPLogPath());
 
         SSPInstallAll();
