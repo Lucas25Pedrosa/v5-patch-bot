@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.3 Beta 2
+#pragma mark - XLiquidGlass 1.9.3 Beta 3
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -671,7 +671,7 @@ static NSString *XLGTabBarSafeProbeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass193Beta2SafeTabBarProbe.log"];
+        @"XLiquidGlass193Beta3DeepTabConfigProbe.log"];
 }
 
 static NSString *XLGTabBarSafeProbeTimestamp(void) {
@@ -923,6 +923,296 @@ static void XLGTabBarSafeProbeDumpView(UIView *view) {
     }
 }
 
+
+static BOOL XLGTabBarSafeProbeInterestingRuntimeName(NSString *name) {
+    NSString *lower=name.lowercaseString ?: @"";
+    for (NSString *needle in @[
+        @"tab",
+        @"descriptor",
+        @"identifier",
+        @"navigation",
+        @"custom",
+        @"dock",
+        @"limit",
+        @"selected",
+        @"spine",
+        @"item"
+    ]) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static void XLGTabBarSafeProbeDumpRuntimeClass(Class cls) {
+    if (!cls) return;
+
+    NSString *className=NSStringFromClass(cls) ?: @"?";
+    XLGTabBarSafeProbeLog(
+        @"RUNTIME_CLASS_BEGIN class=%@ ptr=%p",
+        className,cls);
+
+    unsigned int propertyCount=0;
+    objc_property_t *properties=
+        class_copyPropertyList(cls,&propertyCount);
+    for (unsigned int i=0;i<propertyCount;i++) {
+        const char *rawName=property_getName(properties[i]);
+        if (!rawName) continue;
+        NSString *name=[NSString stringWithUTF8String:rawName];
+        if (!XLGTabBarSafeProbeInterestingRuntimeName(name)) continue;
+        XLGTabBarSafeProbeLog(
+            @"PROPERTY class=%@ name=%@ attrs=%s",
+            className,
+            name,
+            property_getAttributes(properties[i]) ?: "-");
+    }
+    if (properties) free(properties);
+
+    unsigned int ivarCount=0;
+    Ivar *ivars=class_copyIvarList(cls,&ivarCount);
+    for (unsigned int i=0;i<ivarCount;i++) {
+        const char *rawName=ivar_getName(ivars[i]);
+        if (!rawName) continue;
+        NSString *name=[NSString stringWithUTF8String:rawName];
+        if (!XLGTabBarSafeProbeInterestingRuntimeName(name)) continue;
+
+        const char *type=ivar_getTypeEncoding(ivars[i]);
+        XLGTabBarSafeProbeLog(
+            @"IVAR class=%@ name=%@ type=%s offset=%td",
+            className,
+            name,
+            type ?: "-",
+            ivar_getOffset(ivars[i]));
+    }
+    if (ivars) free(ivars);
+
+    unsigned int methodCount=0;
+    Method *methods=class_copyMethodList(cls,&methodCount);
+    for (unsigned int i=0;i<methodCount;i++) {
+        Method method=methods[i];
+        NSString *name=NSStringFromSelector(method_getName(method));
+        if (!XLGTabBarSafeProbeInterestingRuntimeName(name)) continue;
+        XLGTabBarSafeProbeLog(
+            @"INSTANCE_METHOD class=%@ selector=%@ types=%s",
+            className,
+            name,
+            method_getTypeEncoding(method) ?: "-");
+    }
+    if (methods) free(methods);
+
+    Class meta=object_getClass(cls);
+    if (meta) {
+        unsigned int classMethodCount=0;
+        Method *classMethods=
+            class_copyMethodList(meta,&classMethodCount);
+        for (unsigned int i=0;i<classMethodCount;i++) {
+            Method method=classMethods[i];
+            NSString *name=
+                NSStringFromSelector(method_getName(method));
+            if (!XLGTabBarSafeProbeInterestingRuntimeName(name)) continue;
+            XLGTabBarSafeProbeLog(
+                @"CLASS_METHOD class=%@ selector=%@ types=%s",
+                className,
+                name,
+                method_getTypeEncoding(method) ?: "-");
+        }
+        if (classMethods) free(classMethods);
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"RUNTIME_CLASS_END class=%@",
+        className);
+}
+
+static void XLGTabBarSafeProbeDumpKnownClasses(void) {
+    NSArray<NSString *> *classNames=@[
+        @"T1TabCustomizationConfig",
+        @"T1TabCustomizationViewController",
+        @"_TtC14T1TwitterSwift25TabCustomizationViewModel",
+        @"_TtC14T1TwitterSwift20XTabbedAppNavigation",
+        @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController",
+        @"XNavigation.TabBarController",
+        @"_TtC11XNavigation16TabBarController",
+        @"XNavigation.TabBarView",
+        @"_TtC11XNavigation10TabBarView",
+        @"XNavigation.TabBarItemView",
+        @"_TtC11XNavigation14TabBarItemView"
+    ];
+
+    for (NSString *name in classNames) {
+        Class cls=NSClassFromString(name);
+        XLGTabBarSafeProbeLog(
+            @"CLASS_LOOKUP requested=%@ result=%@ ptr=%p",
+            name,
+            cls ? NSStringFromClass(cls) : @"nil",
+            cls);
+        if (cls) XLGTabBarSafeProbeDumpRuntimeClass(cls);
+    }
+}
+
+static void XLGTabBarSafeProbeDumpObjectKeys(
+    id object,
+    NSString *prefix,
+    NSArray<NSString *> *keys) {
+
+    if (!object) return;
+
+    XLGTabBarSafeProbeLog(
+        @"OBJECT_BEGIN prefix=%@ class=%@ ptr=%p",
+        prefix ?: @"-",
+        NSStringFromClass([object class]),
+        object);
+
+    for (NSString *key in keys) {
+        id value=XLGSafeValueForKey(object,key);
+        if (!value) continue;
+        XLGTabBarSafeProbeLog(
+            @"OBJECT_VALUE prefix=%@ key=%@ value=%@",
+            prefix ?: @"-",
+            key,
+            XLGTabBarSafeProbeDescribe(value));
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"OBJECT_END prefix=%@",
+        prefix ?: @"-");
+}
+
+static void XLGTabBarSafeProbeDumpVC(
+    UIViewController *vc,
+    NSMutableSet<NSValue *> *visited,
+    NSUInteger depth) {
+
+    if (!vc || depth>40) return;
+
+    NSValue *pointer=[NSValue valueWithPointer:(__bridge const void *)vc];
+    if ([visited containsObject:pointer]) return;
+    [visited addObject:pointer];
+
+    NSString *className=NSStringFromClass(vc.class) ?: @"?";
+    NSString *lower=className.lowercaseString ?: @"";
+
+    if ([lower containsString:@"tab"] ||
+        [lower containsString:@"navigation"] ||
+        [lower containsString:@"host"]) {
+        XLGTabBarSafeProbeLog(
+            @"VC depth=%lu class=%@ ptr=%p children=%lu presented=%@ nav=%@",
+            (unsigned long)depth,
+            className,
+            vc,
+            (unsigned long)vc.childViewControllers.count,
+            vc.presentedViewController
+                ? NSStringFromClass(vc.presentedViewController.class)
+                : @"nil",
+            vc.navigationController
+                ? NSStringFromClass(vc.navigationController.class)
+                : @"nil");
+
+        XLGTabBarSafeProbeDumpObjectKeys(
+            vc,
+            [NSString stringWithFormat:@"vc:%@",className],
+            @[
+                @"descriptors",
+                @"tabs",
+                @"tabItems",
+                @"tabBarItems",
+                @"items",
+                @"selectedIdentifier",
+                @"selectedNavigationController",
+                @"selectedIndex",
+                @"tabBarController",
+                @"tabBarView",
+                @"navigationController",
+                @"rootViewController"
+            ]);
+    }
+
+    for (UIViewController *child in vc.childViewControllers ?: @[]) {
+        XLGTabBarSafeProbeDumpVC(
+            child,visited,depth+1);
+    }
+
+    if (vc.presentedViewController) {
+        XLGTabBarSafeProbeDumpVC(
+            vc.presentedViewController,visited,depth+1);
+    }
+}
+
+static void XLGTabBarSafeProbeDumpViewControllerHierarchy(void) {
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (!window.rootViewController) continue;
+            XLGTabBarSafeProbeDumpVC(
+                window.rootViewController,visited,0);
+        }
+    }
+}
+
+static void XLGTabBarSafeProbeDumpNativeCustomizationConfig(void) {
+    Class configClass=NSClassFromString(@"T1TabCustomizationConfig");
+    id account=XLGSidebarCurrentAccount();
+
+    if (!configClass) {
+        XLGTabBarSafeProbeLog(@"CONFIG class-missing");
+        return;
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"CONFIG class=%@ ptr=%p account=%@ ptr=%p",
+        NSStringFromClass(configClass),
+        configClass,
+        account ? NSStringFromClass([account class]) : @"nil",
+        account);
+
+    id config=nil;
+    SEL settingsSEL=NSSelectorFromString(@"settingsForAccount:");
+    if (account && [configClass respondsToSelector:settingsSEL]) {
+        @try {
+            config=((id(*)(id,SEL,id))objc_msgSend)(
+                configClass,settingsSEL,account);
+        } @catch (__unused NSException *exception) {
+            config=nil;
+        }
+
+        XLGTabBarSafeProbeLog(
+            @"CONFIG settingsForAccount result=%@",
+            XLGTabBarSafeProbeDescribe(config));
+    } else {
+        XLGTabBarSafeProbeLog(
+            @"CONFIG settingsForAccount responds=%@",
+            [configClass respondsToSelector:settingsSEL]
+                ? @"YES" : @"NO");
+    }
+
+    if (!config) return;
+
+    XLGTabBarSafeProbeDumpObjectKeys(
+        config,
+        @"T1TabCustomizationConfig",
+        @[
+            @"tabIdentifiers",
+            @"availableTabIdentifiers",
+            @"areTabsCustomized",
+            @"tabCustomizationConfig",
+            @"tabIdentifiersKey"
+        ]);
+
+    for (NSString *selectorName in @[
+        @"resetTabIdentifiers",
+        @"restoreTabIdentifiers",
+        @"debugResetTabBarItems",
+        @"debugRandomizeTabBarItems"
+    ]) {
+        SEL selector=NSSelectorFromString(selectorName);
+        XLGTabBarSafeProbeLog(
+            @"CONFIG_SELECTOR name=%@ responds=%@",
+            selectorName,
+            [config respondsToSelector:selector] ? @"YES" : @"NO");
+    }
+}
+
 static void XLGTabBarSafeProbeRun(void) {
     NSString *path=XLGTabBarSafeProbeLogPath();
     if (path.length) {
@@ -931,12 +1221,15 @@ static void XLGTabBarSafeProbeRun(void) {
     }
 
     XLGTabBarSafeProbeLog(
-        @"========== XLiquidGlass 1.9.3 Beta 2 Safe Tab Bar Probe ==========");
+        @"========== XLiquidGlass 1.9.3 Beta 3 Deep Tab Config Probe ==========");
     XLGTabBarSafeProbeLog(
         @"liquidGlass=%@",
         XLGEnabled() ? @"ON" : @"OFF");
 
     XLGTabBarSafeProbeDumpAppNavigation();
+    XLGTabBarSafeProbeDumpKnownClasses();
+    XLGTabBarSafeProbeDumpNativeCustomizationConfig();
+    XLGTabBarSafeProbeDumpViewControllerHierarchy();
 
     NSMutableArray<UIView *> *matches=[NSMutableArray array];
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -6980,7 +7273,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 2 loaded: manual safe Tab Bar probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 3 loaded: manual deep Tab configuration probe + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
