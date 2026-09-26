@@ -1312,117 +1312,6 @@ static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
 }
 
 
-static id XLGSafeValueForKey(id object, NSString *key) {
-    if (!object || !key.length) return nil;
-    @try {
-        return [object valueForKey:key];
-    } @catch (__unused NSException *exception) {
-        return nil;
-    }
-}
-
-static UIColor *XLGNativeInactiveTabColor(void) {
-    Class tabViewClass=NSClassFromString(@"T1TabView");
-    SEL itemColorSEL=NSSelectorFromString(@"itemColor");
-    if (tabViewClass && [tabViewClass respondsToSelector:itemColorSEL]) {
-        id color=((id(*)(id,SEL))objc_msgSend)(tabViewClass,itemColorSEL);
-        if ([color isKindOfClass:UIColor.class]) return color;
-    }
-    return UIColor.secondaryLabelColor;
-}
-
-static NSArray<UIView *> *XLGXNavigationTabItems(UIView *bar) {
-    NSArray<UIView *> *items=
-        XLGCollectViewsMatching(bar,^BOOL(UIView *view) {
-            NSString *name=NSStringFromClass(view.class);
-            return [name isEqualToString:@"XNavigation.TabBarItemView"] ||
-                   [name containsString:@"TabBarItemView"];
-        });
-
-    return [items sortedArrayUsingComparator:^NSComparisonResult(UIView *a,UIView *b) {
-        CGFloat ax=CGRectGetMidX([a convertRect:a.bounds toView:bar]);
-        CGFloat bx=CGRectGetMidX([b convertRect:b.bounds toView:bar]);
-        if (ax<bx) return NSOrderedAscending;
-        if (ax>bx) return NSOrderedDescending;
-        return NSOrderedSame;
-    }];
-}
-
-static BOOL XLGXNavigationItemLooksSelected(UIView *item,
-                                            UIView *bar,
-                                            NSInteger fallbackIndex) {
-    if (!item || !bar) return NO;
-
-    if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) {
-        return YES;
-    }
-
-    id itemViews=XLGSafeValueForKey(bar,@"itemViews");
-    id selectedIndexValue=XLGSafeValueForKey(bar,@"selectedIndex");
-
-    if ([itemViews isKindOfClass:NSArray.class] &&
-        [selectedIndexValue respondsToSelector:@selector(integerValue)]) {
-        NSUInteger index=[(NSArray *)itemViews indexOfObjectIdenticalTo:item];
-        if (index != NSNotFound) {
-            return (NSInteger)index == [selectedIndexValue integerValue];
-        }
-    }
-
-    if ([selectedIndexValue respondsToSelector:@selector(integerValue)] &&
-        fallbackIndex >= 0) {
-        return fallbackIndex == [selectedIndexValue integerValue];
-    }
-
-    if ([item isKindOfClass:UIControl.class]) {
-        UIControl *control=(UIControl *)item;
-        return control.selected || control.highlighted;
-    }
-
-    return NO;
-}
-
-static void XLGApplyActiveOnlyToXNavigationTabBar(UIView *bar,
-                                                   UIColor *accent) {
-    if (!bar || !accent) return;
-
-    UIColor *inactive=XLGNativeInactiveTabColor();
-
-    id nativeItemViews=XLGSafeValueForKey(bar,@"itemViews");
-    NSArray<UIView *> *items=nil;
-
-    if ([nativeItemViews isKindOfClass:NSArray.class]) {
-        NSMutableArray<UIView *> *valid=[NSMutableArray array];
-        for (id object in (NSArray *)nativeItemViews) {
-            if ([object isKindOfClass:UIView.class]) {
-                [valid addObject:(UIView *)object];
-            }
-        }
-        if (valid.count) items=[valid copy];
-    }
-
-    if (!items.count) {
-        items=XLGXNavigationTabItems(bar);
-    }
-
-    NSInteger fallbackIndex=0;
-    for (UIView *item in items) {
-        BOOL selected=
-            XLGXNavigationItemLooksSelected(item,bar,fallbackIndex);
-        UIColor *color=selected ? accent : inactive;
-
-        XLGTintImageViews(item,color,NO);
-        item.tintColor=color;
-
-        for (UIView *subview in item.subviews ?: @[]) {
-            if ([subview isKindOfClass:UILabel.class]) {
-                ((UILabel *)subview).textColor=color;
-            }
-        }
-
-        fallbackIndex++;
-    }
-}
-
 static void XLGRefreshXNavigationColorModeNow(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -1669,7 +1558,11 @@ static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
     if (!controller || !XLGEnabled() || !gXLGAllowTabColorHook) return;
 
     XLGTabBarColorMode mode=XLGTabBarColorModeValue();
-    if (mode == XLGTabBarColorModeNative) return;
+    // Active Only intentionally mirrors the validated 9473a2be "theme tint OFF"
+    // path: keep the hook chain alive, but do not reapply any XLiquidGlass tint.
+    // X itself remains responsible for the selected-tab partial accent.
+    if (mode == XLGTabBarColorModeNative ||
+        mode == XLGTabBarColorModeActiveOnly) return;
     if (![controller isKindOfClass:UIViewController.class]) return;
 
     UIViewController *vc=(UIViewController *)controller;
@@ -1733,6 +1626,11 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
     XLGTabBarColorMode mode=XLGTabBarColorModeValue();
     if (mode == XLGTabBarColorModeNative) return;
 
+    // Reproduce the validated 9473a2be disabled-toggle behavior for Active Only:
+    // the original XNavigation layoutSubviews has already run above, so stop here
+    // and let X keep its own partial/selected-tab theme coloring.
+    if (mode == XLGTabBarColorModeActiveOnly) return;
+
     UIView *view=(UIView *)self;
     UIViewController *controller=nil;
     UIResponder *responder=view.nextResponder;
@@ -1745,11 +1643,6 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
 
     // Use the X/NFB primary theme color instead of UIView.tintColor.
     UIColor *accent=XLGResolvedAccentColor(controller,nil);
-
-    if (mode == XLGTabBarColorModeActiveOnly) {
-        XLGApplyActiveOnlyToXNavigationTabBar(view,accent);
-        return;
-    }
 
     // All Tabs: preserve the exact 1.5.0 visual pipeline that was already
     // runtime-validated, including the Liquid Glass selection chrome.
