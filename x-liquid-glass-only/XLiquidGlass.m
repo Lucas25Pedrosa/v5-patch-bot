@@ -4943,16 +4943,6 @@ static void XLGB65AppendPoolValue(
     }
 }
 
-static id XLGB65CallOriginalObjectGetter(id object, SEL selector) {
-    IMP original=XLGB65OriginalForObjectSelector(
-        object,selector,gXLGB65ArrayGetterOriginals);
-    if (!original) return nil;
-    @try {
-        return ((id(*)(id,SEL))original)(object,selector);
-    } @catch (__unused NSException *exception) {
-        return nil;
-    }
-}
 
 static id XLGB65SafeObjectGetterUnhooked(id object, NSString *selectorName) {
     if (!object || !selectorName.length) return nil;
@@ -5768,6 +5758,20 @@ static void XLGB62InstallActiveReconcileSchedule(void) {
 static void XLGB6InstallCorrectionHooks(void) {
     // Beta 6.5 deliberately disables the prior post-construction forcing
     // (visiblePanelIDs, PanelID reconcile and legacy tabContent setters).
+    // Keep their symbols referenced only so -Werror does not treat the retained
+    // diagnostic implementations as dead code.
+    (void)gXLGB6VisibleHooksInstalled;
+    (void)gXLGB6DataSourceHooksInstalled;
+    (void)gXLGB6ProbeScheduled;
+    (void)&XLGB6ProbeRuntimeMethods;
+    (void)&XLGB6SetVisibleTabEntries;
+    (void)&XLGB6SetTabContent;
+    (void)&XLGB6HookSetterForClass;
+    (void)&XLGB61InstallPanelPipelineHooks;
+    (void)&XLGB64InstallSwiftAppNavHooks;
+    (void)&XLGB64InstallSwiftReconcileSchedule;
+    (void)&XLGB62InstallActiveReconcileSchedule;
+
     // The only active strategy is the source-level native connection bridge.
     XLGB65InstallNativeConnectionBridge();
     XLGB65ScheduleNativeRebuild();
