@@ -7,6 +7,7 @@
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
 static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
+static NSString *const kXLGThemeAccentEnabledKey = @"XLiquidGlassThemeAccentEnabled";
 static NSString *const kXLGTabBarColorModeKey = @"XLiquidGlassTabBarColorMode";
 
 typedef NS_ENUM(NSInteger, XLGTabBarColorMode) {
@@ -20,6 +21,8 @@ static IMP gOrigInstallGateForAccount = NULL;
 static IMP gOrigDummyFeature = NULL;
 static IMP gOrigNFBSetupSections = NULL;
 static IMP gOrigNFBViewWillAppear = NULL;
+static IMP gOrigDefaultsSetInteger = NULL;
+static IMP gOrigDefaultsSetObject = NULL;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -28,9 +31,11 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
+static BOOL gThemeDefaultsHooksInstalled = NO;
 static BOOL gXLGAllowTabColorHook = NO;
+static BOOL gXLGActiveOnlyNeedsPrime = NO;
 
-static void XLGRefreshXNavigationColorModeNow(void);
+static void XLGRefreshThemeAccentNow(void);
 static void XLGTintImageViews(UIView *root, UIColor *color, BOOL stripAvatar);
 
 static BOOL XLGEnabled(void) {
@@ -44,6 +49,13 @@ static BOOL XLGTabLabelsEnabled(void) {
     id stored=[defaults objectForKey:kXLGTabLabelsKey];
     return stored ? [stored boolValue] : NO;
 }
+
+static BOOL XLGThemeAccentEnabled(void) {
+    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+    id stored=[defaults objectForKey:kXLGThemeAccentEnabledKey];
+    return stored ? [stored boolValue] : YES;
+}
+
 
 static XLGTabBarColorMode XLGTabBarColorModeValue(void) {
     NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
@@ -260,16 +272,38 @@ static void XLGSyncCompatibilityGate(void) {
     XLGTabBarColorMode oldMode=XLGTabBarColorModeValue();
     if (newMode == oldMode) return;
 
-    [[NSUserDefaults standardUserDefaults]
-        setInteger:newMode
-            forKey:kXLGTabBarColorModeKey];
+    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+    [defaults setInteger:newMode forKey:kXLGTabBarColorModeKey];
+
+    BOOL desiredHook=(newMode != XLGTabBarColorModeNative);
+    BOOL requiresRestart=(desiredHook != gXLGAllowTabColorHook);
+
+    // 9473a2be behavior 1:1:
+    // All Tabs == old theme-accent toggle ON.
+    // Active Only == old toggle transition ON -> OFF.
+    // Native keeps the visual hook absent after restart.
+    if (newMode == XLGTabBarColorModeAllTabs) {
+        gXLGActiveOnlyNeedsPrime=NO;
+        [defaults setBool:YES forKey:kXLGThemeAccentEnabledKey];
+    } else if (newMode == XLGTabBarColorModeActiveOnly) {
+        if (requiresRestart) {
+            // Cold start must first reproduce the old ON state; the first real
+            // XNavigation layout will then execute the exact OFF transition.
+            gXLGActiveOnlyNeedsPrime=YES;
+            [defaults setBool:YES forKey:kXLGThemeAccentEnabledKey];
+        } else {
+            // This is exactly what the old toggle did when switched OFF live.
+            gXLGActiveOnlyNeedsPrime=NO;
+            [defaults setBool:NO forKey:kXLGThemeAccentEnabledKey];
+        }
+    } else {
+        gXLGActiveOnlyNeedsPrime=NO;
+        [defaults setBool:NO forKey:kXLGThemeAccentEnabledKey];
+    }
 
     [self.tableView reloadRowsAtIndexPaths:@[
         [NSIndexPath indexPathForRow:1 inSection:0]
     ] withRowAnimation:UITableViewRowAnimationNone];
-
-    BOOL desiredHook=(newMode != XLGTabBarColorModeNative);
-    BOOL requiresRestart=(desiredHook != gXLGAllowTabColorHook);
 
     if (requiresRestart) {
         UIAlertController *alert =
@@ -281,7 +315,7 @@ static void XLGSyncCompatibilityGate(void) {
                                                handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
     } else if (newMode != XLGTabBarColorModeNative) {
-        XLGRefreshXNavigationColorModeNow();
+        XLGRefreshThemeAccentNow();
     }
 }
 
@@ -1312,30 +1346,6 @@ static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
 }
 
 
-static void XLGRefreshXNavigationColorModeNow(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if (![scene isKindOfClass:UIWindowScene.class]) continue;
-
-            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                if (!window || window.hidden) continue;
-
-                NSArray<UIView *> *bars=
-                    XLGCollectViewsMatching(window,^BOOL(UIView *view) {
-                        NSString *name=NSStringFromClass(view.class);
-                        return [name isEqualToString:@"XNavigation.TabBarView"] ||
-                               [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
-                    });
-
-                for (UIView *bar in bars) {
-                    [bar setNeedsLayout];
-                    [bar layoutIfNeeded];
-                }
-            }
-        }
-    });
-}
-
 static BOOL XLGViewLooksSelected(UIView *button, UITabBar *tabBar, NSUInteger index) {
     if ([button isKindOfClass:UIControl.class]) {
         UIControl *control=(UIControl *)button;
@@ -1555,14 +1565,8 @@ static void XLGSyncLiquidGlassLabels(UITabBar *tabBar,
 }
 
 static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
-    if (!controller || !XLGEnabled() || !gXLGAllowTabColorHook) return;
-
-    XLGTabBarColorMode mode=XLGTabBarColorModeValue();
-    // Active Only intentionally mirrors the validated 9473a2be "theme tint OFF"
-    // path: keep the hook chain alive, but do not reapply any XLiquidGlass tint.
-    // X itself remains responsible for the selected-tab partial accent.
-    if (mode == XLGTabBarColorModeNative ||
-        mode == XLGTabBarColorModeActiveOnly) return;
+    if (!controller || !XLGEnabled()) return;
+    if (!XLGThemeAccentEnabled()) return;
     if (![controller isKindOfClass:UIViewController.class]) return;
 
     UIViewController *vc=(UIViewController *)controller;
@@ -1586,10 +1590,7 @@ static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
     for (NSUInteger i=0;i<count;i++) {
         UIView *button=buttons[i];
         BOOL selected=XLGViewLooksSelected(button,tabBar,i);
-        UIColor *color=
-            (mode == XLGTabBarColorModeAllTabs)
-                ? accent
-                : (selected ? accent : secondary);
+        UIColor *color=selected ? accent : secondary;
 
         NSString *title=button.accessibilityLabel;
         if (i<tabBar.items.count) {
@@ -1603,10 +1604,8 @@ static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
         if (profile) XLGStripAvatarCircleStyling(button);
     }
 
-    if (mode == XLGTabBarColorModeAllTabs) {
-        UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
-        XLGApplySelectionChrome(chrome,accent);
-    }
+    UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
+    XLGApplySelectionChrome(chrome,accent);
 
     XLGSyncLiquidGlassLabels(tabBar,buttons,accent);
 
@@ -1620,16 +1619,8 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
         ((void(*)(id,SEL))gOrigXLGNavigationTabBarViewLayoutSubviews)(self,cmd);
     }
 
-    if (!XLGEnabled() || !gXLGAllowTabColorHook ||
-        ![self isKindOfClass:UIView.class]) return;
-
-    XLGTabBarColorMode mode=XLGTabBarColorModeValue();
-    if (mode == XLGTabBarColorModeNative) return;
-
-    // Reproduce the validated 9473a2be disabled-toggle behavior for Active Only:
-    // the original XNavigation layoutSubviews has already run above, so stop here
-    // and let X keep its own partial/selected-tab theme coloring.
-    if (mode == XLGTabBarColorModeActiveOnly) return;
+    if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
+    if (!XLGThemeAccentEnabled()) return;
 
     UIView *view=(UIView *)self;
     UIViewController *controller=nil;
@@ -1641,14 +1632,120 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
         }
     }
 
-    // Use the X/NFB primary theme color instead of UIView.tintColor.
+    // Use the X/NFB theme primary color here too. In original 1.5.0 this
+    // path read UIView.tintColor directly, which is why the glass was blue.
     UIColor *accent=XLGResolvedAccentColor(controller,nil);
 
-    // All Tabs: preserve the exact 1.5.0 visual pipeline that was already
-    // runtime-validated, including the Liquid Glass selection chrome.
     XLGTintImageViews(view,accent,NO);
     UIView *chrome=XLGFindLiquidSelectionChrome(view);
     XLGApplySelectionChrome(chrome,accent);
+
+    // Active Only cold-start orchestration: after one exact 9473 ON pass has
+    // really executed, perform the exact old toggle-OFF action.
+    if (gXLGActiveOnlyNeedsPrime &&
+        XLGTabBarColorModeValue() == XLGTabBarColorModeActiveOnly) {
+        gXLGActiveOnlyNeedsPrime=NO;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSUserDefaults standardUserDefaults]
+                setBool:NO
+                 forKey:kXLGThemeAccentEnabledKey];
+            XLGRefreshThemeAccentNow();
+        });
+    }
+}
+static BOOL XLGThemeColorPreferenceKey(NSString *key) {
+    if (![key isKindOfClass:NSString.class]) return NO;
+    return [key isEqualToString:@"bh_color_theme_selectedColor"] ||
+           [key isEqualToString:@"T1ColorSettingsPrimaryColorOptionKey"];
+}
+
+static void XLGRefreshThemeAccentPass(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (!window || window.hidden) continue;
+
+            NSArray<UIView *> *bars=
+                XLGCollectViewsMatching(window,^BOOL(UIView *view) {
+                    NSString *name=NSStringFromClass(view.class);
+                    return [name isEqualToString:@"XNavigation.TabBarView"] ||
+                           [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
+                });
+
+            for (UIView *bar in bars) {
+                [bar setNeedsLayout];
+                [bar layoutIfNeeded];
+            }
+        }
+    }
+}
+
+static void XLGRefreshThemeAccentNow(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        XLGRefreshThemeAccentPass();
+
+        // Palette propagation may complete on the next run loop after NFB
+        // stores the selected option. Two short passes keep the update visual
+        // without waiting for a tab tap.
+        for (NSNumber *delayValue in @[@0.04,@0.12]) {
+            NSTimeInterval delay=delayValue.doubleValue;
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                              (int64_t)(delay*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    XLGRefreshThemeAccentPass();
+                });
+        }
+    });
+}
+
+static void XLGDefaultsSetInteger(id self,
+                                  SEL cmd,
+                                  NSInteger value,
+                                  NSString *key) {
+    if (gOrigDefaultsSetInteger) {
+        ((void(*)(id,SEL,NSInteger,NSString *))gOrigDefaultsSetInteger)(
+            self,cmd,value,key);
+    }
+
+    if (XLGThemeColorPreferenceKey(key)) {
+        XLGRefreshThemeAccentNow();
+    }
+}
+
+static void XLGDefaultsSetObject(id self,
+                                 SEL cmd,
+                                 id value,
+                                 NSString *key) {
+    if (gOrigDefaultsSetObject) {
+        ((void(*)(id,SEL,id,NSString *))gOrigDefaultsSetObject)(
+            self,cmd,value,key);
+    }
+
+    if (XLGThemeColorPreferenceKey(key)) {
+        XLGRefreshThemeAccentNow();
+    }
+}
+
+static void XLGInstallThemeColorPreferenceHooks(void) {
+    if (gThemeDefaultsHooksInstalled) return;
+
+    Class cls=NSUserDefaults.class;
+    BOOL integerHooked=
+        XLGHookMethod(cls,
+                      @selector(setInteger:forKey:),
+                      NO,
+                      (IMP)XLGDefaultsSetInteger,
+                      &gOrigDefaultsSetInteger);
+    BOOL objectHooked=
+        XLGHookMethod(cls,
+                      @selector(setObject:forKey:),
+                      NO,
+                      (IMP)XLGDefaultsSetObject,
+                      &gOrigDefaultsSetObject);
+
+    gThemeDefaultsHooksInstalled=integerHooked || objectHooked;
 }
 
 static void XLGInstallXNavigationVisualFix(void) {
@@ -1844,6 +1941,7 @@ static void XLGInstallHooks(void) {
     if (gXLGAllowTabColorHook) {
         XLGInstallXNavigationVisualFix();
     }
+    XLGInstallThemeColorPreferenceHooks();
 
     XLGInstallNFBSettingsIntegration();
 }
@@ -1861,10 +1959,23 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
+        XLGTabBarColorMode startupMode=XLGTabBarColorModeValue();
         gXLGAllowTabColorHook =
-            (XLGTabBarColorModeValue() != XLGTabBarColorModeNative);
+            (startupMode != XLGTabBarColorModeNative);
 
-        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test loaded: Native / Active Only / All Tabs");
+        NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+        if (startupMode == XLGTabBarColorModeAllTabs) {
+            gXLGActiveOnlyNeedsPrime=NO;
+            [defaults setBool:YES forKey:kXLGThemeAccentEnabledKey];
+        } else if (startupMode == XLGTabBarColorModeActiveOnly) {
+            gXLGActiveOnlyNeedsPrime=YES;
+            [defaults setBool:YES forKey:kXLGThemeAccentEnabledKey];
+        } else {
+            gXLGActiveOnlyNeedsPrime=NO;
+            [defaults setBool:NO forKey:kXLGThemeAccentEnabledKey];
+        }
+
+        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test4 loaded: 9473a2be exact Active Only transition");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
