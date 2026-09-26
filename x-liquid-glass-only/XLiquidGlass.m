@@ -6007,6 +6007,28 @@ static BOOL XLGB70IsProbeFrameImage(NSString *frameString) {
     return [frameString containsString:@"XLiquidGlass"];
 }
 
+static BOOL XLGB70FrameLooksLikeAppCode(NSString *frameString) {
+    if (!frameString.length || XLGB70IsProbeFrameImage(frameString)) return NO;
+
+    for (NSString *systemImage in @[
+        @"Foundation",
+        @"CoreFoundation",
+        @"UIKitCore",
+        @"QuartzCore",
+        @"GraphicsServices",
+        @"libobjc",
+        @"libsystem",
+        @"libswift",
+        @"dyld"
+    ]) {
+        if ([frameString containsString:[NSString stringWithFormat:@"image=%@",systemImage]] ||
+            [frameString containsString:[NSString stringWithFormat:@"image=%@.",systemImage]]) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 static void XLGB70LogGateCall(NSString *kind,
                               BOOL nativeResult,
                               BOOL effectiveResult) {
@@ -6019,20 +6041,38 @@ static void XLGB70LogGateCall(NSString *kind,
 
         uintptr_t callerAddress=0;
         NSString *callerFrame=@"address=0x0 image=- offset=- symbol=-";
+        uintptr_t fallbackAddress=0;
+        NSString *fallbackFrame=nil;
 
         for (NSUInteger i=0;i<addresses.count && i<24;i++) {
             uintptr_t address=(uintptr_t)addresses[i].unsignedLongLongValue;
             NSString *frame=XLGB70ResolvedFrameString(address);
-            if (!XLGB70IsProbeFrameImage(frame)) {
+
+            if (!fallbackFrame && !XLGB70IsProbeFrameImage(frame)) {
+                fallbackAddress=address;
+                fallbackFrame=frame;
+            }
+
+            if (XLGB70FrameLooksLikeAppCode(frame)) {
                 callerAddress=address;
                 callerFrame=frame;
                 break;
             }
         }
 
-        UIViewController *leaf=XLGB70VisibleLeafViewController();
-        NSString *screen=leaf ? NSStringFromClass(leaf.class) : @"nil";
-        NSString *thread=NSThread.isMainThread ? @"main" : @"background";
+        if (!callerAddress && fallbackFrame) {
+            callerAddress=fallbackAddress;
+            callerFrame=fallbackFrame;
+        }
+
+        BOOL isMainThread=NSThread.isMainThread;
+        UIViewController *leaf=
+            isMainThread ? XLGB70VisibleLeafViewController() : nil;
+        NSString *screen=
+            isMainThread
+                ? (leaf ? NSStringFromClass(leaf.class) : @"nil")
+                : @"<background>";
+        NSString *thread=isMainThread ? @"main" : @"background";
 
         NSString *contextKey=[NSString stringWithFormat:
             @"%@|0x%llx|%@|%d|%d",
