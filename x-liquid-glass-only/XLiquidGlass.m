@@ -75,6 +75,7 @@ static IMP gOrigSearchContainerViewDidAppear = NULL;
 static IMP gOrigSearchContainerViewWillDisappear = NULL;
 static IMP gOrigSearchScrollViewLayoutSubviews = NULL;
 static IMP gOrigSearchScrollViewSetContentOffset = NULL;
+static IMP gOrigSearchScrollViewDidMoveToWindow = NULL;
 static IMP gOrigVisualEffectViewSetEffect = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static BOOL gXLGSearchEffectGuardInstalled = NO;
@@ -82,6 +83,8 @@ static BOOL gXLGSearchTabBarAutohideInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
 static char kXLGSearchAutohideLastOffsetKey;
 static char kXLGSearchAutohideIdleTokenKey;
+static char kXLGPanFallbackAttachedKey;
+static char kXLGPanFallbackLastTranslationKey;
 
 // 2.0 Beta 6: ScrollEdgeTreatment blur removal. Home Beta 5 behavior remains
 // intact; Beta 6 extends the same narrow treatment to other visible sections.
@@ -7348,6 +7351,252 @@ static void XLGUpdateSearchTabBarAutohide(
     XLGScheduleSearchTabBarSnap(scrollView,bar);
 }
 
+#pragma mark - XLiquidGlass 2.0 Beta 11 pan-driven Tab Bar fallback
+
+static BOOL XLGFallbackResponderIsNativeCollapseSurface(
+    UIResponder *responder) {
+
+    return XLGResponderChainContainsAny(
+        responder,
+        @[
+            @"HomeTimeline",
+            @"GuideContainerViewController",
+            @"NotificationsViewController"
+        ]);
+}
+
+static BOOL XLGFallbackScrollOccupiesPrimaryArea(
+    UIScrollView *scrollView) {
+
+    if (!scrollView || !scrollView.window) return NO;
+
+    UIWindow *window=scrollView.window;
+    CGRect frame=[scrollView convertRect:scrollView.bounds
+                                  toView:window];
+    CGRect intersection=CGRectIntersection(frame,window.bounds);
+    if (CGRectIsNull(intersection) || CGRectIsEmpty(intersection)) return NO;
+
+    CGFloat windowWidth=CGRectGetWidth(window.bounds);
+    CGFloat windowHeight=CGRectGetHeight(window.bounds);
+    CGPoint center=CGPointMake(
+        CGRectGetMidX(window.bounds),
+        MAX(260.0,CGRectGetMidY(window.bounds)));
+
+    return CGRectGetWidth(intersection)>=windowWidth*0.70 &&
+           CGRectGetHeight(intersection)>=windowHeight*0.45 &&
+           CGRectContainsPoint(intersection,center);
+}
+
+static BOOL XLGFallbackIsJetfuelSurface(UIScrollView *scrollView) {
+    if (!scrollView) return NO;
+
+    return XLGResponderChainContainsAny(
+        scrollView,
+        @[
+            @"JetfuelSDK",
+            @"T1JetfuelViewController"
+        ]);
+}
+
+static BOOL XLGGeneralPanFallbackIsEligible(
+    UIScrollView *scrollView) {
+
+    if (!XLGEnabled() || !scrollView || !scrollView.window) return NO;
+    if (!scrollView.scrollEnabled ||
+        scrollView.hidden ||
+        scrollView.alpha<=0.01) {
+        return NO;
+    }
+
+    // Preserve native/custom behavior already proven by the probe.
+    if (XLGSearchScrollViewIsEligible(scrollView)) return NO;
+    if (XLGFallbackResponderIsNativeCollapseSurface(scrollView)) return NO;
+
+    if (XLGResponderChainContainsAny(
+            scrollView,
+            @[
+                @"XLiquidGlassSurfaceScrollProbeViewController",
+                @"TwitterDash.DashHostingController",
+                @"T1FleetLineView"
+            ])) {
+        return NO;
+    }
+
+    if (!XLGFallbackScrollOccupiesPrimaryArea(scrollView)) return NO;
+
+    NSString *className=NSStringFromClass(scrollView.class) ?: @"";
+    if ([className containsString:@"SegmentedTabBarCollectionView"] ||
+        [className containsString:@"PaddedCollectionView"]) {
+        return NO;
+    }
+
+    // Jetfuel's full-screen pager is horizontally backed but the user's
+    // vertical pan still needs to control the bottom bar.
+    if (XLGFallbackIsJetfuelSurface(scrollView)) return YES;
+
+    // Normal fallback: a genuinely vertically scrollable primary page.
+    CGFloat verticalRange=
+        scrollView.contentSize.height +
+        scrollView.adjustedContentInset.top +
+        scrollView.adjustedContentInset.bottom -
+        CGRectGetHeight(scrollView.bounds);
+
+    CGFloat horizontalRange=
+        scrollView.contentSize.width +
+        scrollView.adjustedContentInset.left +
+        scrollView.adjustedContentInset.right -
+        CGRectGetWidth(scrollView.bounds);
+
+    if (verticalRange<30.0) return NO;
+    if (horizontalRange>MAX(100.0,verticalRange*1.5)) return NO;
+
+    return YES;
+}
+
+static void XLGGeneralPanFallbackChanged(
+    id self,
+    SEL cmd,
+    UIPanGestureRecognizer *pan) {
+
+    (void)cmd;
+
+    if (![self isKindOfClass:UIScrollView.class] ||
+        ![pan isKindOfClass:UIPanGestureRecognizer.class]) {
+        return;
+    }
+
+    UIScrollView *scrollView=(UIScrollView *)self;
+    if (!XLGGeneralPanFallbackIsEligible(scrollView)) return;
+
+    UIGestureRecognizerState state=pan.state;
+    CGPoint translation=[pan translationInView:scrollView];
+    CGPoint velocity=[pan velocityInView:scrollView];
+
+    if (state==UIGestureRecognizerStateBegan) {
+        objc_setAssociatedObject(
+            scrollView,
+            &kXLGPanFallbackLastTranslationKey,
+            @(translation.y),
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
+
+    if (state==UIGestureRecognizerStateChanged) {
+        NSNumber *previous=
+            objc_getAssociatedObject(
+                scrollView,
+                &kXLGPanFallbackLastTranslationKey);
+
+        objc_setAssociatedObject(
+            scrollView,
+            &kXLGPanFallbackLastTranslationKey,
+            @(translation.y),
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        if (!previous) return;
+
+        // Horizontal paging/carousels must never move the Tab Bar.
+        if (fabs(velocity.y)<=fabs(velocity.x)*1.05) return;
+
+        CGFloat deltaFingerY=
+            translation.y-previous.doubleValue;
+        if (!isfinite(deltaFingerY) ||
+            fabs(deltaFingerY)<0.20) {
+            return;
+        }
+
+        UIView *bar=
+            XLGVisibleGlobalTabBarForWindow(scrollView.window);
+        if (!bar) return;
+
+        if (!XLGFallbackIsJetfuelSurface(scrollView)) {
+            CGFloat top=-scrollView.adjustedContentInset.top;
+            if (scrollView.contentOffset.y<=top+2.0 &&
+                deltaFingerY>0.0) {
+                XLGSetSearchTabBarProgress(bar,0.0);
+                return;
+            }
+        }
+
+        // Finger up => negative delta => hide (increase ty).
+        // Finger down => positive delta => reveal (decrease ty).
+        CGFloat progress=XLGSearchTabBarProgressForBar(bar);
+        progress-=deltaFingerY;
+        XLGSetSearchTabBarProgress(bar,progress);
+        return;
+    }
+
+    if (state==UIGestureRecognizerStateEnded ||
+        state==UIGestureRecognizerStateCancelled ||
+        state==UIGestureRecognizerStateFailed) {
+
+        UIView *bar=
+            XLGVisibleGlobalTabBarForWindow(scrollView.window);
+
+        if (bar) {
+            CGFloat progress=XLGSearchTabBarProgressForBar(bar);
+            CGFloat target;
+
+            if (velocity.y<-120.0) {
+                target=83.0;
+            } else if (velocity.y>120.0) {
+                target=0.0;
+            } else {
+                target=progress>=41.5 ? 83.0 : 0.0;
+            }
+
+            XLGAnimateSearchTabBarToProgress(bar,target);
+        }
+
+        objc_setAssociatedObject(
+            scrollView,
+            &kXLGPanFallbackLastTranslationKey,
+            nil,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+static void XLGEnsureGeneralPanFallbackObserver(
+    UIScrollView *scrollView) {
+
+    if (!scrollView || !scrollView.panGestureRecognizer) return;
+
+    if ([objc_getAssociatedObject(
+            scrollView,
+            &kXLGPanFallbackAttachedKey) boolValue]) {
+        return;
+    }
+
+    SEL action=
+        NSSelectorFromString(@"xlg_generalPanFallbackChanged:");
+    if (![scrollView respondsToSelector:action]) return;
+
+    [scrollView.panGestureRecognizer
+        addTarget:scrollView
+           action:action];
+
+    objc_setAssociatedObject(
+        scrollView,
+        &kXLGPanFallbackAttachedKey,
+        @YES,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void XLGSearchScrollViewDidMoveToWindow(
+    id self,
+    SEL cmd) {
+
+    if (gOrigSearchScrollViewDidMoveToWindow) {
+        ((void(*)(id,SEL))
+            gOrigSearchScrollViewDidMoveToWindow)(
+                self,cmd);
+    }
+
+    if (![self isKindOfClass:UIScrollView.class]) return;
+    XLGEnsureGeneralPanFallbackObserver(
+        (UIScrollView *)self);
+}
+
 static void XLGSearchScrollViewSetContentOffset(
     id self,
     SEL cmd,
@@ -7375,8 +7624,10 @@ static void XLGSearchScrollViewLayoutSubviews(
     }
 
     if (![self isKindOfClass:UIScrollView.class]) return;
-    XLGUpdateSearchTabBarAutohide(
-        (UIScrollView *)self);
+
+    UIScrollView *scrollView=(UIScrollView *)self;
+    XLGEnsureGeneralPanFallbackObserver(scrollView);
+    XLGUpdateSearchTabBarAutohide(scrollView);
 }
 
 static void XLGSearchContainerViewWillDisappear(
@@ -7406,8 +7657,19 @@ static void XLGInstallSearchTabBarAutohide(void) {
     Class scrollClass=UIScrollView.class;
     BOOL layoutHooked=NO;
     BOOL offsetHooked=NO;
+    BOOL windowHooked=NO;
 
     if (scrollClass) {
+        SEL panAction=
+            NSSelectorFromString(@"xlg_generalPanFallbackChanged:");
+        if (![scrollClass instancesRespondToSelector:panAction]) {
+            class_addMethod(
+                scrollClass,
+                panAction,
+                (IMP)XLGGeneralPanFallbackChanged,
+                "v@:@");
+        }
+
         layoutHooked=
             XLGHookMethod(
                 scrollClass,
@@ -7423,6 +7685,14 @@ static void XLGInstallSearchTabBarAutohide(void) {
                 NO,
                 (IMP)XLGSearchScrollViewSetContentOffset,
                 &gOrigSearchScrollViewSetContentOffset);
+
+        windowHooked=
+            XLGHookMethod(
+                scrollClass,
+                @selector(didMoveToWindow),
+                NO,
+                (IMP)XLGSearchScrollViewDidMoveToWindow,
+                &gOrigSearchScrollViewDidMoveToWindow);
     }
 
     Class searchClass=
@@ -7440,7 +7710,7 @@ static void XLGInstallSearchTabBarAutohide(void) {
     }
 
     gXLGSearchTabBarAutohideInstalled=
-        layoutHooked || offsetHooked;
+        layoutHooked || offsetHooked || windowHooked;
 }
 
 static void XLGSearchContainerViewDidLayoutSubviews(
@@ -7843,7 +8113,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0 Beta 9 loaded: Search child-page Tab Bar autohide coverage");
+        NSLog(@"[XLiquidGlass] 2.0 Beta 11 loaded: pan-driven general Tab Bar autohide fallback");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
