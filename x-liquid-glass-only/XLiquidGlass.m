@@ -7078,12 +7078,26 @@ static void XLG2InstallSettingsHooks(void) {
         (IMP)XLG2SettingsCell,
         &gXLG2OrigSettingsCell);
 
-    BOOL select=XLGHookMethod(
-        cls,
-        @selector(tableView:didSelectRowAtIndexPath:),
-        NO,
-        (IMP)XLG2SettingsDidSelect,
-        &gXLG2OrigSettingsDidSelect);
+    SEL selectSEL=@selector(tableView:didSelectRowAtIndexPath:);
+    BOOL select=NO;
+
+    // The exact 1.9.2 stable settings controller has no didSelect handler.
+    // Hook it when present; otherwise add only this delegate method at runtime.
+    Method selectMethod=class_getInstanceMethod(cls,selectSEL);
+    if (selectMethod) {
+        select=XLGHookMethod(
+            cls,
+            selectSEL,
+            NO,
+            (IMP)XLG2SettingsDidSelect,
+            &gXLG2OrigSettingsDidSelect);
+    } else {
+        select=class_addMethod(
+            cls,
+            selectSEL,
+            (IMP)XLG2SettingsDidSelect,
+            "v@:@@");
+    }
 
     gXLG2SettingsHooksInstalled=rows && cell && select;
 }
