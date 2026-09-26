@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2
+#pragma mark - XLiquidGlass 1.9.3 Beta 2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -34,6 +34,9 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static id XLGSafeValueForKey(id object, NSString *key);
+static NSString *XLGTabBarSafeProbeLogPath(void);
+static void XLGTabBarSafeProbeRun(void);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -220,7 +223,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -243,6 +246,15 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryView=nil;
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
+
+    if (indexPath.row == 2) {
+        cell.textLabel.text = @"Copiar relatório do Dock";
+        cell.detailTextLabel.text =
+            @"Coleta o Dock somente quando você tocar aqui.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -285,6 +297,37 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 2) return;
+
+    XLGTabBarSafeProbeRun();
+
+    NSString *path=XLGTabBarSafeProbeLogPath();
+    NSData *data=path.length ? [NSData dataWithContentsOfFile:path] : nil;
+    NSString *report=data.length
+        ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+        : @"";
+
+    if (report.length) {
+        UIPasteboard.generalPasteboard.string=report;
+    }
+
+    UIAlertController *alert=
+        [UIAlertController
+            alertControllerWithTitle:@"Relatório do Dock"
+                             message:report.length
+                                ? @"Relatório copiado para a área de transferência."
+                                : @"Não foi possível coletar o Dock."
+                      preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -618,6 +661,312 @@ static UINavigationController *XLGNavigationControllerForPresenter(
     return presenter.navigationController;
 }
 
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 2 Safe Tab Bar Probe
+
+static NSString *XLGTabBarSafeProbeLogPath(void) {
+    NSString *documents=
+        NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents stringByAppendingPathComponent:
+        @"XLiquidGlass193Beta2SafeTabBarProbe.log"];
+}
+
+static NSString *XLGTabBarSafeProbeTimestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGTabBarSafeProbeLog(NSString *format, ...) {
+    if (!format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=
+        [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGTabBarSafeProbeTimestamp(),
+                    message ?: @"-"];
+
+    NSString *path=XLGTabBarSafeProbeLogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=
+                [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static NSString *XLGTabBarSafeProbeDescribe(id object) {
+    if (!object) return @"nil";
+    @try {
+        NSString *description=[object description] ?: @"-";
+        description=[description
+            stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        description=[description
+            stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+        while ([description containsString:@"  "]) {
+            description=[description
+                stringByReplacingOccurrencesOfString:@"  "
+                                           withString:@" "];
+        }
+        if (description.length>900) {
+            description=[[description substringToIndex:900]
+                stringByAppendingString:@"…"];
+        }
+        return [NSString stringWithFormat:@"%@{%@}",
+                NSStringFromClass([object class]) ?: @"?",
+                description];
+    } @catch (__unused NSException *exception) {
+        return [NSString stringWithFormat:@"%@{description-error}",
+                NSStringFromClass([object class]) ?: @"?"];
+    }
+}
+
+static void XLGTabBarSafeProbeCollectViews(
+    UIView *view,
+    NSMutableArray<UIView *> *matches,
+    NSUInteger depth) {
+
+    if (!view || depth>70 || matches.count>=40) return;
+
+    NSString *name=NSStringFromClass(view.class) ?: @"";
+    NSString *lower=name.lowercaseString ?: @"";
+    if ([lower containsString:@"tabbar"] ||
+        [lower containsString:@"tabview"]) {
+        if (![matches containsObject:view]) [matches addObject:view];
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        XLGTabBarSafeProbeCollectViews(
+            subview,matches,depth+1);
+    }
+}
+
+static NSString *XLGTabBarSafeProbeTabIdentity(id tab) {
+    if (!tab) return @"nil";
+    NSMutableArray<NSString *> *parts=[NSMutableArray array];
+
+    for (NSString *key in @[
+        @"identifier",
+        @"tabIdentifier",
+        @"itemIdentifier",
+        @"title",
+        @"name",
+        @"accessibilityLabel",
+        @"key"
+    ]) {
+        id value=XLGSafeValueForKey(tab,key);
+        if (!value || value==NSNull.null) continue;
+        [parts addObject:
+            [NSString stringWithFormat:@"%@=%@",key,value]];
+    }
+
+    if (!parts.count) {
+        return XLGTabBarSafeProbeDescribe(tab);
+    }
+    return [parts componentsJoinedByString:@" | "];
+}
+
+static BOOL XLGTabBarSafeProbeInterestingDefaultsKey(NSString *key) {
+    NSString *lower=key.lowercaseString ?: @"";
+    if ([lower containsString:@"token"] ||
+        [lower containsString:@"password"] ||
+        [lower containsString:@"secret"] ||
+        [lower containsString:@"cookie"] ||
+        [lower containsString:@"auth"] ||
+        [lower containsString:@"session"]) {
+        return NO;
+    }
+
+    return [lower containsString:@"tab"] ||
+           [lower containsString:@"navigation"] ||
+           [lower containsString:@"custom"] ||
+           [lower containsString:@"dock"] ||
+           [lower containsString:@"premium"];
+}
+
+static void XLGTabBarSafeProbeDumpDefaults(void) {
+    NSDictionary *all=
+        NSUserDefaults.standardUserDefaults.dictionaryRepresentation;
+    NSMutableArray<NSString *> *keys=[NSMutableArray array];
+
+    for (id rawKey in all) {
+        if (![rawKey isKindOfClass:NSString.class]) continue;
+        NSString *key=(NSString *)rawKey;
+        if (XLGTabBarSafeProbeInterestingDefaultsKey(key)) {
+            [keys addObject:key];
+        }
+    }
+
+    [keys sortUsingSelector:
+        @selector(localizedCaseInsensitiveCompare:)];
+
+    XLGTabBarSafeProbeLog(
+        @"DEFAULTS matching=%lu",
+        (unsigned long)keys.count);
+
+    for (NSString *key in keys) {
+        XLGTabBarSafeProbeLog(
+            @"DEFAULT key=%@ value=%@",
+            key,
+            XLGTabBarSafeProbeDescribe(all[key]));
+    }
+}
+
+static void XLGTabBarSafeProbeDumpAppNavigation(void) {
+    id appNavigation=XLGSidebarAppNavigation();
+    XLGTabBarSafeProbeLog(
+        @"APPNAV class=%@ ptr=%p",
+        appNavigation
+            ? NSStringFromClass([appNavigation class]) : @"nil",
+        appNavigation);
+
+    if (!appNavigation) return;
+
+    for (NSString *key in @[
+        @"tabs",
+        @"tabItems",
+        @"items",
+        @"navigationItems",
+        @"appTabs",
+        @"entries",
+        @"tabBar",
+        @"tabBarView",
+        @"tabBarController",
+        @"selectedTab",
+        @"selectedIndex",
+        @"currentTab",
+        @"customizedTabs"
+    ]) {
+        id value=XLGSafeValueForKey(appNavigation,key);
+        if (!value) continue;
+
+        XLGTabBarSafeProbeLog(
+            @"APPNAV_VALUE key=%@ value=%@",
+            key,
+            XLGTabBarSafeProbeDescribe(value));
+    }
+}
+
+static void XLGTabBarSafeProbeDumpView(UIView *view) {
+    NSString *className=NSStringFromClass(view.class) ?: @"?";
+
+    id tabs=XLGSafeValueForKey(view,@"tabs");
+    id itemViews=XLGSafeValueForKey(view,@"itemViews");
+    id selectedIndex=XLGSafeValueForKey(view,@"selectedIndex");
+
+    XLGTabBarSafeProbeLog(
+        @"VIEW class=%@ ptr=%p frame=%@ hidden=%@ alpha=%.2f tabs=%lu itemViews=%lu selectedIndex=%@",
+        className,
+        view,
+        NSStringFromCGRect(view.frame),
+        view.hidden ? @"YES" : @"NO",
+        view.alpha,
+        [tabs isKindOfClass:NSArray.class]
+            ? (unsigned long)[(NSArray *)tabs count] : 0,
+        [itemViews isKindOfClass:NSArray.class]
+            ? (unsigned long)[(NSArray *)itemViews count] : 0,
+        selectedIndex ?: @"-");
+
+    if ([tabs isKindOfClass:NSArray.class]) {
+        [(NSArray *)tabs enumerateObjectsUsingBlock:
+            ^(id tab, NSUInteger idx, BOOL *stop) {
+                (void)stop;
+                XLGTabBarSafeProbeLog(
+                    @"TAB index=%lu class=%@ identity=%@",
+                    (unsigned long)idx,
+                    NSStringFromClass([tab class]) ?: @"nil",
+                    XLGTabBarSafeProbeTabIdentity(tab));
+            }];
+    }
+
+    if ([itemViews isKindOfClass:NSArray.class]) {
+        [(NSArray *)itemViews enumerateObjectsUsingBlock:
+            ^(id item, NSUInteger idx, BOOL *stop) {
+                (void)stop;
+                if (![item isKindOfClass:UIView.class]) {
+                    XLGTabBarSafeProbeLog(
+                        @"ITEM index=%lu value=%@",
+                        (unsigned long)idx,
+                        XLGTabBarSafeProbeDescribe(item));
+                    return;
+                }
+                UIView *v=(UIView *)item;
+                XLGTabBarSafeProbeLog(
+                    @"ITEM index=%lu class=%@ frame=%@ label=%@ identifier=%@ value=%@",
+                    (unsigned long)idx,
+                    NSStringFromClass(v.class),
+                    NSStringFromCGRect(v.frame),
+                    v.accessibilityLabel ?: @"-",
+                    v.accessibilityIdentifier ?: @"-",
+                    v.accessibilityValue ?: @"-");
+            }];
+    }
+}
+
+static void XLGTabBarSafeProbeRun(void) {
+    NSString *path=XLGTabBarSafeProbeLogPath();
+    if (path.length) {
+        [NSFileManager.defaultManager
+            removeItemAtPath:path error:nil];
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"========== XLiquidGlass 1.9.3 Beta 2 Safe Tab Bar Probe ==========");
+    XLGTabBarSafeProbeLog(
+        @"liquidGlass=%@",
+        XLGEnabled() ? @"ON" : @"OFF");
+
+    XLGTabBarSafeProbeDumpAppNavigation();
+
+    NSMutableArray<UIView *> *matches=[NSMutableArray array];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            XLGTabBarSafeProbeLog(
+                @"WINDOW class=%@ ptr=%p hidden=%@ alpha=%.2f root=%@",
+                NSStringFromClass(window.class),
+                window,
+                window.hidden ? @"YES" : @"NO",
+                window.alpha,
+                window.rootViewController
+                    ? NSStringFromClass(
+                        window.rootViewController.class) : @"nil");
+            if (window.hidden || window.alpha<=0.01) continue;
+            XLGTabBarSafeProbeCollectViews(
+                window,matches,0);
+        }
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"MATCHING_VIEWS count=%lu",
+        (unsigned long)matches.count);
+    for (UIView *view in matches) {
+        XLGTabBarSafeProbeDumpView(view);
+    }
+
+    XLGTabBarSafeProbeDumpDefaults();
+    XLGTabBarSafeProbeLog(@"========== END ==========");
+}
 
 #pragma mark - XLiquidGlass 1.9.2 native toast bridge
 
@@ -6631,7 +6980,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 2 loaded: manual safe Tab Bar probe + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
