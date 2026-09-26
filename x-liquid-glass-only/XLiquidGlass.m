@@ -7,7 +7,13 @@
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
 static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
-static NSString *const kXLGThemeColorEnabledKey = @"XLiquidGlassThemeColorEnabled";
+static NSString *const kXLGTabBarColorModeKey = @"XLiquidGlassTabBarColorMode";
+
+typedef NS_ENUM(NSInteger, XLGTabBarColorMode) {
+    XLGTabBarColorModeNative = 0,
+    XLGTabBarColorModeActiveOnly = 1,
+    XLGTabBarColorModeAllTabs = 2,
+};
 
 static IMP gOrigInstallGate = NULL;
 static IMP gOrigInstallGateForAccount = NULL;
@@ -22,6 +28,9 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
+static BOOL gXLGAllowTabColorHook = NO;
+
+static void XLGRefreshXNavigationColorModeNow(void);
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -35,10 +44,26 @@ static BOOL XLGTabLabelsEnabled(void) {
     return stored ? [stored boolValue] : NO;
 }
 
-static BOOL XLGThemeColorEnabled(void) {
+static XLGTabBarColorMode XLGTabBarColorModeValue(void) {
     NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
-    id stored=[defaults objectForKey:kXLGThemeColorEnabledKey];
-    return stored ? [stored boolValue] : YES;
+    id stored=[defaults objectForKey:kXLGTabBarColorModeKey];
+    NSInteger value=stored ? [stored integerValue] : XLGTabBarColorModeNative;
+    if (value < XLGTabBarColorModeNative || value > XLGTabBarColorModeAllTabs) {
+        value=XLGTabBarColorModeNative;
+    }
+    return (XLGTabBarColorMode)value;
+}
+
+static NSString *XLGTabBarColorModeTitle(XLGTabBarColorMode mode) {
+    switch (mode) {
+        case XLGTabBarColorModeActiveOnly:
+            return @"Aba ativa";
+        case XLGTabBarColorModeAllTabs:
+            return @"Todas as abas";
+        case XLGTabBarColorModeNative:
+        default:
+            return @"Nativa";
+    }
 }
 
 static BOOL XLGHookMethod(Class cls,
@@ -159,20 +184,38 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Reinicie o X após alterar esta opção para aplicar completamente a interface.";
+    return @"Quando uma alteração exigir reinício, o X exibirá um aviso.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    (void)indexPath;
+    if (indexPath.row == 1) {
+        static NSString *selectorIdentifier = @"XLiquidGlassSelectorCell";
+        UITableViewCell *cell =
+            [tableView dequeueReusableCellWithIdentifier:selectorIdentifier];
+        if (!cell) {
+            cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1
+                                          reuseIdentifier:selectorIdentifier];
+        }
 
-    static NSString *identifier = @"XLiquidGlassToggleCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
-                                      reuseIdentifier:identifier];
+        cell.textLabel.text = @"Cor do tema na Tab Bar";
+        cell.detailTextLabel.text =
+            XLGTabBarColorModeTitle(XLGTabBarColorModeValue());
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.accessoryView = nil;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
     }
 
+    static NSString *toggleIdentifier = @"XLiquidGlassToggleCell";
+    UITableViewCell *cell =
+        [tableView dequeueReusableCellWithIdentifier:toggleIdentifier];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                      reuseIdentifier:toggleIdentifier];
+    }
+
+    cell.accessoryType = UITableViewCellAccessoryNone;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
@@ -183,13 +226,6 @@ static void XLGSyncCompatibilityGate(void) {
         toggle.on = XLGEnabled();
         [toggle addTarget:self
                    action:@selector(xlgLiquidGlassToggleChanged:)
-         forControlEvents:UIControlEventValueChanged];
-    } else if (indexPath.row == 1) {
-        cell.textLabel.text = @"Cor do tema na Tab Bar";
-        cell.detailTextLabel.text = @"Desligado usa o visual nativo sem tintura.";
-        toggle.on = XLGThemeColorEnabled();
-        [toggle addTarget:self
-                   action:@selector(xlgThemeColorToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
     } else {
         cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
@@ -219,19 +255,84 @@ static void XLGSyncCompatibilityGate(void) {
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)xlgThemeColorToggleChanged:(UISwitch *)sender {
-    [[NSUserDefaults standardUserDefaults]
-        setBool:sender.isOn
-         forKey:kXLGThemeColorEnabledKey];
+- (void)xlgSelectTabBarColorMode:(XLGTabBarColorMode)newMode {
+    XLGTabBarColorMode oldMode=XLGTabBarColorModeValue();
+    if (newMode == oldMode) return;
 
-    UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"Cor da Tab Bar"
-                                            message:@"Reinicie o X para aplicar completamente esta alteração."
-                                     preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
-                                             style:UIAlertActionStyleDefault
+    [[NSUserDefaults standardUserDefaults]
+        setInteger:newMode
+            forKey:kXLGTabBarColorModeKey];
+
+    [self.tableView reloadRowsAtIndexPaths:@[
+        [NSIndexPath indexPathForRow:1 inSection:0]
+    ] withRowAnimation:UITableViewRowAnimationNone];
+
+    BOOL desiredHook=(newMode != XLGTabBarColorModeNative);
+    BOOL requiresRestart=(desiredHook != gXLGAllowTabColorHook);
+
+    if (requiresRestart) {
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:@"Reinício necessário"
+                                                message:@"Reinicie o X para aplicar completamente esta alteração."
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                 style:UIAlertActionStyleDefault
+                                               handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    } else if (newMode != XLGTabBarColorModeNative) {
+        XLGRefreshXNavigationColorModeNow();
+    }
+}
+
+- (void)xlgShowTabBarColorModeSelector {
+    UIAlertController *sheet =
+        [UIAlertController alertControllerWithTitle:@"Cor do tema na Tab Bar"
+                                            message:nil
+                                     preferredStyle:UIAlertControllerStyleActionSheet];
+
+    NSArray<NSDictionary *> *options=@[
+        @{@"title": @"Nativa", @"value": @(XLGTabBarColorModeNative)},
+        @{@"title": @"Aba ativa", @"value": @(XLGTabBarColorModeActiveOnly)},
+        @{@"title": @"Todas as abas", @"value": @(XLGTabBarColorModeAllTabs)}
+    ];
+
+    __weak typeof(self) weakSelf=self;
+    for (NSDictionary *option in options) {
+        NSString *title=option[@"title"];
+        XLGTabBarColorMode mode=(XLGTabBarColorMode)[option[@"value"] integerValue];
+
+        [sheet addAction:
+            [UIAlertAction actionWithTitle:title
+                                     style:UIAlertActionStyleDefault
+                                   handler:^(__unused UIAlertAction *action) {
+                [weakSelf xlgSelectTabBarColorMode:mode];
+            }]];
+    }
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancelar"
+                                             style:UIAlertActionStyleCancel
                                            handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
+
+    UIPopoverPresentationController *popover=sheet.popoverPresentationController;
+    if (popover) {
+        popover.sourceView=self.view;
+        popover.sourceRect=CGRectMake(
+            CGRectGetMidX(self.view.bounds),
+            CGRectGetMidY(self.view.bounds),
+            1.0,
+            1.0);
+        popover.permittedArrowDirections=0;
+    }
+
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == 0 && indexPath.row == 1) {
+        [self xlgShowTabBarColorModeSelector];
+    }
 }
 
 - (void)xlgTabLabelsToggleChanged:(UISwitch *)sender {
