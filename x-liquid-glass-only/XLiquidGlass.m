@@ -6,7 +6,7 @@
 #import <dlfcn.h>
 #import <mach/mach.h>
 
-#pragma mark - XLiquidGlass 1.9.3 Beta 5
+#pragma mark - XLiquidGlass 1.9.3 Beta 6
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -672,7 +672,7 @@ static NSString *XLGTabBarSafeProbeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass193Beta5SafeDescriptorProbe.log"];
+        @"XLiquidGlass193Beta6MainTabDataSourceProbe.log"];
 }
 
 static NSString *XLGTabBarSafeProbeTimestamp(void) {
@@ -1211,7 +1211,13 @@ static BOOL XLGTabBarSafeProbeInterestingRuntimeName(NSString *name) {
         @"limit",
         @"selected",
         @"spine",
-        @"item"
+        @"item",
+        @"update",
+        @"build",
+        @"source",
+        @"settings",
+        @"available",
+        @"visible"
     ]) {
         if ([lower containsString:needle]) return YES;
     }
@@ -1298,11 +1304,78 @@ static void XLGTabBarSafeProbeDumpRuntimeClass(Class cls) {
         className);
 }
 
+
+static void XLGTabBarSafeProbeDumpAllIvarsForClassNamed(
+    NSString *requestedName) {
+
+    Class cls=NSClassFromString(requestedName);
+    XLGTabBarSafeProbeLog(
+        @"ALL_IVARS_LOOKUP requested=%@ result=%@ ptr=%p",
+        requestedName ?: @"-",
+        cls ? NSStringFromClass(cls) : @"nil",
+        cls);
+    if (!cls) return;
+
+    for (Class cursor=cls; cursor; cursor=class_getSuperclass(cursor)) {
+        unsigned int count=0;
+        Ivar *ivars=class_copyIvarList(cursor,&count);
+        XLGTabBarSafeProbeLog(
+            @"ALL_IVARS_CLASS class=%@ count=%u",
+            NSStringFromClass(cursor) ?: @"?",
+            count);
+
+        for (unsigned int i=0;i<count;i++) {
+            const char *name=ivar_getName(ivars[i]);
+            const char *type=ivar_getTypeEncoding(ivars[i]);
+            XLGTabBarSafeProbeLog(
+                @"ALL_IVAR owner=%@ name=%s type=%s offset=%td",
+                NSStringFromClass(cursor) ?: @"?",
+                name ?: "-",
+                type ?: "-",
+                ivar_getOffset(ivars[i]));
+        }
+        if (ivars) free(ivars);
+
+        NSString *cursorName=NSStringFromClass(cursor) ?: @"";
+        if ([cursorName hasPrefix:@"NSObject"] ||
+            [cursorName isEqualToString:@"NSObject"]) {
+            break;
+        }
+    }
+}
+
+static void XLGTabBarSafeProbeDumpMainTabPipeline(void) {
+    XLGTabBarSafeProbeLog(
+        @"========== MAIN_TAB_PIPELINE_BEGIN ==========");
+
+    for (NSString *name in @[
+        @"T1TwitterSwift.MainAppTabDataSource",
+        @"_TtC14T1TwitterSwift20MainAppTabDataSource",
+        @"T1TwitterSwift.MainAppNavigationSettings",
+        @"_TtC14T1TwitterSwift25MainAppNavigationSettings",
+        @"T1TwitterSwift.XTabbedAppNavigation",
+        @"_TtC14T1TwitterSwift20XTabbedAppNavigation",
+        @"T1TwitterSwift.XTabbedAppNavigationTab",
+        @"_TtC14T1TwitterSwift24XTabbedAppNavigationTab"
+    ]) {
+        XLGTabBarSafeProbeDumpAllIvarsForClassNamed(name);
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"========== MAIN_TAB_PIPELINE_END ==========");
+}
+
 static void XLGTabBarSafeProbeDumpKnownClasses(void) {
     NSArray<NSString *> *classNames=@[
         @"T1TabCustomizationConfig",
         @"T1TabCustomizationViewController",
         @"_TtC14T1TwitterSwift25TabCustomizationViewModel",
+        @"_TtC14T1TwitterSwift20MainAppTabDataSource",
+        @"T1TwitterSwift.MainAppTabDataSource",
+        @"_TtC14T1TwitterSwift25MainAppNavigationSettings",
+        @"T1TwitterSwift.MainAppNavigationSettings",
+        @"_TtC14T1TwitterSwift24XTabbedAppNavigationTab",
+        @"T1TwitterSwift.XTabbedAppNavigationTab",
         @"_TtC14T1TwitterSwift20XTabbedAppNavigation",
         @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController",
         @"XNavigation.TabBarController",
@@ -1496,13 +1569,14 @@ static void XLGTabBarSafeProbeRun(void) {
     }
 
     XLGTabBarSafeProbeLog(
-        @"========== XLiquidGlass 1.9.3 Beta 5 Safe Descriptor Probe ==========");
+        @"========== XLiquidGlass 1.9.3 Beta 6 Main Tab DataSource Probe ==========");
     XLGTabBarSafeProbeLog(
         @"liquidGlass=%@",
         XLGEnabled() ? @"ON" : @"OFF");
 
     XLGTabBarSafeProbeDumpAppNavigation();
     XLGTabBarSafeProbeDumpKnownClasses();
+    XLGTabBarSafeProbeDumpMainTabPipeline();
     XLGTabBarSafeProbeDumpNativeCustomizationConfig();
     XLGTabBarSafeProbeDumpViewControllerHierarchy();
     XLGTabBarSafeProbeDumpRawSwiftState();
@@ -7549,7 +7623,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 5 loaded: safe raw Swift Tab descriptor probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6 loaded: MainAppTabDataSource pre-render probe + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
