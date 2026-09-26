@@ -308,6 +308,89 @@ static void TCPSnapshotAll(NSString *reason) {
     }
 }
 
+
+static void TCPDumpResponderChain(UIResponder *responder, NSString *reason) {
+    TCPLog(@"RESPONDER_CHAIN_BEGIN reason=%@", reason ?: @"-");
+    UIResponder *cursor=responder;
+    for (NSUInteger i=0; cursor && i<32; i++,cursor=cursor.nextResponder) {
+        TCPLog(@"RESPONDER n=%lu class=%@ ptr=%p",
+               (unsigned long)i,
+               NSStringFromClass(cursor.class),
+               cursor);
+    }
+    TCPLog(@"RESPONDER_CHAIN_END reason=%@", reason ?: @"-");
+}
+
+static void TCPDumpGestures(UIView *view, NSString *reason) {
+    if (!view) return;
+    NSArray<UIGestureRecognizer *> *gestures=view.gestureRecognizers ?: @[];
+    TCPLog(@"GESTURES reason=%@ class=%@ ptr=%p count=%lu",
+           reason ?: @"-",
+           NSStringFromClass(view.class),
+           view,
+           (unsigned long)gestures.count);
+    for (NSUInteger i=0;i<gestures.count;i++) {
+        UIGestureRecognizer *g=gestures[i];
+        TCPLog(@"GESTURE n=%lu class=%@ ptr=%p state=%ld enabled=%d cancels=%d delaysTouchesBegan=%d delaysTouchesEnded=%d viewClass=%@",
+               (unsigned long)i,
+               NSStringFromClass(g.class),
+               g,
+               (long)g.state,
+               g.enabled,
+               g.cancelsTouchesInView,
+               g.delaysTouchesBegan,
+               g.delaysTouchesEnded,
+               g.view ? NSStringFromClass(g.view.class) : @"nil");
+    }
+}
+
+static void TCPDumpViewTree(UIView *view,
+                            UIView *root,
+                            NSUInteger depth,
+                            NSString *reason,
+                            NSUInteger *nodeCount) {
+    if (!view || depth>12 || !nodeCount || *nodeCount>=512) return;
+    (*nodeCount)++;
+
+    CGRect frameInRoot=[view convertRect:view.bounds toView:root];
+    TCPLog(@"TREE reason=%@ depth=%lu class=%@ ptr=%p frameRoot=%@ tint=%@ bg=%@ alpha=%.3f hidden=%d userInteraction=%d gestures=%lu label=%@ traits=0x%llx subviews=%lu",
+           reason ?: @"-",
+           (unsigned long)depth,
+           NSStringFromClass(view.class),
+           view,
+           NSStringFromCGRect(frameInRoot),
+           TCPColor(view.tintColor),
+           TCPColor(view.backgroundColor),
+           view.alpha,
+           view.hidden,
+           view.userInteractionEnabled,
+           (unsigned long)view.gestureRecognizers.count,
+           TCPText(view.accessibilityLabel),
+           (unsigned long long)view.accessibilityTraits,
+           (unsigned long)view.subviews.count);
+
+    for (UIView *sub in view.subviews ?: @[]) {
+        TCPDumpViewTree(sub,root,depth+1,reason,nodeCount);
+    }
+}
+
+static void TCPDumpRuntimeIvars(Class cls) {
+    if (!cls) return;
+    NSString *className=NSStringFromClass(cls);
+    unsigned int count=0;
+    Ivar *ivars=class_copyIvarList(cls,&count);
+    for (unsigned int i=0;i<count;i++) {
+        const char *name=ivar_getName(ivars[i]);
+        const char *type=ivar_getTypeEncoding(ivars[i]);
+        TCPLog(@"IVAR class=%@ name=%s type=%s offset=%td",
+               className,
+               name ?: "-",
+               type ?: "-",
+               ivar_getOffset(ivars[i]));
+    }
+    free(ivars);
+}
+
 #pragma mark - Runtime dump
 
 static BOOL TCPInterestingMethodName(NSString *name) {
@@ -328,6 +411,8 @@ static void TCPDumpClass(Class cls) {
 
     NSString *className = NSStringFromClass(cls);
     TCPLog(@"RUNTIME_CLASS_BEGIN class=%@ ptr=%p", className, cls);
+
+    TCPDumpRuntimeIvars(cls);
 
     unsigned int propertyCount = 0;
     objc_property_t *properties = class_copyPropertyList(cls, &propertyCount);
@@ -392,56 +477,89 @@ static void TCPSchedulePostTapSnapshots(NSUInteger serial) {
 }
 
 static void TCPUIApplicationSendEvent(id self, SEL cmd, UIEvent *event) {
-    UIView *hitItem = nil;
     UIView *hitBar = nil;
+    UIView *hitView = nil;
     UITouch *hitTouch = nil;
+    CGPoint hitPoint = CGPointZero;
 
     if (gCaptureArmed && event.type == UIEventTypeTouches) {
+        NSArray<UIView *> *bars=TCPFindViewsNamed(@"XNavigation.TabBarView");
+
         for (UITouch *touch in event.allTouches ?: [NSSet set]) {
             if (touch.phase != UITouchPhaseEnded) continue;
 
-            UIView *view = touch.view;
-            UIView *item = TCPAncestorMatching(view, @"XNavigation.TabBarItemView");
-            UIView *bar = TCPAncestorMatching(view, @"XNavigation.TabBarView");
+            UIWindow *window=touch.window;
+            if (!window) continue;
 
-            if (item && bar) {
-                hitTouch = touch;
-                hitItem = item;
-                hitBar = bar;
+            CGPoint windowPoint=[touch locationInView:window];
+
+            for (UIView *bar in bars) {
+                if (bar.window != window || bar.hidden || bar.alpha<=0.01) continue;
+
+                CGPoint point=[window convertPoint:windowPoint toView:bar];
+                if (!CGRectContainsPoint(bar.bounds,point)) continue;
+
+                hitTouch=touch;
+                hitBar=bar;
+                hitPoint=point;
+                hitView=[bar hitTest:point withEvent:event];
                 break;
             }
+
+            if (hitBar) break;
         }
     }
 
-    if (hitItem && hitBar) {
+    if (hitBar && hitTouch) {
         gCaptureArmed = NO;
         gCaptureWindow = YES;
         NSUInteger serial = ++gCaptureSerial;
 
-        CGPoint point = [hitTouch locationInView:hitBar];
         TCPLog(@"========== TAB_TOUCH_BEGIN serial=%lu ==========",
                (unsigned long)serial);
-        TCPLog(@"TOUCH_PRE serial=%lu touchedClass=%@ touchedPtr=%p itemClass=%@ itemPtr=%p itemIndex=%ld selectedIndex=%ld point=(%.1f,%.1f)",
+        TCPLog(@"TOUCH_PRE serial=%lu touchViewClass=%@ touchViewPtr=%p hitClass=%@ hitPtr=%p barClass=%@ barPtr=%p point=(%.1f,%.1f) selectedIndex=%ld",
                (unsigned long)serial,
-               NSStringFromClass(hitTouch.view.class),
+               hitTouch.view ? NSStringFromClass(hitTouch.view.class) : @"nil",
                hitTouch.view,
-               NSStringFromClass(hitItem.class),
-               hitItem,
-               (long)TCPIndexOfItem(hitBar, hitItem),
-               (long)TCPSelectedIndex(hitBar),
-               point.x, point.y);
+               hitView ? NSStringFromClass(hitView.class) : @"nil",
+               hitView,
+               NSStringFromClass(hitBar.class),
+               hitBar,
+               hitPoint.x,
+               hitPoint.y,
+               (long)TCPSelectedIndex(hitBar));
+
         TCPSnapshotBar(hitBar, @"touch-pre");
+
+        NSUInteger nodes=0;
+        TCPDumpViewTree(hitBar,hitBar,0,@"touch-pre",&nodes);
+        TCPLog(@"TREE_COMPLETE reason=touch-pre nodes=%lu",(unsigned long)nodes);
+
+        TCPDumpResponderChain(hitView ?: hitTouch.view, @"touch-pre");
+
+        UIView *cursor=hitView ?: hitTouch.view;
+        for (NSUInteger i=0;cursor && i<16;i++,cursor=cursor.superview) {
+            TCPDumpGestures(cursor,
+                [NSString stringWithFormat:@"touch-pre.ancestor%lu",(unsigned long)i]);
+            if (cursor==hitBar) break;
+        }
 
         if (gOrigUIApplicationSendEvent) {
             ((void(*)(id,SEL,UIEvent *))gOrigUIApplicationSendEvent)(
                 self, cmd, event);
         }
 
-        TCPLog(@"TOUCH_POST_SYNC serial=%lu itemIndex=%ld selectedIndex=%ld",
+        TCPLog(@"TOUCH_POST_SYNC serial=%lu selectedIndex=%ld hitClass=%@",
                (unsigned long)serial,
-               (long)TCPIndexOfItem(hitBar, hitItem),
-               (long)TCPSelectedIndex(hitBar));
+               (long)TCPSelectedIndex(hitBar),
+               hitView ? NSStringFromClass(hitView.class) : @"nil");
         TCPSnapshotBar(hitBar, @"touch-post-sync");
+
+        NSUInteger postNodes=0;
+        TCPDumpViewTree(hitBar,hitBar,0,@"touch-post-sync",&postNodes);
+        TCPLog(@"TREE_COMPLETE reason=touch-post-sync nodes=%lu",
+               (unsigned long)postNodes);
+
         TCPSchedulePostTapSnapshots(serial);
         return;
     }
@@ -890,7 +1008,7 @@ static void TCPRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassTabClickProbeInit(void) {
     @autoreleasepool {
-        TCPLog(@"========== XLiquidGlass Tab Click Probe 0.1.0 loaded ==========");
+        TCPLog(@"========== XLiquidGlass Tab Click Probe 0.2.0 loaded ==========");
         TCPLog(@"logPath=%@", TCPLogPath());
 
         TCPInstallAll();
