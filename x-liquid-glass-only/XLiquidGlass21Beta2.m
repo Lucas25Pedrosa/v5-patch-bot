@@ -126,12 +126,6 @@ static NSArray<UIWindow *> *XLG21B2Windows(void) {
         }
     }
 
-    if (windows.count==0) {
-        for (UIWindow *window in app.windows) {
-            if (window) [windows addObject:window];
-        }
-    }
-
     return windows;
 }
 
