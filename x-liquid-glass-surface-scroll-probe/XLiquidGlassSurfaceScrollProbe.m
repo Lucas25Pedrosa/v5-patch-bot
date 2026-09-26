@@ -618,6 +618,224 @@ static Ivar SSPFindIvarInHierarchy(Class cls, const char *name) {
     return NULL;
 }
 
+static uint64_t SSPReadRaw64AtOffset(id object, ptrdiff_t offset) {
+    if (!object || offset<0) return 0;
+
+    uint64_t value=0;
+    const uint8_t *base=
+        (const uint8_t *)(__bridge const void *)object;
+
+    @try {
+        memcpy(&value,base+offset,sizeof(value));
+    } @catch (__unused NSException *exception) {
+        value=0;
+    }
+    return value;
+}
+
+static double SSPDoubleFromRaw64(uint64_t raw) {
+    double value=0.0;
+    memcpy(&value,&raw,sizeof(value));
+    return value;
+}
+
+static float SSPFloatFromRaw64Low32(uint64_t raw) {
+    uint32_t low=(uint32_t)(raw & 0xffffffffu);
+    float value=0.0f;
+    memcpy(&value,&low,sizeof(value));
+    return value;
+}
+
+static NSString *SSPVisibleControllerLabelForRawPointer(
+    UIWindow *window,
+    uint64_t raw) {
+
+    if (!window || raw==0) return @"-";
+
+    NSMutableArray<UIViewController *> *queue=
+        [NSMutableArray arrayWithObject:window.rootViewController];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (NSUInteger i=0;i<queue.count && i<240;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *token=[NSValue valueWithNonretainedObject:vc];
+        if ([visited containsObject:token]) continue;
+        [visited addObject:token];
+
+        uintptr_t ptr=(uintptr_t)(__bridge void *)vc;
+        if ((uint64_t)ptr==raw) {
+            NSString *title=vc.title ?: @"-";
+            return [NSString stringWithFormat:
+                @"%@[%@]@%p",
+                NSStringFromClass(vc.class),
+                title,
+                vc];
+        }
+
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+        [queue addObjectsFromArray:vc.childViewControllers ?: @[]];
+    }
+
+    return @"-";
+}
+
+static ptrdiff_t SSPOffsetForEngineIvar(
+    id engine,
+    const char *name) {
+
+    if (!engine || !name) return -1;
+
+    Ivar ivar=
+        SSPFindIvarInHierarchy(
+            object_getClass(engine),
+            name);
+
+    return ivar ? ivar_getOffset(ivar) : -1;
+}
+
+static void SSPLogCollapseEngineState(
+    id engine,
+    UIWindow *window,
+    NSString *reason) {
+
+    if (!engine) {
+        SSPLog(@"COLLAPSE_STATE reason=%@ engine=nil",
+               reason ?: @"-");
+        return;
+    }
+
+    ptrdiff_t policyOffset=
+        SSPOffsetForEngineIvar(engine,"policy");
+    ptrdiff_t hiddenBarTravelOffset=
+        SSPOffsetForEngineIvar(engine,"hiddenBarTravel");
+    ptrdiff_t progressMemoryOffset=
+        SSPOffsetForEngineIvar(engine,"progressMemory");
+    ptrdiff_t governedScreenOffset=
+        SSPOffsetForEngineIvar(engine,"governedScreen");
+    ptrdiff_t pendingTargetOffset=
+        SSPOffsetForEngineIvar(engine,"pendingTarget");
+    ptrdiff_t pendingUndeclaredOffset=
+        SSPOffsetForEngineIvar(engine,"pendingUndeclaredVerdict");
+    ptrdiff_t collapseProgressOffset=
+        SSPOffsetForEngineIvar(engine,"collapseProgress");
+
+    uint64_t policyRaw=
+        SSPReadRaw64AtOffset(engine,policyOffset);
+    uint64_t hiddenRaw=
+        SSPReadRaw64AtOffset(engine,hiddenBarTravelOffset);
+    uint64_t memoryRaw=
+        SSPReadRaw64AtOffset(engine,progressMemoryOffset);
+    uint64_t governedRaw=
+        SSPReadRaw64AtOffset(engine,governedScreenOffset);
+    uint64_t targetRaw0=
+        SSPReadRaw64AtOffset(engine,pendingTargetOffset);
+    uint64_t targetRaw1=
+        pendingTargetOffset>=0
+            ? SSPReadRaw64AtOffset(engine,pendingTargetOffset+8)
+            : 0;
+    uint64_t undeclaredRaw=
+        SSPReadRaw64AtOffset(engine,pendingUndeclaredOffset);
+    uint64_t progressRaw=
+        SSPReadRaw64AtOffset(engine,collapseProgressOffset);
+
+    NSString *governedLabel=
+        SSPVisibleControllerLabelForRawPointer(
+            window,
+            governedRaw);
+
+    SSPLog(@"COLLAPSE_STATE reason=%@ engine=%p class=%@ policy{off=%td raw=0x%016llx u64=%llu double=%.6f} hiddenBarTravel{off=%td raw=0x%016llx double=%.6f float=%.6f} progressMemory{off=%td raw=0x%016llx double=%.6f float=%.6f} governedScreen{off=%td raw=0x%016llx match=%@} pendingTarget{off=%td raw0=0x%016llx raw1=0x%016llx} pendingUndeclaredVerdict{off=%td raw=0x%016llx u64=%llu} collapseProgress{off=%td raw=0x%016llx double=%.6f float=%.6f}",
+           reason ?: @"-",
+           engine,
+           NSStringFromClass(object_getClass(engine)),
+           policyOffset,
+           (unsigned long long)policyRaw,
+           (unsigned long long)policyRaw,
+           SSPDoubleFromRaw64(policyRaw),
+           hiddenBarTravelOffset,
+           (unsigned long long)hiddenRaw,
+           SSPDoubleFromRaw64(hiddenRaw),
+           (double)SSPFloatFromRaw64Low32(hiddenRaw),
+           progressMemoryOffset,
+           (unsigned long long)memoryRaw,
+           SSPDoubleFromRaw64(memoryRaw),
+           (double)SSPFloatFromRaw64Low32(memoryRaw),
+           governedScreenOffset,
+           (unsigned long long)governedRaw,
+           governedLabel,
+           pendingTargetOffset,
+           (unsigned long long)targetRaw0,
+           (unsigned long long)targetRaw1,
+           pendingUndeclaredOffset,
+           (unsigned long long)undeclaredRaw,
+           (unsigned long long)undeclaredRaw,
+           collapseProgressOffset,
+           (unsigned long long)progressRaw,
+           SSPDoubleFromRaw64(progressRaw),
+           (double)SSPFloatFromRaw64Low32(progressRaw));
+}
+
+static id SSPCollapseEngineForNavigationController(
+    UIViewController *controller) {
+
+    if (!controller) return nil;
+    if (![NSStringFromClass(controller.class)
+            isEqualToString:@"XNavigation.NavigationController"]) {
+        return nil;
+    }
+
+    Ivar engineIvar=
+        SSPFindIvarInHierarchy(
+            controller.class,
+            "$__lazy_storage_$_collapseEngine");
+
+    if (!engineIvar) return nil;
+
+    @try {
+        return object_getIvar(controller,engineIvar);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void SSPLogVisibleCollapseEngineStates(
+    UIWindow *window,
+    NSString *reason) {
+
+    if (!window) return;
+
+    NSMutableArray<UIViewController *> *queue=
+        [NSMutableArray arrayWithObject:window.rootViewController];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (NSUInteger i=0;i<queue.count && i<240;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *token=[NSValue valueWithNonretainedObject:vc];
+        if ([visited containsObject:token]) continue;
+        [visited addObject:token];
+
+        if (vc==window.rootViewController ||
+            (vc.isViewLoaded && vc.view.window==window)) {
+
+            id engine=
+                SSPCollapseEngineForNavigationController(vc);
+
+            if (engine) {
+                SSPLogCollapseEngineState(
+                    engine,
+                    window,
+                    reason);
+            }
+        }
+
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+        [queue addObjectsFromArray:vc.childViewControllers ?: @[]];
+    }
+}
+
 static void SSPDumpNavigationCollapseEngine(
     UIViewController *controller) {
 
@@ -665,7 +883,13 @@ static void SSPDumpNavigationCollapseEngine(
            watcher,
            watcher ? NSStringFromClass(object_getClass(watcher)) : @"nil");
 
-    if (engine) SSPDumpCollapseClassHierarchy(engine);
+    if (engine) {
+        SSPDumpCollapseClassHierarchy(engine);
+        SSPLogCollapseEngineState(
+            engine,
+            controller.view.window ?: SSPBestWindow(),
+            @"engine-dump");
+    }
     if (watcher) SSPDumpCollapseClassHierarchy(watcher);
 }
 
@@ -1096,6 +1320,7 @@ static void SSPSampleGestureState(UIWindow *window,
     }
 
     SSPDumpVisibleControllerRuntimeClasses(window);
+    SSPLogVisibleCollapseEngineStates(window,reason);
 }
 
 static void SSPScheduleGestureTail(UIWindow *window,
@@ -1454,9 +1679,9 @@ static void SSPInstallRuntimeHooks(void) {
     (void)tableView;
 
     if (section==0) {
-        return @"Arme um gesto na Home e faça um scroll que esconda a Tab Bar. Depois arme novamente e repita em uma tela onde ela não esconde. Compare NATIVE_COLLAPSE_CONTEXT e TABBAR_TRANSFORM_CALLSTACK.";
+        return @"Arme um gesto na Home e faça um scroll que esconda a Tab Bar. Depois arme novamente e repita em uma tela onde ela não esconde. Compare COLLAPSE_STATE, NATIVE_COLLAPSE_CONTEXT e TABBAR_TRANSFORM_CALLSTACK.";
     }
-    return @"O probe apenas observa. Registra collapseEngine, capacidades tfn_* e a call stack do primeiro setTransform da Tab Bar. Não altera a Tab Bar.";
+    return @"O probe apenas observa. Registra estado interno do collapseEngine, capacidades tfn_* e a call stack do primeiro setTransform da Tab Bar. Não altera a Tab Bar.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1778,7 +2003,7 @@ static void XLiquidGlassSurfaceScrollProbeInit(void) {
             gSSPDumpedRuntimeClasses=[NSMutableSet set];
         }
 
-        SSPLog(@"========== XLiquidGlass 2.1 Native Collapse Probe 0.4.0 loaded ==========");
+        SSPLog(@"========== XLiquidGlass 2.1 Native Collapse Probe 0.5.0 loaded ==========");
         SSPLog(@"logPath=%@",SSPLogPath());
 
         SSPInstallAll();
