@@ -36,6 +36,7 @@ static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
 static NSString *XLGB6LogPath(void);
 static void XLGB6ProbeSnapshot(NSString *reason);
+static void XLGB68DumpConstructorProbe(NSString *reason);
 static void XLGB6InjectNFBProbeEntry(id controller);
 static void XLGB6ShowProbeSettings(id self, SEL cmd);
 
