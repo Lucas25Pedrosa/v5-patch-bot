@@ -3737,7 +3737,7 @@ static NSString *XLGB6LogPath(void) {
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta69SwiftSymbolSourceProbe.log"]
+            @"XLiquidGlass193Beta70LiquidGlassGateCallerProbe.log"]
         : nil;
 }
 
@@ -5911,16 +5911,261 @@ static void XLGB6InstallCorrectionHooks(void) {
     (void)gXLGB65DefaultsObserver;
     (void)&kXLGB65RebuildAttemptKey;
 
-    XLGB65InstallNativeConnectionBridge();
-    XLGB65ScheduleNativeRebuild();
-
-    // Beta 6.7: do not force a late/pre-view recalc. Intercept only X's own
-    // native recalculate-with-IDs calls and reconnect them to NFB's six IDs.
-    XLGB66InstallPreViewBridge();
+    // Beta 7 isolates the Liquid Glass gate investigation.
+    // Do not install any of the Beta 6.x tab-source/recalculate experiments.
+    (void)&XLGB65InstallNativeConnectionBridge;
+    (void)&XLGB65ScheduleNativeRebuild;
+    (void)&XLGB66InstallPreViewBridge;
 }
 
 
 
+
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 7 Liquid Glass gate caller probe
+
+static IMP gOrigXLGB70DebugTabBarEnabled=NULL;
+static IMP gOrigXLGB70SwiftLiquidGlassEnabled=NULL;
+static IMP gOrigXLGB70RedesignEnabled=NULL;
+static NSUInteger gXLGB70TotalGateCalls=0;
+static NSMutableDictionary<NSString *, NSNumber *> *gXLGB70ContextCounts=nil;
+static __thread BOOL gXLGB70InsideProbe=NO;
+
+static NSObject *XLGB70ProbeLock(void) {
+    static NSObject *lock=nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        lock=[NSObject new];
+        gXLGB70ContextCounts=[NSMutableDictionary dictionary];
+    });
+    return lock;
+}
+
+static UIViewController *XLGB70VisibleLeafViewController(void) {
+    UIWindow *window=XLGSidebarActiveWindow();
+    UIViewController *controller=window.rootViewController;
+    if (!controller) return nil;
+
+    for (NSUInteger depth=0;depth<20;depth++) {
+        UIViewController *next=nil;
+
+        if (controller.presentedViewController) {
+            next=controller.presentedViewController;
+        } else if ([controller isKindOfClass:UINavigationController.class]) {
+            next=((UINavigationController *)controller).topViewController;
+        } else if ([controller isKindOfClass:UITabBarController.class]) {
+            next=((UITabBarController *)controller).selectedViewController;
+        } else {
+            for (UIViewController *child in
+                    [controller.childViewControllers reverseObjectEnumerator]) {
+                if (child.isViewLoaded && child.view.window) {
+                    next=child;
+                    break;
+                }
+            }
+        }
+
+        if (!next || next==controller) break;
+        controller=next;
+    }
+
+    return controller;
+}
+
+static NSString *XLGB70ResolvedFrameString(uintptr_t address) {
+    if (!address) return @"address=0x0 image=- offset=- symbol=-";
+
+    Dl_info info={0};
+    BOOL ok=dladdr((void *)address,&info);
+    NSString *image=@"-";
+    NSString *symbol=@"-";
+    unsigned long long offset=0;
+
+    if (ok && info.dli_fname) {
+        image=[[[NSString alloc]
+            initWithUTF8String:info.dli_fname] lastPathComponent] ?: @"-";
+    }
+    if (ok && info.dli_sname) {
+        symbol=[[NSString alloc]
+            initWithUTF8String:info.dli_sname] ?: @"-";
+    }
+    if (ok && info.dli_fbase) {
+        offset=(unsigned long long)
+            (address-(uintptr_t)info.dli_fbase);
+    }
+
+    return [NSString stringWithFormat:
+        @"address=0x%llx image=%@ offset=0x%llx symbol=%@",
+        (unsigned long long)address,
+        image,
+        offset,
+        symbol];
+}
+
+static BOOL XLGB70IsProbeFrameImage(NSString *frameString) {
+    return [frameString containsString:@"XLiquidGlass"];
+}
+
+static void XLGB70LogGateCall(NSString *kind,
+                              BOOL nativeResult,
+                              BOOL effectiveResult) {
+    if (gXLGB70InsideProbe) return;
+    gXLGB70InsideProbe=YES;
+
+    @try {
+        NSArray<NSNumber *> *addresses=
+            [NSThread callStackReturnAddresses] ?: @[];
+
+        uintptr_t callerAddress=0;
+        NSString *callerFrame=@"address=0x0 image=- offset=- symbol=-";
+
+        for (NSUInteger i=0;i<addresses.count && i<24;i++) {
+            uintptr_t address=(uintptr_t)addresses[i].unsignedLongLongValue;
+            NSString *frame=XLGB70ResolvedFrameString(address);
+            if (!XLGB70IsProbeFrameImage(frame)) {
+                callerAddress=address;
+                callerFrame=frame;
+                break;
+            }
+        }
+
+        UIViewController *leaf=XLGB70VisibleLeafViewController();
+        NSString *screen=leaf ? NSStringFromClass(leaf.class) : @"nil";
+        NSString *thread=NSThread.isMainThread ? @"main" : @"background";
+
+        NSString *contextKey=[NSString stringWithFormat:
+            @"%@|0x%llx|%@|%d|%d",
+            kind ?: @"-",
+            (unsigned long long)callerAddress,
+            screen ?: @"nil",
+            nativeResult,
+            effectiveResult];
+
+        NSUInteger total=0;
+        NSUInteger contextCount=0;
+        BOOL firstForContext=NO;
+
+        @synchronized(XLGB70ProbeLock()) {
+            gXLGB70TotalGateCalls++;
+            total=gXLGB70TotalGateCalls;
+            contextCount=
+                [gXLGB70ContextCounts[contextKey] unsignedIntegerValue]+1;
+            gXLGB70ContextCounts[contextKey]=@(contextCount);
+            firstForContext=(contextCount==1);
+        }
+
+        if (!firstForContext) {
+            gXLGB70InsideProbe=NO;
+            return;
+        }
+
+        XLGB6Log(
+            @"LIQUID_GATE_EVENT seq=%lu kind=%@ native=%@ effective=%@ thread=%@ screen=%@ caller={%@}",
+            (unsigned long)total,
+            kind ?: @"-",
+            nativeResult ? @"YES" : @"NO",
+            effectiveResult ? @"YES" : @"NO",
+            thread,
+            screen ?: @"nil",
+            callerFrame);
+
+        NSUInteger frameNumber=0;
+        for (NSNumber *number in addresses) {
+            if (frameNumber>=12) break;
+            uintptr_t address=(uintptr_t)number.unsignedLongLongValue;
+            NSString *frame=XLGB70ResolvedFrameString(address);
+            if (XLGB70IsProbeFrameImage(frame)) continue;
+            XLGB6Log(@"LIQUID_GATE_FRAME event=%lu frame=%lu %@",
+                     (unsigned long)total,
+                     (unsigned long)frameNumber,
+                     frame);
+            frameNumber++;
+        }
+    } @catch (NSException *exception) {
+        XLGB6Log(@"LIQUID_GATE_PROBE_EXCEPTION name=%@ reason=%@",
+                 exception.name ?: @"-",
+                 exception.reason ?: @"-");
+    }
+
+    gXLGB70InsideProbe=NO;
+}
+
+static BOOL XLGB70CallNativeBoolGetter(IMP original,
+                                      id self,
+                                      SEL cmd,
+                                      BOOL fallback) {
+    if (!original) return fallback;
+    @try {
+        return ((BOOL(*)(id,SEL))original)(self,cmd);
+    } @catch (NSException *exception) {
+        XLGB6Log(@"LIQUID_GATE_NATIVE_EXCEPTION selector=%@ name=%@ reason=%@",
+                 NSStringFromSelector(cmd) ?: @"-",
+                 exception.name ?: @"-",
+                 exception.reason ?: @"-");
+        return fallback;
+    }
+}
+
+static BOOL XLGB70DebugTabBarEnabledProbe(id self, SEL cmd) {
+    BOOL effective=XLGReturnState(self,cmd);
+    BOOL nativeResult=XLGB70CallNativeBoolGetter(
+        gOrigXLGB70DebugTabBarEnabled,self,cmd,effective);
+    XLGB70LogGateCall(@"tabbar-debug",nativeResult,effective);
+    return effective;
+}
+
+static BOOL XLGB70SwiftLiquidGlassEnabledProbe(id self, SEL cmd) {
+    BOOL effective=XLGReturnState(self,cmd);
+    BOOL nativeResult=XLGB70CallNativeBoolGetter(
+        gOrigXLGB70SwiftLiquidGlassEnabled,self,cmd,effective);
+    XLGB70LogGateCall(@"global-liquidglass",nativeResult,effective);
+    return effective;
+}
+
+static BOOL XLGB70RedesignEnabledProbe(id self, SEL cmd) {
+    BOOL effective=XLGReturnState(self,cmd);
+    BOOL nativeResult=XLGB70CallNativeBoolGetter(
+        gOrigXLGB70RedesignEnabled,self,cmd,effective);
+    XLGB70LogGateCall(@"redesign-features",nativeResult,effective);
+    return effective;
+}
+
+static void XLGB70MarkCurrentScreen(NSString *reason) {
+    UIViewController *leaf=XLGB70VisibleLeafViewController();
+    UIWindow *window=XLGSidebarActiveWindow();
+
+    NSArray<NSString *> *keys=nil;
+    NSDictionary<NSString *, NSNumber *> *counts=nil;
+    NSUInteger total=0;
+
+    @synchronized(XLGB70ProbeLock()) {
+        total=gXLGB70TotalGateCalls;
+        keys=[gXLGB70ContextCounts.allKeys
+            sortedArrayUsingSelector:@selector(compare:)];
+        counts=[gXLGB70ContextCounts copy];
+    }
+
+    XLGB6Log(@"========== LIQUID_GATE_MARK %@ ==========",
+             reason ?: @"-");
+    XLGB6Log(@"LIQUID_GATE_MARK_STATE liquidGlass=%@ totalCalls=%lu uniqueContexts=%lu window=%@ root=%@ screen=%@",
+             XLGEnabled() ? @"ON" : @"OFF",
+             (unsigned long)total,
+             (unsigned long)keys.count,
+             window ? NSStringFromClass(window.class) : @"nil",
+             window.rootViewController
+                ? NSStringFromClass(window.rootViewController.class) : @"nil",
+             leaf ? NSStringFromClass(leaf.class) : @"nil");
+
+    for (NSString *key in keys) {
+        XLGB6Log(@"LIQUID_GATE_CONTEXT count=%lu key=%@",
+                 (unsigned long)[counts[key] unsignedIntegerValue],
+                 key);
+    }
+
+    XLGB6Log(@"========== LIQUID_GATE_MARK_END %@ ==========",
+             reason ?: @"-");
+}
 
 
 #pragma mark - XLiquidGlass 1.9.3 Beta 6.9 Swift symbol source probe
@@ -6329,7 +6574,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.9 Swift Symbol Probe";
+    self.title=@"Beta 7 Liquid Glass Gate Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -6348,7 +6593,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"O probe enumera somente leitura os símbolos Swift de T1Twitter e XServiceLibraries para localizar quem produz descriptors, tabIdentifiers e o XTabbedAppNavigation antes do Dock.";
+    return @"O probe observa os gates nativos de Liquid Glass sem criar vidro nem alterar a UI. Registra resultado nativo/efetivo, tela visível, caller e uma stack curta para localizar outras camadas do redesign.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -6366,11 +6611,11 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
     cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
 
     if (indexPath.row==0) {
-        cell.textLabel.text=@"Captura completa";
-        cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
+        cell.textLabel.text=@"Marcar tela atual";
+        cell.detailTextLabel.text=@"Registra a tela visível e o resumo dos gates.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta69SwiftSymbolSourceProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta70LiquidGlassGateCallerProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -6384,11 +6629,11 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
     if (indexPath.row==0) {
-        XLGB6ProbeSnapshot(@"manual-NFB");
+        XLGB70MarkCurrentScreen(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.9 Swift Symbol Probe"
-                                 message:@"Captura completa adicionada ao relatório."
+                alertControllerWithTitle:@"Beta 7 Liquid Glass Gate Probe"
+                                 message:@"Tela atual e resumo dos gates adicionados ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
             [UIAlertAction actionWithTitle:@"OK"
@@ -6401,7 +6646,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
     if (indexPath.row==1) {
         // Add a fresh snapshot immediately before copying so the pasted report
         // always contains the current visible state.
-        XLGB6ProbeSnapshot(@"copy-NFB");
+        XLGB70MarkCurrentScreen(@"copy-NFB");
 
         NSString *report=
             [NSString stringWithContentsOfFile:XLGB6LogPath()
@@ -6412,7 +6657,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.9 Swift Symbol Probe"
+                alertControllerWithTitle:@"Beta 7 Liquid Glass Gate Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -6433,7 +6678,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.9 Swift Symbol Probe"
+            alertControllerWithTitle:@"Beta 7 Liquid Glass Gate Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -6456,8 +6701,8 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.9 Swift Symbol Probe",
-        @"subtitle": @"Diagnóstico read-only da fonte nativa do Dock.",
+        @"title": @"Beta 7 Liquid Glass Gate Probe",
+        @"subtitle": @"Mapeia quais telas consultam os gates nativos do Liquid Glass.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
     }];
@@ -9365,8 +9610,8 @@ static void XLGInstallHooks(void) {
                 XLGHookMethod(cls,
                               NSSelectorFromString(@"useTabBarControllerEnabled"),
                               YES,
-                              (IMP)XLGReturnState,
-                              NULL);
+                              (IMP)XLGB70DebugTabBarEnabledProbe,
+                              &gOrigXLGB70DebugTabBarEnabled);
         }
     }
 
@@ -9377,8 +9622,8 @@ static void XLGInstallHooks(void) {
                 XLGHookMethod(cls,
                               NSSelectorFromString(@"isEnabled"),
                               YES,
-                              (IMP)XLGReturnState,
-                              NULL);
+                              (IMP)XLGB70SwiftLiquidGlassEnabledProbe,
+                              &gOrigXLGB70SwiftLiquidGlassEnabled);
         }
     }
 
@@ -9389,8 +9634,8 @@ static void XLGInstallHooks(void) {
                 XLGHookMethod(cls,
                               NSSelectorFromString(@"isRedesignEnabled"),
                               NO,
-                              (IMP)XLGReturnState,
-                              NULL);
+                              (IMP)XLGB70RedesignEnabledProbe,
+                              &gOrigXLGB70RedesignEnabled);
         }
     }
 
@@ -9456,16 +9701,15 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.9 loaded: Swift symbol source probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 7 loaded: Liquid Glass gate caller probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.6 Pre-View Native Panel Bridge + Probe ==========");
-        XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
-                 XLGEnabled() ? @"ON" : @"OFF",
-                 [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 7 Liquid Glass Gate Caller Probe ==========");
+        XLGB6Log(@"BOOT liquidGlass=%@ mode=OBSERVATIONAL_GATE_CALLERS",
+                 XLGEnabled() ? @"ON" : @"OFF");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
