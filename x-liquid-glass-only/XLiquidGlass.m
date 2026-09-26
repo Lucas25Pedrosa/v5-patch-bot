@@ -3709,7 +3709,7 @@ static NSString *XLGB6LogPath(void) {
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta62ActiveReconcileProbe.log"]
+            @"XLiquidGlass193Beta63SwiftAppNavProbe.log"]
         : nil;
 }
 
@@ -4117,12 +4117,207 @@ static void XLGB6ProbeView(UIView *view, NSUInteger depth) {
     }
 }
 
+
+static BOOL XLGB63InterestingName(NSString *name) {
+    NSString *lower=name.lowercaseString ?: @"";
+    return [lower containsString:@"tab"] ||
+           [lower containsString:@"descriptor"] ||
+           [lower containsString:@"item"] ||
+           [lower containsString:@"navigation"] ||
+           [lower containsString:@"dock"] ||
+           [lower containsString:@"visible"] ||
+           [lower containsString:@"selected"];
+}
+
+static void XLGB63DumpClassMetadata(Class cls, NSString *origin) {
+    for (Class cursor=cls; cursor; cursor=class_getSuperclass(cursor)) {
+        NSString *className=NSStringFromClass(cursor) ?: @"?";
+        XLGB6Log(@"SWIFT_CLASS origin=%@ class=%@ superclass=%@ ptr=%p",
+                 origin ?: @"-",
+                 className,
+                 class_getSuperclass(cursor)
+                    ? NSStringFromClass(class_getSuperclass(cursor)) : @"nil",
+                 cursor);
+
+        unsigned int propertyCount=0;
+        objc_property_t *properties=class_copyPropertyList(cursor,&propertyCount);
+        for (unsigned int i=0;i<propertyCount;i++) {
+            const char *rawName=property_getName(properties[i]);
+            NSString *name=rawName ? [NSString stringWithUTF8String:rawName] : @"";
+            if (!XLGB63InterestingName(name)) continue;
+            XLGB6Log(@"SWIFT_PROPERTY class=%@ name=%@ attrs=%s",
+                     className,
+                     name,
+                     property_getAttributes(properties[i]) ?: "-");
+        }
+        if (properties) free(properties);
+
+        unsigned int ivarCount=0;
+        Ivar *ivars=class_copyIvarList(cursor,&ivarCount);
+        for (unsigned int i=0;i<ivarCount;i++) {
+            const char *rawName=ivar_getName(ivars[i]);
+            NSString *name=rawName ? [NSString stringWithUTF8String:rawName] : @"";
+            if (!XLGB63InterestingName(name)) continue;
+            XLGB6Log(@"SWIFT_IVAR class=%@ name=%@ type=%s offset=%td",
+                     className,
+                     name,
+                     ivar_getTypeEncoding(ivars[i]) ?: "-",
+                     ivar_getOffset(ivars[i]));
+        }
+        if (ivars) free(ivars);
+
+        unsigned int methodCount=0;
+        Method *methods=class_copyMethodList(cursor,&methodCount);
+        for (unsigned int i=0;i<methodCount;i++) {
+            NSString *name=NSStringFromSelector(method_getName(methods[i]));
+            if (!XLGB63InterestingName(name)) continue;
+            XLGB6Log(@"SWIFT_METHOD class=%@ selector=%@ types=%s",
+                     className,
+                     name,
+                     method_getTypeEncoding(methods[i]) ?: "-");
+        }
+        if (methods) free(methods);
+
+        if (cursor==NSObject.class) break;
+    }
+}
+
+static void XLGB63DumpGetterValue(id object,
+                                  NSString *key,
+                                  NSString *origin) {
+    if (!object || !key.length) return;
+
+    id value=XLGB6ObjectBySelector(object,key);
+    if (!value) value=XLGSafeValueForKey(object,key);
+    if (!value) return;
+
+    NSString *description=nil;
+    @try {
+        description=[value description] ?: @"-";
+    } @catch (__unused NSException *exception) {
+        description=@"<description-error>";
+    }
+
+    if (description.length>1200) {
+        description=[[description substringToIndex:1200]
+            stringByAppendingString:@"…"];
+    }
+
+    XLGB6Log(@"SWIFT_VALUE origin=%@ owner=%@ key=%@ valueClass=%@ value=%@",
+             origin ?: @"-",
+             NSStringFromClass([object class]) ?: @"?",
+             key,
+             NSStringFromClass([value class]) ?: @"?",
+             description);
+}
+
+static void XLGB63DumpSwiftAppNavigation(NSString *reason) {
+    id appNavigation=XLGSidebarAppNavigation();
+
+    XLGB6Log(@"========== SWIFT_APPNAV_PROBE %@ ==========",reason ?: @"-");
+    XLGB6Log(@"SWIFT_APPNAV object=%@ ptr=%p",
+             appNavigation ? NSStringFromClass([appNavigation class]) : @"nil",
+             appNavigation);
+
+    if (!appNavigation) {
+        XLGB6Log(@"========== SWIFT_APPNAV_PROBE_END %@ ==========",reason ?: @"-");
+        return;
+    }
+
+    XLGB63DumpClassMetadata([appNavigation class],@"appNavigation");
+
+    for (NSString *key in @[
+        @"tabs",
+        @"tabItems",
+        @"items",
+        @"navigationItems",
+        @"appTabs",
+        @"entries",
+        @"descriptors",
+        @"tabDescriptors",
+        @"availableTabs",
+        @"visibleTabs",
+        @"visibleTabEntries",
+        @"tabBar",
+        @"tabBarView",
+        @"tabBarController",
+        @"selectedTab",
+        @"selectedIndex",
+        @"currentTab",
+        @"customizedTabs"
+    ]) {
+        XLGB63DumpGetterValue(appNavigation,key,@"appNavigation");
+    }
+
+    NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (window.rootViewController) [queue addObject:window.rootViewController];
+        }
+    }
+
+    for (NSUInteger i=0;i<queue.count && i<260;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *pointer=[NSValue valueWithPointer:(__bridge const void *)vc];
+        if ([visited containsObject:pointer]) continue;
+        [visited addObject:pointer];
+
+        NSString *name=NSStringFromClass(vc.class) ?: @"";
+        if ([name containsString:@"XTabbedAppNavigationViewController"]) {
+            BOOL respondsLegacy=
+                [vc respondsToSelector:
+                    NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:")];
+
+            id vcAppNavigation=XLGB6ObjectBySelector(vc,@"appNavigation");
+            XLGB6Log(@"SWIFT_VC class=%@ ptr=%p superclass=%@ respondsLegacyRecalc=%@ appNavigationClass=%@ appNavigationPtr=%p sameAsSidebar=%@",
+                     name,
+                     vc,
+                     class_getSuperclass(vc.class)
+                        ? NSStringFromClass(class_getSuperclass(vc.class)) : @"nil",
+                     respondsLegacy ? @"YES" : @"NO",
+                     vcAppNavigation
+                        ? NSStringFromClass([vcAppNavigation class]) : @"nil",
+                     vcAppNavigation,
+                     (vcAppNavigation && vcAppNavigation==appNavigation)
+                        ? @"YES" : @"NO");
+
+            XLGB63DumpClassMetadata(vc.class,@"swift-view-controller");
+
+            for (NSString *key in @[
+                @"tabBarContainer",
+                @"tabBarController",
+                @"tabbedAppNavigation",
+                @"appNavigation",
+                @"tabs",
+                @"descriptors",
+                @"tabDescriptors",
+                @"items"
+            ]) {
+                XLGB63DumpGetterValue(vc,key,@"swift-view-controller");
+            }
+        }
+
+        for (UIViewController *child in vc.childViewControllers ?: @[]) {
+            if (child) [queue addObject:child];
+        }
+        if (vc.presentedViewController) [queue addObject:vc.presentedViewController];
+    }
+
+    XLGB6Log(@"========== SWIFT_APPNAV_PROBE_END %@ ==========",reason ?: @"-");
+}
+
+
 static void XLGB6ProbeSnapshot(NSString *reason) {
     NSArray<NSString *> *desired=XLGB6DesiredPages();
     XLGB6Log(@"========== SNAPSHOT %@ ==========",reason ?: @"-");
     XLGB6Log(@"STATE liquidGlass=%@ bh_tabs_visible=%@",
              XLGEnabled() ? @"ON" : @"OFF",
              desired.count ? [desired componentsJoinedByString:@","] : @"nil");
+
+    XLGB63DumpSwiftAppNavigation(reason);
 
     Class utility=NSClassFromString(@"CustomTabBarUtility");
     XLGB6Log(@"BH utility=%@ registryClass=%@ available=%@ visible=%@ defaults=%@",
@@ -4788,7 +4983,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.2 Tab Probe";
+    self.title=@"Beta 6.3 Tab Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -4829,7 +5024,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta62ActiveReconcileProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta63SwiftAppNavProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -4846,7 +5041,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.2 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.3 Tab Probe"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -4871,7 +5066,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.2 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.3 Tab Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -4892,7 +5087,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.2 Tab Probe"
+            alertControllerWithTitle:@"Beta 6.3 Tab Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -4915,8 +5110,8 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.2 Tab Probe",
-        @"subtitle": @"Active reconcile + diagnóstico do Dock.",
+        @"title": @"Beta 6.3 Tab Probe",
+        @"subtitle": @"Probe do XTabbedAppNavigation + diagnóstico do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
     }];
@@ -7915,13 +8110,13 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.2 loaded: active Swift navigation reconcile + panelID probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.3 loaded: focused Swift XTabbedAppNavigation source probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.2 Active Reconcile + Probe ==========");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.3 Swift AppNavigation Probe ==========");
         XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
                  XLGEnabled() ? @"ON" : @"OFF",
                  [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
