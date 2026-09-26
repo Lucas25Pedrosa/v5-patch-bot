@@ -74,6 +74,7 @@ static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
 static IMP gOrigSearchContainerViewDidAppear = NULL;
 static IMP gOrigSearchContainerViewWillDisappear = NULL;
 static IMP gOrigSearchScrollViewLayoutSubviews = NULL;
+static IMP gOrigSearchScrollViewSetContentOffset = NULL;
 static IMP gOrigVisualEffectViewSetEffect = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static BOOL gXLGSearchEffectGuardInstalled = NO;
@@ -7021,12 +7022,62 @@ static UIViewController *XLGVisibleSearchControllerInController(
     return nil;
 }
 
+static BOOL XLGSearchControllerIsVisiblyActive(
+    UIViewController *controller,
+    UIWindow *window) {
+
+    if (!controller || !window ||
+        !controller.isViewLoaded ||
+        controller.view.window!=window) {
+        return NO;
+    }
+
+    CGRect frame=[controller.view convertRect:controller.view.bounds
+                                       toView:window];
+    CGRect intersection=CGRectIntersection(frame,window.bounds);
+    if (CGRectIsNull(intersection) || CGRectIsEmpty(intersection)) return NO;
+
+    CGFloat windowWidth=CGRectGetWidth(window.bounds);
+    CGFloat windowHeight=CGRectGetHeight(window.bounds);
+
+    return CGRectGetWidth(intersection)>=windowWidth*0.70 &&
+           CGRectGetHeight(intersection)>=windowHeight*0.45 &&
+           CGRectContainsPoint(
+               intersection,
+               CGPointMake(
+                   CGRectGetMidX(window.bounds),
+                   CGRectGetMidY(window.bounds)));
+}
+
 static UIViewController *XLGVisibleSearchControllerForWindow(
     UIWindow *window) {
 
     if (!window || window.hidden) return nil;
-    return XLGVisibleSearchControllerInController(
-        window.rootViewController);
+
+    UIViewController *candidate=
+        XLGVisibleSearchControllerInController(
+            window.rootViewController);
+
+    if (!XLGSearchControllerIsVisiblyActive(candidate,window)) {
+        return nil;
+    }
+    return candidate;
+}
+
+static BOOL XLGResponderChainContainsAny(
+    UIResponder *responder,
+    NSArray<NSString *> *needles) {
+
+    UIResponder *cursor=responder;
+    for (NSUInteger depth=0; cursor && depth<80;
+         depth++, cursor=cursor.nextResponder) {
+
+        NSString *name=NSStringFromClass(cursor.class) ?: @"";
+        for (NSString *needle in needles) {
+            if ([name containsString:needle]) return YES;
+        }
+    }
+    return NO;
 }
 
 static BOOL XLGSearchScrollViewIsEligible(UIScrollView *scrollView) {
@@ -7041,12 +7092,26 @@ static BOOL XLGSearchScrollViewIsEligible(UIScrollView *scrollView) {
     UIViewController *search=
         XLGVisibleSearchControllerForWindow(window);
     if (!search || !search.view) return NO;
-    if (![scrollView isDescendantOfView:search.view]) return NO;
 
     CGRect frame=[scrollView convertRect:scrollView.bounds
                                   toView:window];
+    CGRect intersection=CGRectIntersection(frame,window.bounds);
+    if (CGRectIsNull(intersection) || CGRectIsEmpty(intersection)) return NO;
 
-    // Ignore the SearchBar pill, segmented strips and horizontal carousels.
+    CGFloat windowWidth=CGRectGetWidth(window.bounds);
+
+    // The active Search page must occupy the central content column.
+    BOOL centralVisible=
+        CGRectGetWidth(intersection)>=windowWidth*0.70 &&
+        CGRectContainsPoint(
+            intersection,
+            CGPointMake(
+                CGRectGetMidX(window.bounds),
+                MAX(260.0,CGRectGetMidY(window.bounds))));
+
+    if (!centralVisible) return NO;
+
+    // Ignore SearchBar pill, segmented strips and horizontal carousels.
     if (CGRectGetHeight(frame)<260.0) return NO;
     if (scrollView.contentSize.height<=
         CGRectGetHeight(scrollView.bounds)+20.0) {
@@ -7060,7 +7125,37 @@ static BOOL XLGSearchScrollViewIsEligible(UIScrollView *scrollView) {
         scrollView.contentSize.width-
         CGRectGetWidth(scrollView.bounds);
 
-    return verticalRange>MAX(40.0,horizontalRange);
+    if (verticalRange<=MAX(40.0,horizontalRange)) return NO;
+
+    // Beta 8 only accepted direct descendants of TTSSearchContainerViewControllerV2.
+    // Beta 9 also accepts the visible child-page hierarchy used by Search
+    // result tabs, while rejecting known non-Search app surfaces that remain
+    // mounted in the same window.
+    BOOL directSearchDescendant=
+        [scrollView isDescendantOfView:search.view];
+
+    BOOL knownForeignSurface=
+        XLGResponderChainContainsAny(
+            scrollView,
+            @[
+                @"HomeTimeline",
+                @"GuideContainer",
+                @"NotificationsViewController",
+                @"TwitterDash",
+                @"T1FleetLineView"
+            ]);
+
+    BOOL searchChildSurface=
+        XLGResponderChainContainsAny(
+            scrollView,
+            @[
+                @"Search",
+                @"T1URTViewController",
+                @"LegacyPagingViewController"
+            ]);
+
+    return !knownForeignSurface &&
+           (directSearchDescendant || searchChildSurface);
 }
 
 static UIView *XLGVisibleGlobalTabBarForWindow(UIWindow *window) {
@@ -7253,6 +7348,22 @@ static void XLGUpdateSearchTabBarAutohide(
     XLGScheduleSearchTabBarSnap(scrollView,bar);
 }
 
+static void XLGSearchScrollViewSetContentOffset(
+    id self,
+    SEL cmd,
+    CGPoint offset) {
+
+    if (gOrigSearchScrollViewSetContentOffset) {
+        ((void(*)(id,SEL,CGPoint))
+            gOrigSearchScrollViewSetContentOffset)(
+                self,cmd,offset);
+    }
+
+    if (![self isKindOfClass:UIScrollView.class]) return;
+    XLGUpdateSearchTabBarAutohide(
+        (UIScrollView *)self);
+}
+
 static void XLGSearchScrollViewLayoutSubviews(
     id self,
     SEL cmd) {
@@ -7293,16 +7404,25 @@ static void XLGInstallSearchTabBarAutohide(void) {
     if (gXLGSearchTabBarAutohideInstalled) return;
 
     Class scrollClass=UIScrollView.class;
-    BOOL scrollHooked=NO;
+    BOOL layoutHooked=NO;
+    BOOL offsetHooked=NO;
 
     if (scrollClass) {
-        scrollHooked=
+        layoutHooked=
             XLGHookMethod(
                 scrollClass,
                 @selector(layoutSubviews),
                 NO,
                 (IMP)XLGSearchScrollViewLayoutSubviews,
                 &gOrigSearchScrollViewLayoutSubviews);
+
+        offsetHooked=
+            XLGHookMethod(
+                scrollClass,
+                @selector(setContentOffset:),
+                NO,
+                (IMP)XLGSearchScrollViewSetContentOffset,
+                &gOrigSearchScrollViewSetContentOffset);
     }
 
     Class searchClass=
@@ -7319,7 +7439,8 @@ static void XLGInstallSearchTabBarAutohide(void) {
             &gOrigSearchContainerViewWillDisappear);
     }
 
-    gXLGSearchTabBarAutohideInstalled=scrollHooked;
+    gXLGSearchTabBarAutohideInstalled=
+        layoutHooked || offsetHooked;
 }
 
 static void XLGSearchContainerViewDidLayoutSubviews(
@@ -7722,7 +7843,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0 Beta 8 loaded: Search Tab Bar autohide + residual segmented blur fix");
+        NSLog(@"[XLiquidGlass] 2.0 Beta 9 loaded: Search child-page Tab Bar autohide coverage");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
