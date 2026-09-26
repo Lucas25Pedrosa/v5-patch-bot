@@ -4,8 +4,10 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
+#import <mach/mach.h>
+#import <mach/mach_vm.h>
 
-#pragma mark - XLiquidGlass 1.9.3 Beta 3
+#pragma mark - XLiquidGlass 1.9.3 Beta 5
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -671,7 +673,7 @@ static NSString *XLGTabBarSafeProbeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass193Beta3DeepTabConfigProbe.log"];
+        @"XLiquidGlass193Beta5SafeDescriptorProbe.log"];
 }
 
 static NSString *XLGTabBarSafeProbeTimestamp(void) {
@@ -923,6 +925,280 @@ static void XLGTabBarSafeProbeDumpView(UIView *view) {
     }
 }
 
+
+
+static Ivar XLGTabBarSafeProbeFindIvar(Class cls, NSString *name) {
+    if (!cls || !name.length) return NULL;
+
+    for (Class cursor=cls; cursor; cursor=class_getSuperclass(cursor)) {
+        Ivar ivar=class_getInstanceVariable(cursor,name.UTF8String);
+        if (ivar) return ivar;
+
+        NSString *underscored=[@"_" stringByAppendingString:name];
+        ivar=class_getInstanceVariable(cursor,underscored.UTF8String);
+        if (ivar) return ivar;
+    }
+    return NULL;
+}
+
+static BOOL XLGTabBarSafeProbeReadMemory(
+    mach_vm_address_t address,
+    void *buffer,
+    mach_vm_size_t size) {
+
+    if (!address || !buffer || !size) return NO;
+
+    mach_vm_size_t copied=0;
+    kern_return_t kr=mach_vm_read_overwrite(
+        mach_task_self(),
+        address,
+        size,
+        (mach_vm_address_t)(uintptr_t)buffer,
+        &copied);
+
+    return kr==KERN_SUCCESS && copied==size;
+}
+
+static NSString *XLGTabBarSafeProbeWordsString(
+    const uint64_t *words,
+    NSUInteger count) {
+
+    if (!words || !count) return @"";
+    NSMutableArray<NSString *> *parts=
+        [NSMutableArray arrayWithCapacity:count];
+
+    for (NSUInteger i=0;i<count;i++) {
+        [parts addObject:
+            [NSString stringWithFormat:@"%lu=0x%016llx(%llu)",
+             (unsigned long)i,
+             (unsigned long long)words[i],
+             (unsigned long long)words[i]]];
+    }
+    return [parts componentsJoinedByString:@" "];
+}
+
+static void XLGTabBarSafeProbeDumpAddress(
+    mach_vm_address_t address,
+    NSString *prefix,
+    NSUInteger qwordCount) {
+
+    if (!address || !qwordCount) {
+        XLGTabBarSafeProbeLog(
+            @"RAW_ADDRESS prefix=%@ address=0x%llx skipped",
+            prefix ?: @"-",
+            (unsigned long long)address);
+        return;
+    }
+
+    qwordCount=MIN(qwordCount,(NSUInteger)12);
+    uint64_t words[12]={0};
+    mach_vm_size_t size=
+        (mach_vm_size_t)(qwordCount*sizeof(uint64_t));
+
+    BOOL ok=XLGTabBarSafeProbeReadMemory(
+        address,words,size);
+
+    XLGTabBarSafeProbeLog(
+        @"RAW_ADDRESS prefix=%@ address=0x%llx size=%llu ok=%@ words=%@",
+        prefix ?: @"-",
+        (unsigned long long)address,
+        (unsigned long long)size,
+        ok ? @"YES" : @"NO",
+        ok ? XLGTabBarSafeProbeWordsString(words,qwordCount) : @"-");
+}
+
+static uint64_t XLGTabBarSafeProbeReadIvarWord(
+    id object,
+    NSString *name,
+    NSString *prefix) {
+
+    if (!object || !name.length) return 0;
+
+    Ivar ivar=XLGTabBarSafeProbeFindIvar(
+        [object class],name);
+    if (!ivar) {
+        XLGTabBarSafeProbeLog(
+            @"RAW_IVAR_MISSING prefix=%@ class=%@ name=%@",
+            prefix ?: @"-",
+            NSStringFromClass([object class]) ?: @"?",
+            name);
+        return 0;
+    }
+
+    ptrdiff_t offset=ivar_getOffset(ivar);
+    const char *rawName=ivar_getName(ivar);
+    const char *rawType=ivar_getTypeEncoding(ivar);
+
+    mach_vm_address_t fieldAddress=
+        (mach_vm_address_t)(uintptr_t)(__bridge void *)object +
+        (mach_vm_address_t)offset;
+
+    uint64_t word=0;
+    BOOL ok=XLGTabBarSafeProbeReadMemory(
+        fieldAddress,&word,sizeof(word));
+
+    XLGTabBarSafeProbeLog(
+        @"RAW_IVAR prefix=%@ owner=%@ ptr=%p name=%s requested=%@ type=%s offset=%td field=0x%llx ok=%@ word=0x%016llx(%llu)",
+        prefix ?: @"-",
+        NSStringFromClass([object class]) ?: @"?",
+        object,
+        rawName ?: "-",
+        name,
+        rawType ?: "-",
+        offset,
+        (unsigned long long)fieldAddress,
+        ok ? @"YES" : @"NO",
+        (unsigned long long)word,
+        (unsigned long long)word);
+
+    // Also dump the full value region around the Swift field. This is raw
+    // memory only; it does not reinterpret the value as an Objective-C object.
+    XLGTabBarSafeProbeDumpAddress(
+        fieldAddress,
+        [NSString stringWithFormat:@"%@.%@.field",
+         prefix ?: @"-",name],
+        4);
+
+    // For Swift Array-like values the first machine word commonly references
+    // native storage. Probe that address through mach_vm_read_overwrite only;
+    // invalid/non-pointer values simply return KERN_FAILURE instead of crashing.
+    if (ok && word>0x10000ULL) {
+        XLGTabBarSafeProbeDumpAddress(
+            (mach_vm_address_t)word,
+            [NSString stringWithFormat:@"%@.%@.word0-target",
+             prefix ?: @"-",name],
+            8);
+    }
+
+    return ok ? word : 0;
+}
+
+static void XLGTabBarSafeProbeDumpRawTabController(
+    id controller,
+    NSString *origin) {
+
+    if (!controller) {
+        XLGTabBarSafeProbeLog(
+            @"RAW_CONTROLLER origin=%@ controller=nil",
+            origin ?: @"-");
+        return;
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"RAW_CONTROLLER origin=%@ class=%@ ptr=%p",
+        origin ?: @"-",
+        NSStringFromClass([controller class]) ?: @"?",
+        controller);
+
+    XLGTabBarSafeProbeReadIvarWord(
+        controller,@"tabs",@"TabBarController");
+    XLGTabBarSafeProbeReadIvarWord(
+        controller,@"installedTabs",@"TabBarController");
+    XLGTabBarSafeProbeReadIvarWord(
+        controller,@"selectedIdentifier",@"TabBarController");
+}
+
+static void XLGTabBarSafeProbeDumpRawSwiftState(void) {
+    XLGTabBarSafeProbeLog(
+        @"========== RAW_SWIFT_STATE_BEGIN ==========");
+
+    // The hierarchy gives us a real Objective-C-visible controller object,
+    // avoiding unsafe reinterpretation of XTabbedAppNavigation's Swift field.
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+    NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (window.rootViewController) {
+                [queue addObject:window.rootViewController];
+            }
+        }
+    }
+
+    for (NSUInteger i=0;i<queue.count && i<180;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *pointer=
+            [NSValue valueWithPointer:(__bridge const void *)vc];
+        if ([visited containsObject:pointer]) continue;
+        [visited addObject:pointer];
+
+        NSString *className=NSStringFromClass(vc.class) ?: @"";
+
+        if ([className isEqualToString:
+                @"XNavigation.TabBarController"]) {
+            XLGTabBarSafeProbeDumpRawTabController(
+                vc,@"hierarchy");
+        }
+
+        if ([className isEqualToString:
+                @"T1TwitterSwift.XTabbedAppNavigationViewController"]) {
+            XLGTabBarSafeProbeReadIvarWord(
+                vc,
+                @"tabBarContainer",
+                @"XTabbedAppNavigationViewController");
+        }
+
+        for (UIViewController *child in vc.childViewControllers ?: @[]) {
+            if (child) [queue addObject:child];
+        }
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+    }
+
+    // The rendered view is also a safe UIKit object. Read only raw bytes from
+    // its Swift-backed fields so we can compare controller state vs renderer.
+    NSMutableSet<NSValue *> *seenViews=[NSMutableSet set];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            NSMutableArray<UIView *> *matches=[NSMutableArray array];
+            XLGTabBarSafeProbeCollectViews(window,matches,0);
+
+            for (UIView *view in matches) {
+                NSString *className=NSStringFromClass(view.class) ?: @"";
+                if (![className isEqualToString:
+                        @"XNavigation.TabBarView"]) {
+                    continue;
+                }
+
+                NSValue *pointer=
+                    [NSValue valueWithPointer:
+                        (__bridge const void *)view];
+                if ([seenViews containsObject:pointer]) continue;
+                [seenViews addObject:pointer];
+
+                XLGTabBarSafeProbeLog(
+                    @"RAW_TABBAR_VIEW ptr=%p frame=%@",
+                    view,
+                    NSStringFromCGRect(view.frame));
+
+                XLGTabBarSafeProbeReadIvarWord(
+                    view,@"tabs",@"TabBarView");
+                XLGTabBarSafeProbeReadIvarWord(
+                    view,@"itemViews",@"TabBarView");
+                XLGTabBarSafeProbeReadIvarWord(
+                    view,@"portalItemViews",@"TabBarView");
+                XLGTabBarSafeProbeReadIvarWord(
+                    view,@"carriedItemViews",@"TabBarView");
+                XLGTabBarSafeProbeReadIvarWord(
+                    view,@"selectedIndex",@"TabBarView");
+            }
+        }
+    }
+
+    // Resolve the known Swift initializer symbol without invoking or hooking it.
+    void *initSymbol=dlsym(
+        RTLD_DEFAULT,
+        "_$s11XNavigation16TabBarControllerC11descriptorsACSayAC0B0VG_tcfc");
+    XLGTabBarSafeProbeLog(
+        @"SWIFT_SYMBOL TabBarController.init(descriptors:) ptr=%p",
+        initSymbol);
+
+    XLGTabBarSafeProbeLog(
+        @"========== RAW_SWIFT_STATE_END ==========");
+}
 
 static BOOL XLGTabBarSafeProbeInterestingRuntimeName(NSString *name) {
     NSString *lower=name.lowercaseString ?: @"";
@@ -1221,7 +1497,7 @@ static void XLGTabBarSafeProbeRun(void) {
     }
 
     XLGTabBarSafeProbeLog(
-        @"========== XLiquidGlass 1.9.3 Beta 3 Deep Tab Config Probe ==========");
+        @"========== XLiquidGlass 1.9.3 Beta 5 Safe Descriptor Probe ==========");
     XLGTabBarSafeProbeLog(
         @"liquidGlass=%@",
         XLGEnabled() ? @"ON" : @"OFF");
@@ -1230,6 +1506,7 @@ static void XLGTabBarSafeProbeRun(void) {
     XLGTabBarSafeProbeDumpKnownClasses();
     XLGTabBarSafeProbeDumpNativeCustomizationConfig();
     XLGTabBarSafeProbeDumpViewControllerHierarchy();
+    XLGTabBarSafeProbeDumpRawSwiftState();
 
     NSMutableArray<UIView *> *matches=[NSMutableArray array];
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -7273,7 +7550,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 3 loaded: manual deep Tab configuration probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 5 loaded: safe raw Swift Tab descriptor probe + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
