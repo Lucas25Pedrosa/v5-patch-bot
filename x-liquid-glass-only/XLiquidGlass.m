@@ -3690,12 +3690,22 @@ static BOOL gXLGB6DataSourceHooksInstalled=NO;
 static BOOL gXLGB6ProbeScheduled=NO;
 static char kXLGB6LastAppliedSignatureKey;
 
+// Beta 6.1: the live Liquid Glass path in X 12.28.1 does not call
+// setVisibleTabEntries:/setTabContent:. It asks the legacy navigation owner
+// for visible panel IDs and rebuilds content/controllers from those IDs.
+static IMP gOrigXLGB61VisiblePanelIDsForAppNavigation=NULL;
+static IMP gOrigXLGB61UpdateTabContentWithPanelIDs=NULL;
+static IMP gOrigXLGB61UpdateTabVCsWithPanelIDs=NULL;
+static IMP gOrigXLGB61RecalculateWithPanelIDs=NULL;
+static IMP gOrigXLGB61InitializeTabContent=NULL;
+static BOOL gXLGB61PanelPipelineHooksInstalled=NO;
+
 static NSString *XLGB6LogPath(void) {
     NSString *documents=NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta6FixProbe.log"]
+            @"XLiquidGlass193Beta61PanelIDFixProbe.log"]
         : nil;
 }
 
@@ -4273,7 +4283,290 @@ static BOOL XLGB6HookSetterForClass(Class cls,
     return ok;
 }
 
+
+static NSArray *XLGB61DesiredPanelIDs(NSString **missingOut) {
+    if (!XLGEnabled()) return nil;
+
+    NSArray<NSString *> *desiredPages=XLGB6DesiredPages();
+    if (!desiredPages.count) {
+        if (missingOut) *missingOut=@"no-bh-pages";
+        return nil;
+    }
+
+    Class utility=NSClassFromString(@"CustomTabBarUtility");
+    id available=XLGB6ClassObjectBySelector(utility,@"availableTabs");
+    if (![available isKindOfClass:NSArray.class]) {
+        if (missingOut) *missingOut=@"availableTabs-unavailable";
+        return nil;
+    }
+
+    NSMutableDictionary<NSString *,id> *pageToPanel=[NSMutableDictionary dictionary];
+
+    for (id item in (NSArray *)available) {
+        if (![item isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *entry=(NSDictionary *)item;
+
+        id rawPage=entry[@"page"];
+        id rawPanel=entry[@"panelID"];
+        if (![rawPage isKindOfClass:NSString.class] || !rawPanel) continue;
+
+        NSString *page=[(NSString *)rawPage lowercaseString];
+        if (!page.length || pageToPanel[page]) continue;
+
+        if ([rawPanel isKindOfClass:NSNumber.class]) {
+            pageToPanel[page]=rawPanel;
+        } else if ([rawPanel respondsToSelector:@selector(integerValue)]) {
+            pageToPanel[page]=@([rawPanel integerValue]);
+        }
+    }
+
+    NSMutableArray *ordered=[NSMutableArray arrayWithCapacity:desiredPages.count];
+    NSMutableArray<NSString *> *missing=[NSMutableArray array];
+
+    for (NSString *page in desiredPages) {
+        id panelID=pageToPanel[page];
+        if (panelID) [ordered addObject:panelID];
+        else [missing addObject:page];
+    }
+
+    if (missing.count) {
+        NSString *value=[missing componentsJoinedByString:@","];
+        if (missingOut) *missingOut=value;
+        XLGB6Log(@"PANEL_MAP result=INCOMPLETE desiredPages=%@ map=%@ missing=%@",
+                 [desiredPages componentsJoinedByString:@","],
+                 pageToPanel,
+                 value);
+        return nil;
+    }
+
+    XLGB6Log(@"PANEL_MAP result=READY desiredPages=%@ panelIDs=%@",
+             [desiredPages componentsJoinedByString:@","],
+             ordered);
+    return [ordered copy];
+}
+
+static NSString *XLGB61DescribePanelValue(id value) {
+    if (!value) return @"nil";
+    if ([value isKindOfClass:NSArray.class]) {
+        return [NSString stringWithFormat:@"%@ count=%lu values=%@",
+                NSStringFromClass([value class]),
+                (unsigned long)[(NSArray *)value count],
+                value];
+    }
+    return [NSString stringWithFormat:@"%@ value=%@",
+            NSStringFromClass([value class]) ?: @"?",
+            value];
+}
+
+static id XLGB61CorrectPanelIDs(id current, NSString *stage) {
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+
+    if (!desired.count) {
+        XLGB6Log(@"PANEL_CORRECTION stage=%@ result=FALLBACK reason=%@ current=%@",
+                 stage ?: @"-",
+                 missing ?: @"unknown",
+                 XLGB61DescribePanelValue(current));
+        return current;
+    }
+
+    if (![current isKindOfClass:NSArray.class]) {
+        XLGB6Log(@"PANEL_CORRECTION stage=%@ result=SKIP nonArray current=%@ desired=%@",
+                 stage ?: @"-",
+                 XLGB61DescribePanelValue(current),
+                 desired);
+        return current;
+    }
+
+    XLGB6Log(@"PANEL_CORRECTION stage=%@ result=APPLY original=%@ corrected=%@",
+             stage ?: @"-",
+             current,
+             desired);
+    return desired;
+}
+
+static id XLGB61VisiblePanelIDsForAppNavigation(
+    id self, SEL cmd, id appNavigation) {
+
+    id original=nil;
+    if (gOrigXLGB61VisiblePanelIDsForAppNavigation) {
+        original=((id(*)(id,SEL,id))
+            gOrigXLGB61VisiblePanelIDsForAppNavigation)(
+                self,cmd,appNavigation);
+    }
+
+    XLGB6Log(@"HOOK visiblePanelIDsForAppNavigation owner=%@ ptr=%p appNavigation=%@ original=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             self,
+             appNavigation ? NSStringFromClass([appNavigation class]) : @"nil",
+             XLGB61DescribePanelValue(original));
+
+    id corrected=XLGB61CorrectPanelIDs(
+        original,@"visiblePanelIDsForAppNavigation");
+
+    XLGB6Log(@"HOOK visiblePanelIDsForAppNavigation return=%@",
+             XLGB61DescribePanelValue(corrected));
+
+    XLGB6ScheduleSnapshot(@"after-visiblePanelIDs",0.05);
+    return corrected;
+}
+
+static void XLGB61UpdateTabContentWithPanelIDs(
+    id self, SEL cmd, id panelIDs) {
+
+    XLGB6Log(@"HOOK _t1_updateTabContentWithUpdatedPanelIDs owner=%@ input=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             XLGB61DescribePanelValue(panelIDs));
+
+    id corrected=XLGB61CorrectPanelIDs(
+        panelIDs,@"_t1_updateTabContentWithUpdatedPanelIDs");
+
+    if (gOrigXLGB61UpdateTabContentWithPanelIDs) {
+        ((void(*)(id,SEL,id))
+            gOrigXLGB61UpdateTabContentWithPanelIDs)(
+                self,cmd,corrected);
+    }
+
+    XLGB6Log(@"HOOK _t1_updateTabContentWithUpdatedPanelIDs forwarded=%@",
+             XLGB61DescribePanelValue(corrected));
+    XLGB6ScheduleSnapshot(@"after-updateTabContent",0.05);
+}
+
+static void XLGB61UpdateTabVCsWithPanelIDs(
+    id self, SEL cmd, id panelIDs) {
+
+    XLGB6Log(@"HOOK _t1_updateTabViewControllersWithUpdatedPanelIDs owner=%@ input=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             XLGB61DescribePanelValue(panelIDs));
+
+    id corrected=XLGB61CorrectPanelIDs(
+        panelIDs,@"_t1_updateTabViewControllersWithUpdatedPanelIDs");
+
+    if (gOrigXLGB61UpdateTabVCsWithPanelIDs) {
+        ((void(*)(id,SEL,id))
+            gOrigXLGB61UpdateTabVCsWithPanelIDs)(
+                self,cmd,corrected);
+    }
+
+    XLGB6Log(@"HOOK _t1_updateTabViewControllersWithUpdatedPanelIDs forwarded=%@",
+             XLGB61DescribePanelValue(corrected));
+    XLGB6ScheduleSnapshot(@"after-updateTabVCs",0.05);
+}
+
+static void XLGB61RecalculateWithPanelIDs(
+    id self, SEL cmd, id panelIDs) {
+
+    XLGB6Log(@"HOOK recalculateVisiblePanelsWithUpdatedPanelIDs owner=%@ input=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             XLGB61DescribePanelValue(panelIDs));
+
+    id corrected=XLGB61CorrectPanelIDs(
+        panelIDs,@"recalculateVisiblePanelsWithUpdatedPanelIDs");
+
+    if (gOrigXLGB61RecalculateWithPanelIDs) {
+        ((void(*)(id,SEL,id))
+            gOrigXLGB61RecalculateWithPanelIDs)(
+                self,cmd,corrected);
+    }
+
+    XLGB6Log(@"HOOK recalculateVisiblePanelsWithUpdatedPanelIDs forwarded=%@",
+             XLGB61DescribePanelValue(corrected));
+    XLGB6ScheduleSnapshot(@"after-recalculateVisiblePanels",0.05);
+}
+
+static void XLGB61InitializeTabContent(id self, SEL cmd) {
+    XLGB6Log(@"HOOK _t1_initializeTabContent BEGIN owner=%@ ptr=%p",
+             NSStringFromClass([self class]) ?: @"?",self);
+
+    if (gOrigXLGB61InitializeTabContent) {
+        ((void(*)(id,SEL))gOrigXLGB61InitializeTabContent)(self,cmd);
+    }
+
+    id visible=XLGB6ObjectBySelector(self,@"visibleTabEntries");
+    id tabbed=XLGB6ObjectBySelector(self,@"tabbedViewController");
+    id appNavigation=XLGB6ObjectBySelector(self,@"appNavigation");
+
+    XLGB6Log(@"HOOK _t1_initializeTabContent END visibleTabEntries=%@ tabbedViewController=%@ appNavigation=%@",
+             XLGB61DescribePanelValue(visible),
+             tabbed ? NSStringFromClass([tabbed class]) : @"nil",
+             appNavigation ? NSStringFromClass([appNavigation class]) : @"nil");
+
+    XLGB6ScheduleSnapshot(@"after-initializeTabContent",0.05);
+}
+
+static void XLGB61InstallPanelPipelineHooks(void) {
+    if (gXLGB61PanelPipelineHooksInstalled) return;
+
+    Class cls=NSClassFromString(@"T1TabbedAppNavigationViewController");
+    if (!cls) {
+        XLGB6Log(@"PANEL_PIPELINE_INSTALL class=T1TabbedAppNavigationViewController missing");
+        return;
+    }
+
+    BOOL any=NO;
+
+    SEL visibleSEL=NSSelectorFromString(@"visiblePanelIDsForAppNavigation:");
+    if ([cls instancesRespondToSelector:visibleSEL]) {
+        BOOL ok=XLGHookMethod(
+            cls,visibleSEL,NO,
+            (IMP)XLGB61VisiblePanelIDsForAppNavigation,
+            &gOrigXLGB61VisiblePanelIDsForAppNavigation);
+        XLGB6Log(@"PANEL_PIPELINE_INSTALL selector=visiblePanelIDsForAppNavigation: ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    }
+
+    SEL contentSEL=NSSelectorFromString(@"_t1_updateTabContentWithUpdatedPanelIDs:");
+    if ([cls instancesRespondToSelector:contentSEL]) {
+        BOOL ok=XLGHookMethod(
+            cls,contentSEL,NO,
+            (IMP)XLGB61UpdateTabContentWithPanelIDs,
+            &gOrigXLGB61UpdateTabContentWithPanelIDs);
+        XLGB6Log(@"PANEL_PIPELINE_INSTALL selector=_t1_updateTabContentWithUpdatedPanelIDs: ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    }
+
+    SEL vcsSEL=NSSelectorFromString(@"_t1_updateTabViewControllersWithUpdatedPanelIDs:");
+    if ([cls instancesRespondToSelector:vcsSEL]) {
+        BOOL ok=XLGHookMethod(
+            cls,vcsSEL,NO,
+            (IMP)XLGB61UpdateTabVCsWithPanelIDs,
+            &gOrigXLGB61UpdateTabVCsWithPanelIDs);
+        XLGB6Log(@"PANEL_PIPELINE_INSTALL selector=_t1_updateTabViewControllersWithUpdatedPanelIDs: ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    }
+
+    SEL recalcSEL=NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:");
+    if ([cls instancesRespondToSelector:recalcSEL]) {
+        BOOL ok=XLGHookMethod(
+            cls,recalcSEL,NO,
+            (IMP)XLGB61RecalculateWithPanelIDs,
+            &gOrigXLGB61RecalculateWithPanelIDs);
+        XLGB6Log(@"PANEL_PIPELINE_INSTALL selector=recalculateVisiblePanelsWithUpdatedPanelIDs: ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    }
+
+    SEL initSEL=NSSelectorFromString(@"_t1_initializeTabContent");
+    if ([cls instancesRespondToSelector:initSEL]) {
+        BOOL ok=XLGHookMethod(
+            cls,initSEL,NO,
+            (IMP)XLGB61InitializeTabContent,
+            &gOrigXLGB61InitializeTabContent);
+        XLGB6Log(@"PANEL_PIPELINE_INSTALL selector=_t1_initializeTabContent ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    }
+
+    gXLGB61PanelPipelineHooksInstalled=any;
+}
+
+
 static void XLGB6InstallCorrectionHooks(void) {
+    XLGB61InstallPanelPipelineHooks();
+
     if (!gXLGB6VisibleSetterOriginals) {
         gXLGB6VisibleSetterOriginals=[NSMutableDictionary dictionary];
     }
@@ -4347,7 +4640,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6 Tab Probe";
+    self.title=@"Beta 6.1 Tab Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -4388,7 +4681,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta6FixProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta61PanelIDFixProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -4405,7 +4698,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.1 Tab Probe"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -4430,7 +4723,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.1 Tab Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -4451,7 +4744,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6 Tab Probe"
+            alertControllerWithTitle:@"Beta 6.1 Tab Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -4474,8 +4767,8 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6 Tab Probe",
-        @"subtitle": @"Correção + diagnóstico do Dock.",
+        @"title": @"Beta 6.1 Tab Probe",
+        @"subtitle": @"Correção por panelID + diagnóstico do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
     }];
@@ -7474,13 +7767,13 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6 loaded: pre-controller tab correction + safe pipeline probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.1 loaded: active panelID pipeline correction + probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6 Correction + Probe ==========");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.1 PanelID Correction + Probe ==========");
         XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
                  XLGEnabled() ? @"ON" : @"OFF",
                  [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
