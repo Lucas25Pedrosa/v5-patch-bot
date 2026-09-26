@@ -72,15 +72,10 @@ static IMP gOrigXAppShowDisplaySettings = NULL;
 static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
 static IMP gOrigSearchContainerViewDidAppear = NULL;
-static IMP gOrigSearchContainerViewWillDisappear = NULL;
-static IMP gOrigSearchScrollViewLayoutSubviews = NULL;
 static IMP gOrigVisualEffectViewSetEffect = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static BOOL gXLGSearchEffectGuardInstalled = NO;
-static BOOL gXLGSearchTabBarAutohideInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
-static char kXLGSearchAutohideLastOffsetKey;
-static char kXLGSearchAutohideIdleTokenKey;
 
 // 2.0 Beta 6: ScrollEdgeTreatment blur removal. Home Beta 5 behavior remains
 // intact; Beta 6 extends the same narrow treatment to other visible sections.
@@ -6976,352 +6971,6 @@ static void XLGScheduleSearchBlurRemoval(
     }
 }
 
-#pragma mark - XLiquidGlass 2.0 Beta 8 Search Tab Bar autohide
-
-static UIViewController *XLGVisibleSearchControllerInController(
-    UIViewController *controller) {
-
-    if (!controller) return nil;
-
-    if ([NSStringFromClass(controller.class)
-            isEqualToString:@"TTSSearchContainerViewControllerV2"] &&
-        controller.isViewLoaded &&
-        controller.view.window) {
-        return controller;
-    }
-
-    if (controller.presentedViewController) {
-        UIViewController *found=
-            XLGVisibleSearchControllerInController(
-                controller.presentedViewController);
-        if (found) return found;
-    }
-
-    if ([controller isKindOfClass:UINavigationController.class]) {
-        UIViewController *found=
-            XLGVisibleSearchControllerInController(
-                ((UINavigationController *)controller).visibleViewController);
-        if (found) return found;
-    }
-
-    if ([controller isKindOfClass:UITabBarController.class]) {
-        UIViewController *found=
-            XLGVisibleSearchControllerInController(
-                ((UITabBarController *)controller).selectedViewController);
-        if (found) return found;
-    }
-
-    for (UIViewController *child in controller.childViewControllers ?: @[]) {
-        if (child.isViewLoaded && !child.view.window) continue;
-        UIViewController *found=
-            XLGVisibleSearchControllerInController(child);
-        if (found) return found;
-    }
-
-    return nil;
-}
-
-static UIViewController *XLGVisibleSearchControllerForWindow(
-    UIWindow *window) {
-
-    if (!window || window.hidden) return nil;
-    return XLGVisibleSearchControllerInController(
-        window.rootViewController);
-}
-
-static BOOL XLGSearchScrollViewIsEligible(UIScrollView *scrollView) {
-    if (!XLGEnabled() || !scrollView || !scrollView.window) return NO;
-    if (!scrollView.scrollEnabled ||
-        scrollView.hidden ||
-        scrollView.alpha<=0.01) {
-        return NO;
-    }
-
-    UIWindow *window=scrollView.window;
-    UIViewController *search=
-        XLGVisibleSearchControllerForWindow(window);
-    if (!search || !search.view) return NO;
-    if (![scrollView isDescendantOfView:search.view]) return NO;
-
-    CGRect frame=[scrollView convertRect:scrollView.bounds
-                                  toView:window];
-
-    // Ignore the SearchBar pill, segmented strips and horizontal carousels.
-    if (CGRectGetHeight(frame)<260.0) return NO;
-    if (scrollView.contentSize.height<=
-        CGRectGetHeight(scrollView.bounds)+20.0) {
-        return NO;
-    }
-
-    CGFloat verticalRange=
-        scrollView.contentSize.height-
-        CGRectGetHeight(scrollView.bounds);
-    CGFloat horizontalRange=
-        scrollView.contentSize.width-
-        CGRectGetWidth(scrollView.bounds);
-
-    return verticalRange>MAX(40.0,horizontalRange);
-}
-
-static UIView *XLGVisibleGlobalTabBarForWindow(UIWindow *window) {
-    if (!window) return nil;
-
-    for (UIView *bar in
-         XLGSubviewsMatchingClassName(
-             window,
-             @"XNavigation.TabBarView")) {
-
-        if (!bar.window || bar.hidden || bar.alpha<=0.01) continue;
-
-        CGRect frame=[bar convertRect:bar.bounds toView:window];
-        if (CGRectGetWidth(frame)>100.0 &&
-            CGRectGetHeight(frame)>20.0) {
-            return bar;
-        }
-    }
-
-    return nil;
-}
-
-static CGFloat XLGSearchTabBarProgressForBar(UIView *bar) {
-    if (!bar) return 0.0;
-    CGFloat value=bar.transform.ty;
-    if (!isfinite(value)) value=0.0;
-    return MIN(83.0,MAX(0.0,value));
-}
-
-static void XLGSetSearchTabBarProgress(
-    UIView *bar,
-    CGFloat progress) {
-
-    if (!bar) return;
-
-    CGFloat clamped=MIN(83.0,MAX(0.0,progress));
-    CGAffineTransform current=bar.transform;
-
-    // The Home Timeline probe showed that native X keeps alpha=1/hidden=NO
-    // and changes only transform.ty from 0 to 83.
-    CGAffineTransform next=
-        CGAffineTransformMake(
-            current.a,
-            current.b,
-            current.c,
-            current.d,
-            current.tx,
-            clamped);
-
-    if (fabs(current.ty-clamped)<0.05) return;
-    bar.transform=next;
-}
-
-static void XLGAnimateSearchTabBarToProgress(
-    UIView *bar,
-    CGFloat progress) {
-
-    if (!bar) return;
-
-    [UIView animateWithDuration:0.20
-                          delay:0.0
-                        options:
-        UIViewAnimationOptionBeginFromCurrentState |
-        UIViewAnimationOptionCurveEaseOut |
-        UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-        XLGSetSearchTabBarProgress(bar,progress);
-    } completion:nil];
-}
-
-static void XLGRestoreSearchTabBarForWindow(
-    UIWindow *window,
-    BOOL animated) {
-
-    UIView *bar=XLGVisibleGlobalTabBarForWindow(window);
-    if (!bar) return;
-
-    if (animated) {
-        XLGAnimateSearchTabBarToProgress(bar,0.0);
-    } else {
-        XLGSetSearchTabBarProgress(bar,0.0);
-    }
-}
-
-static void XLGScheduleSearchTabBarSnap(
-    UIScrollView *scrollView,
-    UIView *bar) {
-
-    if (!scrollView || !bar) return;
-
-    NSUInteger token=
-        [objc_getAssociatedObject(
-            scrollView,
-            &kXLGSearchAutohideIdleTokenKey)
-            unsignedIntegerValue]+1;
-
-    objc_setAssociatedObject(
-        scrollView,
-        &kXLGSearchAutohideIdleTokenKey,
-        @(token),
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    __weak UIScrollView *weakScroll=scrollView;
-    __weak UIView *weakBar=bar;
-
-    dispatch_after(
-        dispatch_time(
-            DISPATCH_TIME_NOW,
-            (int64_t)(0.18*NSEC_PER_SEC)),
-        dispatch_get_main_queue(), ^{
-
-            UIScrollView *strongScroll=weakScroll;
-            UIView *strongBar=weakBar;
-            if (!strongScroll || !strongBar) return;
-
-            NSUInteger currentToken=
-                [objc_getAssociatedObject(
-                    strongScroll,
-                    &kXLGSearchAutohideIdleTokenKey)
-                    unsignedIntegerValue];
-
-            if (currentToken!=token) return;
-            if (strongScroll.isDragging ||
-                strongScroll.isTracking ||
-                strongScroll.isDecelerating) {
-                return;
-            }
-
-            CGFloat progress=
-                XLGSearchTabBarProgressForBar(strongBar);
-            CGFloat target=progress>=41.5 ? 83.0 : 0.0;
-            XLGAnimateSearchTabBarToProgress(
-                strongBar,
-                target);
-        });
-}
-
-static void XLGUpdateSearchTabBarAutohide(
-    UIScrollView *scrollView) {
-
-    if (!XLGSearchScrollViewIsEligible(scrollView)) return;
-
-    UIPanGestureRecognizer *pan=scrollView.panGestureRecognizer;
-    UIGestureRecognizerState state=pan.state;
-
-    BOOL interacting=
-        scrollView.isTracking ||
-        scrollView.isDragging ||
-        state==UIGestureRecognizerStateBegan ||
-        state==UIGestureRecognizerStateChanged;
-
-    CGFloat offsetY=scrollView.contentOffset.y;
-    NSNumber *previousValue=
-        objc_getAssociatedObject(
-            scrollView,
-            &kXLGSearchAutohideLastOffsetKey);
-
-    objc_setAssociatedObject(
-        scrollView,
-        &kXLGSearchAutohideLastOffsetKey,
-        @(offsetY),
-        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    if (!interacting || !previousValue) return;
-
-    CGFloat previousY=previousValue.doubleValue;
-    CGFloat delta=offsetY-previousY;
-    if (!isfinite(delta) || fabs(delta)<0.20) return;
-
-    UIWindow *window=scrollView.window;
-    UIView *bar=XLGVisibleGlobalTabBarForWindow(window);
-    if (!bar) return;
-
-    CGFloat top=
-        -scrollView.adjustedContentInset.top;
-
-    if (offsetY<=top+2.0) {
-        XLGSetSearchTabBarProgress(bar,0.0);
-        XLGScheduleSearchTabBarSnap(scrollView,bar);
-        return;
-    }
-
-    CGFloat progress=
-        XLGSearchTabBarProgressForBar(bar);
-
-    // Positive offset delta = content moving upward / user scrolling down:
-    // hide. Negative delta = user returning upward: reveal.
-    progress+=delta;
-    XLGSetSearchTabBarProgress(bar,progress);
-    XLGScheduleSearchTabBarSnap(scrollView,bar);
-}
-
-static void XLGSearchScrollViewLayoutSubviews(
-    id self,
-    SEL cmd) {
-
-    if (gOrigSearchScrollViewLayoutSubviews) {
-        ((void(*)(id,SEL))
-            gOrigSearchScrollViewLayoutSubviews)(
-                self,cmd);
-    }
-
-    if (![self isKindOfClass:UIScrollView.class]) return;
-    XLGUpdateSearchTabBarAutohide(
-        (UIScrollView *)self);
-}
-
-static void XLGSearchContainerViewWillDisappear(
-    id self,
-    SEL cmd,
-    BOOL animated) {
-
-    if (gOrigSearchContainerViewWillDisappear) {
-        ((void(*)(id,SEL,BOOL))
-            gOrigSearchContainerViewWillDisappear)(
-                self,cmd,animated);
-    }
-
-    if (![self isKindOfClass:UIViewController.class]) return;
-
-    UIViewController *controller=(UIViewController *)self;
-    if (controller.view.window) {
-        XLGRestoreSearchTabBarForWindow(
-            controller.view.window,
-            YES);
-    }
-}
-
-static void XLGInstallSearchTabBarAutohide(void) {
-    if (gXLGSearchTabBarAutohideInstalled) return;
-
-    Class scrollClass=UIScrollView.class;
-    BOOL scrollHooked=NO;
-
-    if (scrollClass) {
-        scrollHooked=
-            XLGHookMethod(
-                scrollClass,
-                @selector(layoutSubviews),
-                NO,
-                (IMP)XLGSearchScrollViewLayoutSubviews,
-                &gOrigSearchScrollViewLayoutSubviews);
-    }
-
-    Class searchClass=
-        NSClassFromString(
-            @"TTSSearchContainerViewControllerV2");
-
-    if (searchClass &&
-        !gOrigSearchContainerViewWillDisappear) {
-        XLGHookMethod(
-            searchClass,
-            @selector(viewWillDisappear:),
-            NO,
-            (IMP)XLGSearchContainerViewWillDisappear,
-            &gOrigSearchContainerViewWillDisappear);
-    }
-
-    gXLGSearchTabBarAutohideInstalled=scrollHooked;
-}
-
 static void XLGSearchContainerViewDidLayoutSubviews(
     id self,
     SEL cmd) {
@@ -7360,12 +7009,6 @@ static void XLGSearchContainerViewDidAppear(
     if (![self isKindOfClass:UIViewController.class]) return;
 
     UIViewController *controller=(UIViewController *)self;
-
-    if (controller.view.window) {
-        XLGRestoreSearchTabBarForWindow(
-            controller.view.window,
-            NO);
-    }
 
     XLGApplySearchBlurRemoval(controller,@"didAppear");
     XLGScheduleSearchBlurRemoval(controller);
@@ -7702,7 +7345,6 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppSearchRouter();
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
-    XLGInstallSearchTabBarAutohide();
     XLGInstallTimelineEdgeBlurFix();
     XLGInstallGuideRouterHook();
     XLGInstallCompositionSentToastBridge();
@@ -7722,7 +7364,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0 Beta 8 loaded: Search Tab Bar autohide + residual segmented blur fix");
+        NSLog(@"[XLiquidGlass] 2.0 stable loaded: persistent Search and ScrollEdge blur fixes + validated feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
