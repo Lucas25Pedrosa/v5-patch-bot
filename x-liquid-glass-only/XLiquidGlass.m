@@ -6,7 +6,7 @@
 #import <dlfcn.h>
 #import <mach/mach.h>
 
-#pragma mark - XLiquidGlass 1.9.3 Beta 5
+#pragma mark - XLiquidGlass 1.9.3 Beta 6
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -672,7 +672,7 @@ static NSString *XLGTabBarSafeProbeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass193Beta5SafeDescriptorProbe.log"];
+        @"XLiquidGlass193Beta6BHNativeTabSourceProbe.log"];
 }
 
 static NSString *XLGTabBarSafeProbeTimestamp(void) {
@@ -989,8 +989,8 @@ static void XLGTabBarSafeProbeDumpAddress(
         return;
     }
 
-    qwordCount=MIN(qwordCount,(NSUInteger)12);
-    uint64_t words[12]={0};
+    qwordCount=MIN(qwordCount,(NSUInteger)48);
+    uint64_t words[48]={0};
     vm_size_t size=
         (vm_size_t)(qwordCount*sizeof(uint64_t));
 
@@ -1004,6 +1004,233 @@ static void XLGTabBarSafeProbeDumpAddress(
         (unsigned long long)size,
         ok ? @"YES" : @"NO",
         ok ? XLGTabBarSafeProbeWordsString(words,qwordCount) : @"-");
+}
+
+
+static void XLGTabBarSafeProbeDumpASCII(
+    vm_address_t address,
+    NSString *prefix,
+    NSUInteger byteCount) {
+
+    if (!address || !byteCount) return;
+    byteCount=MIN(byteCount,(NSUInteger)512);
+
+    uint8_t bytes[512]={0};
+    BOOL ok=XLGTabBarSafeProbeReadMemory(
+        address,bytes,(vm_size_t)byteCount);
+
+    if (!ok) {
+        XLGTabBarSafeProbeLog(
+            @"RAW_ASCII prefix=%@ address=0x%llx ok=NO",
+            prefix ?: @"-",
+            (unsigned long long)address);
+        return;
+    }
+
+    NSMutableArray<NSString *> *runs=[NSMutableArray array];
+    NSUInteger start=NSNotFound;
+
+    for (NSUInteger i=0;i<=byteCount;i++) {
+        BOOL printable=
+            i<byteCount &&
+            bytes[i]>=0x20 &&
+            bytes[i]<=0x7e;
+
+        if (printable && start==NSNotFound) {
+            start=i;
+        }
+
+        if ((!printable || i==byteCount) &&
+            start!=NSNotFound) {
+            NSUInteger length=i-start;
+            if (length>=3) {
+                NSString *text=
+                    [[NSString alloc]
+                        initWithBytes:&bytes[start]
+                             length:length
+                           encoding:NSASCIIStringEncoding];
+                if (text.length) {
+                    [runs addObject:
+                        [NSString stringWithFormat:
+                            @"%lu:%@",
+                            (unsigned long)start,
+                            text]];
+                }
+            }
+            start=NSNotFound;
+        }
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"RAW_ASCII prefix=%@ address=0x%llx bytes=%lu runs=%@",
+        prefix ?: @"-",
+        (unsigned long long)address,
+        (unsigned long)byteCount,
+        runs.count
+            ? [runs componentsJoinedByString:@" | "]
+            : @"-");
+}
+
+static id XLGTabBarSafeProbeCallClassObject0(
+    Class cls,
+    NSString *selectorName) {
+
+    if (!cls || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    Method method=class_getClassMethod(cls,selector);
+    if (!method || ![cls respondsToSelector:selector]) return nil;
+    if (method_getNumberOfArguments(method)!=2) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(
+            cls,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static id XLGTabBarSafeProbeCallClassObject1(
+    Class cls,
+    NSString *selectorName,
+    id argument) {
+
+    if (!cls || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    Method method=class_getClassMethod(cls,selector);
+    if (!method || ![cls respondsToSelector:selector]) return nil;
+    if (method_getNumberOfArguments(method)!=3) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL,id))objc_msgSend)(
+            cls,selector,argument);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void XLGTabBarSafeProbeDumpBHCustomTabs(void) {
+    Class utility=NSClassFromString(@"CustomTabBarUtility");
+
+    XLGTabBarSafeProbeLog(
+        @"========== BH_TAB_SOURCE_BEGIN ==========");
+    XLGTabBarSafeProbeLog(
+        @"BH_UTILITY class=%@ ptr=%p",
+        utility ? NSStringFromClass(utility) : @"nil",
+        utility);
+
+    if (!utility) {
+        XLGTabBarSafeProbeLog(
+            @"BH_TAB_SOURCE unavailable");
+        XLGTabBarSafeProbeLog(
+            @"========== BH_TAB_SOURCE_END ==========");
+        return;
+    }
+
+    XLGTabBarSafeProbeDumpRuntimeClass(utility);
+
+    id registry=
+        XLGTabBarSafeProbeCallClassObject0(
+            utility,@"registry");
+    id available=
+        XLGTabBarSafeProbeCallClassObject0(
+            utility,@"availableTabs");
+    id visible=
+        XLGTabBarSafeProbeCallClassObject0(
+            utility,@"visiblePageIDsInOrder");
+    id defaults=
+        XLGTabBarSafeProbeCallClassObject0(
+            utility,@"defaultVisiblePageIDs");
+
+    XLGTabBarSafeProbeLog(
+        @"BH_REGISTRY value=%@",
+        XLGTabBarSafeProbeDescribe(registry));
+    XLGTabBarSafeProbeLog(
+        @"BH_AVAILABLE value=%@",
+        XLGTabBarSafeProbeDescribe(available));
+    XLGTabBarSafeProbeLog(
+        @"BH_VISIBLE value=%@",
+        XLGTabBarSafeProbeDescribe(visible));
+    XLGTabBarSafeProbeLog(
+        @"BH_DEFAULT_VISIBLE value=%@",
+        XLGTabBarSafeProbeDescribe(defaults));
+
+    if ([visible isKindOfClass:NSArray.class]) {
+        [(NSArray *)visible enumerateObjectsUsingBlock:
+            ^(id page, NSUInteger idx, BOOL *stop) {
+                (void)stop;
+                id metadata=
+                    XLGTabBarSafeProbeCallClassObject1(
+                        utility,
+                        @"metadataForPage:",
+                        page);
+
+                XLGTabBarSafeProbeLog(
+                    @"BH_VISIBLE_ENTRY index=%lu page=%@ metadata=%@",
+                    (unsigned long)idx,
+                    XLGTabBarSafeProbeDescribe(page),
+                    XLGTabBarSafeProbeDescribe(metadata));
+            }];
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"========== BH_TAB_SOURCE_END ==========");
+}
+
+static void XLGTabBarSafeProbeDumpNativeTabSources(void) {
+    XLGTabBarSafeProbeLog(
+        @"========== NATIVE_TAB_SOURCE_BEGIN ==========");
+
+    NSArray<NSString *> *classNames=@[
+        @"T1MainAppTabDataSource",
+        @"T1TwitterSwift.MainAppTabDataSource",
+        @"_TtC14T1TwitterSwift25NewsAppNavigationTabEntry",
+        @"T1TwitterSwift.NewsAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift26GuideAppNavigationTabEntry",
+        @"T1TwitterSwift.GuideAppNavigationTabEntry",
+        @"T1HomeTimelineAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift25GrokAppNavigationTabEntry",
+        @"T1TwitterSwift.GrokAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift34NotificationsAppNavigationTabEntry",
+        @"T1TwitterSwift.NotificationsAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift26XChatAppNavigationTabEntry",
+        @"T1TwitterSwift.XChatAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift34T1CommunitiesAppNavigationTabEntry",
+        @"T1TwitterSwift.T1CommunitiesAppNavigationTabEntry",
+        @"_TtC14T1TwitterSwift28ProfileAppNavigationTabEntry",
+        @"T1TwitterSwift.ProfileAppNavigationTabEntry"
+    ];
+
+    NSMutableSet<NSString *> *dumped=[NSMutableSet set];
+    for (NSString *requested in classNames) {
+        Class cls=NSClassFromString(requested);
+        NSString *resolved=
+            cls ? NSStringFromClass(cls) : @"nil";
+
+        XLGTabBarSafeProbeLog(
+            @"NATIVE_CLASS requested=%@ resolved=%@ ptr=%p",
+            requested,
+            resolved,
+            cls);
+
+        if (!cls || [dumped containsObject:resolved]) continue;
+        [dumped addObject:resolved];
+        XLGTabBarSafeProbeDumpRuntimeClass(cls);
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"========== NATIVE_TAB_SOURCE_END ==========");
 }
 
 static uint64_t XLGTabBarSafeProbeReadIvarWord(
@@ -1062,11 +1289,34 @@ static uint64_t XLGTabBarSafeProbeReadIvarWord(
     // native storage. Probe that address through vm_read_overwrite only;
     // invalid/non-pointer values simply return KERN_FAILURE instead of crashing.
     if (ok && word>0x10000ULL) {
+        NSUInteger targetWords=8;
+        NSUInteger asciiBytes=0;
+
+        if ([name isEqualToString:@"tabs"]) {
+            targetWords=36;
+            asciiBytes=320;
+        } else if ([name isEqualToString:@"installedTabs"]) {
+            targetWords=24;
+            asciiBytes=192;
+        } else if ([name containsString:@"ItemViews"]) {
+            targetWords=16;
+        }
+
+        NSString *targetPrefix=
+            [NSString stringWithFormat:@"%@.%@.word0-target",
+             prefix ?: @"-",name];
+
         XLGTabBarSafeProbeDumpAddress(
             (vm_address_t)word,
-            [NSString stringWithFormat:@"%@.%@.word0-target",
-             prefix ?: @"-",name],
-            8);
+            targetPrefix,
+            targetWords);
+
+        if (asciiBytes) {
+            XLGTabBarSafeProbeDumpASCII(
+                (vm_address_t)word,
+                targetPrefix,
+                asciiBytes);
+        }
     }
 
     return ok ? word : 0;
@@ -1302,6 +1552,10 @@ static void XLGTabBarSafeProbeDumpKnownClasses(void) {
     NSArray<NSString *> *classNames=@[
         @"T1TabCustomizationConfig",
         @"T1TabCustomizationViewController",
+        @"T1MainAppTabDataSource",
+        @"T1TwitterSwift.MainAppTabDataSource",
+        @"_TtC14T1TwitterSwift25NewsAppNavigationTabEntry",
+        @"T1TwitterSwift.NewsAppNavigationTabEntry",
         @"_TtC14T1TwitterSwift25TabCustomizationViewModel",
         @"_TtC14T1TwitterSwift20XTabbedAppNavigation",
         @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController",
@@ -1496,7 +1750,7 @@ static void XLGTabBarSafeProbeRun(void) {
     }
 
     XLGTabBarSafeProbeLog(
-        @"========== XLiquidGlass 1.9.3 Beta 5 Safe Descriptor Probe ==========");
+        @"========== XLiquidGlass 1.9.3 Beta 6 BH Native Tab Source Probe ==========");
     XLGTabBarSafeProbeLog(
         @"liquidGlass=%@",
         XLGEnabled() ? @"ON" : @"OFF");
@@ -1505,6 +1759,8 @@ static void XLGTabBarSafeProbeRun(void) {
     XLGTabBarSafeProbeDumpKnownClasses();
     XLGTabBarSafeProbeDumpNativeCustomizationConfig();
     XLGTabBarSafeProbeDumpViewControllerHierarchy();
+    XLGTabBarSafeProbeDumpBHCustomTabs();
+    XLGTabBarSafeProbeDumpNativeTabSources();
     XLGTabBarSafeProbeDumpRawSwiftState();
 
     NSMutableArray<UIView *> *matches=[NSMutableArray array];
@@ -7549,7 +7805,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 5 loaded: safe raw Swift Tab descriptor probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6 loaded: BH/native tab source probe + safe Swift storage inspection + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
