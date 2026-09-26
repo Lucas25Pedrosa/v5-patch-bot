@@ -37,6 +37,7 @@ static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
 static id XLGSafeValueForKey(id object, NSString *key);
 static NSString *XLGTabBarSafeProbeLogPath(void);
 static void XLGTabBarSafeProbeRun(void);
+static void XLGTabBarSafeProbeDumpRuntimeClass(Class cls);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
