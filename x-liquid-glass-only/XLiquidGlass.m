@@ -86,6 +86,14 @@ static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
 static BOOL gAppearanceSettingsHooked = NO;
 
+// Beta 6.5: bridge NFB custom-tab source into the native Liquid Glass
+// configuration pipeline before XNavigation creates its descriptors.
+static NSMutableDictionary<NSString *, NSValue *> *gXLGB65ArrayGetterOriginals = nil;
+static NSMutableDictionary<NSString *, NSValue *> *gXLGB65BoolGetterOriginals = nil;
+static BOOL gXLGB65RebuildScheduled = NO;
+static id gXLGB65DefaultsObserver = nil;
+static char kXLGB65RebuildAttemptKey;
+
 static IMP gOrigToastBridgeToasterInit = NULL;
 static IMP gOrigToastBridgeRegisterVC = NULL;
 static IMP gOrigToastBridgePushToast = NULL;
@@ -3715,7 +3723,7 @@ static NSString *XLGB6LogPath(void) {
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta64SwiftAppNavFixProbe.log"]
+            @"XLiquidGlass193Beta65NativeTabConnectionProbe.log"]
         : nil;
 }
 
@@ -4770,6 +4778,640 @@ static void XLGB61InstallPanelPipelineHooks(void) {
 
 
 
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6.5 Native tab connection bridge
+
+static NSString *XLGB65MethodKey(Class cls, SEL selector) {
+    if (!cls || !selector) return @"";
+    return [NSString stringWithFormat:@"%@|%@",
+            NSStringFromClass(cls) ?: @"?",
+            NSStringFromSelector(selector) ?: @"?"];
+}
+
+static IMP XLGB65OriginalForObjectSelector(
+    id object,
+    SEL selector,
+    NSMutableDictionary<NSString *,NSValue *> *table) {
+
+    if (!object || !selector || !table.count) return NULL;
+    for (Class cls=[object class]; cls; cls=class_getSuperclass(cls)) {
+        NSValue *value=table[XLGB65MethodKey(cls,selector)];
+        if (value) return (IMP)[value pointerValue];
+    }
+    return NULL;
+}
+
+static BOOL XLGB65IsGathering(void) {
+    return [[[NSThread currentThread].threadDictionary
+        objectForKey:@"XLGB65NativeBridgeGathering"] boolValue];
+}
+
+static void XLGB65SetGathering(BOOL value) {
+    NSMutableDictionary *dict=[NSThread currentThread].threadDictionary;
+    if (value) dict[@"XLGB65NativeBridgeGathering"]=@YES;
+    else [dict removeObjectForKey:@"XLGB65NativeBridgeGathering"];
+}
+
+static NSString *XLGB65PageForPanelIDValue(id value) {
+    if (![value respondsToSelector:@selector(integerValue)]) return nil;
+    NSInteger panel=[value integerValue];
+
+    Class utility=NSClassFromString(@"CustomTabBarUtility");
+    id available=XLGB6ClassObjectBySelector(utility,@"availableTabs");
+    if (![available isKindOfClass:NSArray.class]) return nil;
+
+    for (id raw in (NSArray *)available) {
+        if (![raw isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *entry=(NSDictionary *)raw;
+        id rawPanel=entry[@"panelID"];
+        id rawPage=entry[@"page"];
+        if (![rawPanel respondsToSelector:@selector(integerValue)] ||
+            ![rawPage isKindOfClass:NSString.class]) {
+            continue;
+        }
+        if ([rawPanel integerValue]==panel) {
+            return [(NSString *)rawPage lowercaseString];
+        }
+    }
+    return nil;
+}
+
+static NSString *XLGB65PageForItem(id item) {
+    if (!item || item==NSNull.null) return nil;
+
+    if ([item isKindOfClass:NSNumber.class]) {
+        return XLGB65PageForPanelIDValue(item);
+    }
+
+    if ([item isKindOfClass:NSString.class]) {
+        NSString *text=[(NSString *)item lowercaseString];
+        for (NSString *page in @[
+            @"home",@"news",@"grok",@"guide",@"ntab",@"messages",
+            @"communities",@"profile",@"lists",@"bookmarks",
+            @"premium",@"jobs",@"payments",@"birdwatch",@"connect",@"dash"
+        ]) {
+            if ([text isEqualToString:page]) return page;
+        }
+        if ([text containsString:@"home"]) return @"home";
+        if ([text containsString:@"news"]) return @"news";
+        if ([text containsString:@"grok"]) return @"grok";
+        if ([text containsString:@"guide"] ||
+            [text containsString:@"explore"] ||
+            [text containsString:@"search"]) return @"guide";
+        if ([text containsString:@"notif"]) return @"ntab";
+        if ([text containsString:@"message"] ||
+            [text containsString:@"xchat"] ||
+            [text containsString:@"direct"]) return @"messages";
+        if ([text containsString:@"communit"]) return @"communities";
+        if ([text containsString:@"profile"]) return @"profile";
+        if ([text containsString:@"bookmark"]) return @"bookmarks";
+        if ([text containsString:@"premium"]) return @"premium";
+        if ([text containsString:@"dash"]) return @"dash";
+        return nil;
+    }
+
+    NSString *mapped=XLGB6PageForEntry(item);
+    if (mapped.length) return mapped;
+
+    for (NSString *key in @[@"panelID",@"panelId",@"panelIdentifier"]) {
+        id value=XLGSafeValueForKey(item,key);
+        NSString *page=XLGB65PageForPanelIDValue(value);
+        if (page.length) return page;
+    }
+    return nil;
+}
+
+static NSInteger XLGB65ArrayKind(NSArray *array) {
+    // 1 = NSNumber panel IDs, 2 = NSString identifiers, 3 = native objects.
+    for (id item in array) {
+        if (!item || item==NSNull.null) continue;
+        if ([item isKindOfClass:NSNumber.class]) return 1;
+        if ([item isKindOfClass:NSString.class]) return 2;
+        return 3;
+    }
+    return 0;
+}
+
+static BOOL XLGB65CompatiblePoolItem(id item, NSInteger kind) {
+    if (!item || item==NSNull.null) return NO;
+    if (kind==1) return [item isKindOfClass:NSNumber.class];
+    if (kind==2) return [item isKindOfClass:NSString.class];
+    if (kind==3) {
+        return ![item isKindOfClass:NSNumber.class] &&
+               ![item isKindOfClass:NSString.class] &&
+               ![item isKindOfClass:NSDictionary.class] &&
+               ![item isKindOfClass:NSSet.class] &&
+               ![item isKindOfClass:NSArray.class];
+    }
+    return NO;
+}
+
+static void XLGB65AppendPoolValue(
+    id value,
+    NSInteger kind,
+    NSMutableArray *pool) {
+
+    if (!value || !pool) return;
+
+    if ([value isKindOfClass:NSArray.class]) {
+        for (id item in (NSArray *)value) {
+            if (XLGB65CompatiblePoolItem(item,kind) &&
+                ![pool containsObject:item]) {
+                [pool addObject:item];
+            }
+        }
+        return;
+    }
+
+    if ([value isKindOfClass:NSSet.class]) {
+        for (id item in (NSSet *)value) {
+            if (XLGB65CompatiblePoolItem(item,kind) &&
+                ![pool containsObject:item]) {
+                [pool addObject:item];
+            }
+        }
+        return;
+    }
+
+    if ([value isKindOfClass:NSDictionary.class]) {
+        for (id item in [(NSDictionary *)value allValues]) {
+            if (XLGB65CompatiblePoolItem(item,kind) &&
+                ![pool containsObject:item]) {
+                [pool addObject:item];
+            }
+        }
+    }
+}
+
+static id XLGB65CallOriginalObjectGetter(id object, SEL selector) {
+    IMP original=XLGB65OriginalForObjectSelector(
+        object,selector,gXLGB65ArrayGetterOriginals);
+    if (!original) return nil;
+    @try {
+        return ((id(*)(id,SEL))original)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static id XLGB65SafeObjectGetterUnhooked(id object, NSString *selectorName) {
+    if (!object || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method || method_getNumberOfArguments(method)!=2) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    IMP original=XLGB65OriginalForObjectSelector(
+        object,selector,gXLGB65ArrayGetterOriginals);
+
+    @try {
+        if (original) {
+            return ((id(*)(id,SEL))original)(object,selector);
+        }
+        return ((id(*)(id,SEL))objc_msgSend)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static NSArray *XLGB65BuildConnectedArray(
+    id owner,
+    SEL selector,
+    NSArray *original,
+    NSString **missingOut) {
+
+    if (!XLGEnabled() || ![original isKindOfClass:NSArray.class]) {
+        return original;
+    }
+
+    NSArray<NSString *> *desiredPages=XLGB6DesiredPages();
+    if (!desiredPages.count) return original;
+
+    NSInteger kind=XLGB65ArrayKind(original);
+    if (!kind) return original;
+
+    // Numeric arrays are already native panel IDs. Here the bridge can map the
+    // NFB source directly without inventing Swift objects.
+    if (kind==1) {
+        NSString *missing=nil;
+        NSArray *panelIDs=XLGB61DesiredPanelIDs(&missing);
+        if (panelIDs.count==desiredPages.count) {
+            XLGB6Log(@"CONNECTION_BRIDGE owner=%@ selector=%@ kind=panelIDs original=%@ connected=%@",
+                     NSStringFromClass([owner class]) ?: @"?",
+                     NSStringFromSelector(selector),
+                     original,
+                     panelIDs);
+            return panelIDs;
+        }
+        if (missingOut) *missingOut=missing ?: @"panel-map";
+        return original;
+    }
+
+    NSMutableArray *pool=[NSMutableArray array];
+    XLGB65AppendPoolValue(original,kind,pool);
+
+    NSArray<NSString *> *sourceGetters=@[
+        @"availableTabIdentifiers",@"allTabIdentifiers",
+        @"defaultTabIdentifiers",@"tabIdentifiers",
+        @"visibleTabIdentifiers",@"configuredTabIdentifiers",
+        @"tabBarItems",@"availableTabBarItems",@"allTabBarItems",
+        @"tabItems",@"availableTabItems",@"allTabItems",
+        @"tabs",@"availableTabs",@"allTabs",
+        @"tabEntries",@"availableTabEntries",@"allTabEntries",
+        @"tabContent",@"tabContentByIdentifier",
+        @"panelIDs",@"availablePanelIDs",@"visiblePanelIDs",
+        @"items",@"availableItems",@"allItems"
+    ];
+
+    XLGB65SetGathering(YES);
+    for (NSString *name in sourceGetters) {
+        SEL candidate=NSSelectorFromString(name);
+        if (candidate==selector) continue;
+        id value=XLGB65SafeObjectGetterUnhooked(owner,name);
+        NSUInteger before=pool.count;
+        XLGB65AppendPoolValue(value,kind,pool);
+        if (pool.count!=before) {
+            XLGB6Log(@"CONNECTION_POOL owner=%@ getter=%@ added=%lu total=%lu class=%@",
+                     NSStringFromClass([owner class]) ?: @"?",
+                     name,
+                     (unsigned long)(pool.count-before),
+                     (unsigned long)pool.count,
+                     value ? NSStringFromClass([value class]) : @"nil");
+        }
+    }
+    XLGB65SetGathering(NO);
+
+    NSMutableDictionary<NSString *,id> *byPage=[NSMutableDictionary dictionary];
+    for (id item in pool) {
+        NSString *page=XLGB65PageForItem(item);
+        if (page.length && !byPage[page]) byPage[page]=item;
+    }
+
+    NSMutableArray *ordered=[NSMutableArray arrayWithCapacity:desiredPages.count];
+    NSMutableArray *missing=[NSMutableArray array];
+    for (NSString *page in desiredPages) {
+        id item=byPage[page];
+        if (item) [ordered addObject:item];
+        else [missing addObject:page];
+    }
+
+    if (missing.count) {
+        // String arrays that are clearly page-name identifiers can be bridged
+        // directly from the NFB source even when the old five-item array lacks
+        // News. Opaque string identifiers are left untouched.
+        if (kind==2) {
+            BOOL pageStyle=YES;
+            for (id item in original) {
+                if (![item isKindOfClass:NSString.class] ||
+                    !XLGB65PageForItem(item)) {
+                    pageStyle=NO;
+                    break;
+                }
+            }
+            if (pageStyle) {
+                XLGB6Log(@"CONNECTION_BRIDGE owner=%@ selector=%@ kind=pageIDs original=%@ connected=%@",
+                         NSStringFromClass([owner class]) ?: @"?",
+                         NSStringFromSelector(selector),
+                         original,
+                         desiredPages);
+                return desiredPages;
+            }
+        }
+
+        NSString *missingString=[missing componentsJoinedByString:@","];
+        if (missingOut) *missingOut=missingString;
+        XLGB6Log(@"CONNECTION_BRIDGE owner=%@ selector=%@ result=INCOMPLETE kind=%ld original=%@ poolCount=%lu missing=%@",
+                 NSStringFromClass([owner class]) ?: @"?",
+                 NSStringFromSelector(selector),
+                 (long)kind,
+                 original,
+                 (unsigned long)pool.count,
+                 missingString);
+        return original;
+    }
+
+    XLGB6Log(@"CONNECTION_BRIDGE owner=%@ selector=%@ result=CONNECTED kind=%ld original=%@ connected=%@",
+             NSStringFromClass([owner class]) ?: @"?",
+             NSStringFromSelector(selector),
+             (long)kind,
+             original,
+             ordered);
+    return [ordered copy];
+}
+
+static id XLGB65NativeArrayGetter(id self, SEL cmd) {
+    IMP original=XLGB65OriginalForObjectSelector(
+        self,cmd,gXLGB65ArrayGetterOriginals);
+    if (!original) return nil;
+
+    id value=nil;
+    @try {
+        value=((id(*)(id,SEL))original)(self,cmd);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+
+    if (XLGB65IsGathering() ||
+        !XLGEnabled() ||
+        ![value isKindOfClass:NSArray.class]) {
+        return value;
+    }
+
+    NSString *missing=nil;
+    NSArray *connected=XLGB65BuildConnectedArray(
+        self,cmd,(NSArray *)value,&missing);
+
+    XLGB6Log(@"CONNECTION_GETTER class=%@ selector=%@ originalCount=%lu returnCount=%lu missing=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             NSStringFromSelector(cmd),
+             (unsigned long)[(NSArray *)value count],
+             (unsigned long)[connected count],
+             missing ?: @"-");
+    return connected ?: value;
+}
+
+static BOOL XLGB65NativeBoolGetter(id self, SEL cmd) {
+    IMP original=XLGB65OriginalForObjectSelector(
+        self,cmd,gXLGB65BoolGetterOriginals);
+
+    BOOL originalValue=NO;
+    if (original) {
+        originalValue=((BOOL(*)(id,SEL))original)(self,cmd);
+    }
+
+    BOOL result=XLGEnabled() ? YES : originalValue;
+    XLGB6Log(@"CONNECTION_BOOL class=%@ selector=%@ original=%@ return=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             NSStringFromSelector(cmd),
+             originalValue ? @"YES" : @"NO",
+             result ? @"YES" : @"NO");
+    return result;
+}
+
+static BOOL XLGB65ShouldBridgeObjectGetter(NSString *name) {
+    if (!name.length || [name containsString:@":"]) return NO;
+    NSString *lower=name.lowercaseString;
+
+    BOOL relevant=
+        [lower containsString:@"tab"] ||
+        [lower containsString:@"panel"];
+    if (!relevant) return NO;
+
+    for (NSString *blocked in @[
+        @"controller",@"view",@"image",@"title",@"subtitle",
+        @"delegate",@"handler",@"observer",@"account",
+        @"navigationcontroller",@"presentation"
+    ]) {
+        if ([lower containsString:blocked]) return NO;
+    }
+
+    // "available/all/default" getters are useful as the native object pool,
+    // but must remain complete rather than being filtered to the user's six.
+    if ([lower containsString:@"available"] ||
+        [lower containsString:@"all"] ||
+        [lower containsString:@"default"] ||
+        [lower containsString:@"supported"]) {
+        return NO;
+    }
+
+    return [lower containsString:@"identifier"] ||
+           [lower containsString:@"item"] ||
+           [lower containsString:@"entry"] ||
+           [lower containsString:@"content"] ||
+           [lower containsString:@"visible"] ||
+           [lower containsString:@"selected"] ||
+           [lower containsString:@"configured"] ||
+           [lower isEqualToString:@"tabs"] ||
+           [lower isEqualToString:@"panelids"] ||
+           [lower isEqualToString:@"tabidentifiers"] ||
+           [lower isEqualToString:@"tabbaritems"] ||
+           [lower isEqualToString:@"tabitems"];
+}
+
+static void XLGB65InstallOnClass(Class cls) {
+    if (!cls) return;
+
+    if (!gXLGB65ArrayGetterOriginals) {
+        gXLGB65ArrayGetterOriginals=[NSMutableDictionary dictionary];
+    }
+    if (!gXLGB65BoolGetterOriginals) {
+        gXLGB65BoolGetterOriginals=[NSMutableDictionary dictionary];
+    }
+
+    NSString *className=NSStringFromClass(cls) ?: @"?";
+    unsigned int count=0;
+    Method *methods=class_copyMethodList(cls,&count);
+
+    for (unsigned int i=0;i<count;i++) {
+        Method method=methods[i];
+        SEL selector=method_getName(method);
+        NSString *name=NSStringFromSelector(selector);
+        const char *types=method_getTypeEncoding(method);
+        unsigned int arguments=method_getNumberOfArguments(method);
+
+        char returnType[32]={0};
+        method_getReturnType(method,returnType,sizeof(returnType));
+        const char *p=returnType;
+        while (*p && strchr("rnNoORV",*p)) p++;
+
+        XLGB6Log(@"CONNECTION_METHOD class=%@ selector=%@ types=%s",
+                 className,name,types ?: "-");
+
+        if (arguments==2 &&
+            (*p=='@' || *p=='#') &&
+            XLGB65ShouldBridgeObjectGetter(name)) {
+
+            IMP current=method_getImplementation(method);
+            if (current && current!=(IMP)XLGB65NativeArrayGetter) {
+                NSString *key=XLGB65MethodKey(cls,selector);
+                if (!gXLGB65ArrayGetterOriginals[key]) {
+                    gXLGB65ArrayGetterOriginals[key]=
+                        [NSValue valueWithPointer:current];
+                }
+                class_replaceMethod(
+                    cls,selector,
+                    (IMP)XLGB65NativeArrayGetter,
+                    types);
+                XLGB6Log(@"CONNECTION_HOOK class=%@ selector=%@ kind=array ok=%@",
+                         className,name,
+                         class_getMethodImplementation(cls,selector)==
+                            (IMP)XLGB65NativeArrayGetter ? @"YES" : @"NO");
+            }
+        }
+    }
+    if (methods) free(methods);
+
+    for (NSString *name in @[
+        @"isTabCustomizationEnabled",
+        @"areTabsCustomized",
+        @"tabsCustomized"
+    ]) {
+        SEL selector=NSSelectorFromString(name);
+        Method method=class_getInstanceMethod(cls,selector);
+        if (!method || method_getNumberOfArguments(method)!=2) continue;
+
+        char returnType[32]={0};
+        method_getReturnType(method,returnType,sizeof(returnType));
+        const char *p=returnType;
+        while (*p && strchr("rnNoORV",*p)) p++;
+        if (*p!='B' && *p!='c') continue;
+
+        IMP current=class_getMethodImplementation(cls,selector);
+        if (!current || current==(IMP)XLGB65NativeBoolGetter) continue;
+
+        NSString *key=XLGB65MethodKey(cls,selector);
+        if (!gXLGB65BoolGetterOriginals[key]) {
+            gXLGB65BoolGetterOriginals[key]=
+                [NSValue valueWithPointer:current];
+        }
+
+        class_replaceMethod(
+            cls,selector,
+            (IMP)XLGB65NativeBoolGetter,
+            method_getTypeEncoding(method));
+
+        XLGB6Log(@"CONNECTION_HOOK class=%@ selector=%@ kind=bool ok=%@",
+                 className,name,
+                 class_getMethodImplementation(cls,selector)==
+                    (IMP)XLGB65NativeBoolGetter ? @"YES" : @"NO");
+    }
+}
+
+static void XLGB65InstallNativeConnectionBridge(void) {
+    NSMutableSet<NSString *> *seen=[NSMutableSet set];
+
+    for (NSString *requested in @[
+        @"T1TabCustomizationConfig",
+        @"T1TwitterSwift.MainAppNavigationSettings",
+        @"_TtC14T1TwitterSwift25MainAppNavigationSettings",
+        @"T1TwitterSwift.MainAppTabDataSource",
+        @"_TtC14T1TwitterSwift20MainAppTabDataSource"
+    ]) {
+        Class cls=NSClassFromString(requested);
+        NSString *resolved=cls ? NSStringFromClass(cls) : @"nil";
+        XLGB6Log(@"CONNECTION_CLASS requested=%@ resolved=%@ ptr=%p",
+                 requested,resolved,cls);
+
+        if (!cls || [seen containsObject:resolved]) continue;
+        [seen addObject:resolved];
+        XLGB65InstallOnClass(cls);
+    }
+}
+
+static void XLGB65NativeRebuild(NSString *reason) {
+    if (!XLGEnabled()) return;
+
+    id appNavigation=XLGSidebarAppNavigation();
+    SEL recalcSEL=NSSelectorFromString(@"recalculateVisiblePanels");
+    SEL visibleSEL=NSSelectorFromString(@"visiblePanelIDs");
+
+    if (!appNavigation ||
+        ![appNavigation respondsToSelector:recalcSEL]) {
+        XLGB6Log(@"CONNECTION_REBUILD reason=%@ result=NO_APPNAV appNavigation=%@",
+                 reason ?: @"-",
+                 appNavigation ? NSStringFromClass([appNavigation class]) : @"nil");
+        return;
+    }
+
+    NSNumber *attempt=objc_getAssociatedObject(
+        appNavigation,&kXLGB65RebuildAttemptKey);
+    NSInteger count=[attempt integerValue];
+    if (count>=4 && ![reason containsString:@"defaults"]) {
+        XLGB6Log(@"CONNECTION_REBUILD reason=%@ result=SKIP_MAX attempts=%ld",
+                 reason ?: @"-",(long)count);
+        return;
+    }
+
+    id before=nil;
+    if ([appNavigation respondsToSelector:visibleSEL]) {
+        @try {
+            before=((id(*)(id,SEL))objc_msgSend)(
+                appNavigation,visibleSEL);
+        } @catch (__unused NSException *exception) {}
+    }
+
+    XLGB6Log(@"CONNECTION_REBUILD reason=%@ appNavigation=%@ ptr=%p before=%@",
+             reason ?: @"-",
+             NSStringFromClass([appNavigation class]) ?: @"?",
+             appNavigation,
+             XLGB61DescribePanelValue(before));
+
+    @try {
+        ((void(*)(id,SEL))objc_msgSend)(appNavigation,recalcSEL);
+    } @catch (NSException *exception) {
+        XLGB6Log(@"CONNECTION_REBUILD reason=%@ result=EXCEPTION name=%@ detail=%@",
+                 reason ?: @"-",
+                 exception.name ?: @"-",
+                 exception.reason ?: @"-");
+        return;
+    }
+
+    objc_setAssociatedObject(
+        appNavigation,
+        &kXLGB65RebuildAttemptKey,
+        @(count+1),
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    id after=nil;
+    if ([appNavigation respondsToSelector:visibleSEL]) {
+        @try {
+            after=((id(*)(id,SEL))objc_msgSend)(
+                appNavigation,visibleSEL);
+        } @catch (__unused NSException *exception) {}
+    }
+
+    XLGB6Log(@"CONNECTION_REBUILD reason=%@ result=CALLED after=%@",
+             reason ?: @"-",
+             XLGB61DescribePanelValue(after));
+
+    XLGB6ScheduleSnapshot(
+        [NSString stringWithFormat:@"connection-%@",reason ?: @"-"],
+        0.10);
+}
+
+static void XLGB65ScheduleNativeRebuild(void) {
+    if (gXLGB65RebuildScheduled) return;
+    gXLGB65RebuildScheduled=YES;
+
+    NSArray<NSNumber *> *delays=@[@0.55,@1.10,@2.20,@3.80];
+    [delays enumerateObjectsUsingBlock:
+        ^(NSNumber *delay, NSUInteger idx, BOOL *stop) {
+            (void)stop;
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                    (int64_t)(delay.doubleValue*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    XLGB65InstallNativeConnectionBridge();
+                    XLGB65NativeRebuild(
+                        [NSString stringWithFormat:@"startup-%lu",
+                            (unsigned long)(idx+1)]);
+                });
+        }];
+
+    if (!gXLGB65DefaultsObserver) {
+        gXLGB65DefaultsObserver=
+            [NSNotificationCenter.defaultCenter
+                addObserverForName:NSUserDefaultsDidChangeNotification
+                           object:nil
+                            queue:NSOperationQueue.mainQueue
+                       usingBlock:^(__unused NSNotification *notification) {
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                    (int64_t)(0.08*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    XLGB65InstallNativeConnectionBridge();
+                    XLGB65NativeRebuild(@"defaults-change");
+                });
+        }];
+    }
+}
+
+
 #pragma mark - XLiquidGlass 1.9.3 Beta 6.4 Swift appNavigation correction
 
 static id XLGB64SwiftVisiblePanelIDs(id self, SEL cmd) {
@@ -5124,67 +5766,11 @@ static void XLGB62InstallActiveReconcileSchedule(void) {
 
 
 static void XLGB6InstallCorrectionHooks(void) {
-    XLGB64InstallSwiftAppNavHooks();
-    XLGB64InstallSwiftReconcileSchedule();
-    XLGB61InstallPanelPipelineHooks();
-    XLGB62InstallActiveReconcileSchedule();
-
-    if (!gXLGB6VisibleSetterOriginals) {
-        gXLGB6VisibleSetterOriginals=[NSMutableDictionary dictionary];
-    }
-    if (!gXLGB6DataSourceSetterOriginals) {
-        gXLGB6DataSourceSetterOriginals=[NSMutableDictionary dictionary];
-    }
-
-    if (!gXLGB6VisibleHooksInstalled) {
-        BOOL any=NO;
-        for (NSString *className in @[
-            @"T1TabbedAppNavigationViewController",
-            @"T1TwitterSwift.XTabbedAppNavigationViewController",
-            @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController"
-        ]) {
-            Class cls=NSClassFromString(className);
-            if (!cls) continue;
-            XLGB6ProbeRuntimeMethods(cls,@"visible-owner");
-            if (XLGB6HookSetterForClass(
-                    cls,
-                    NSSelectorFromString(@"setVisibleTabEntries:"),
-                    (IMP)XLGB6SetVisibleTabEntries,
-                    gXLGB6VisibleSetterOriginals)) {
-                any=YES;
-            }
-        }
-        gXLGB6VisibleHooksInstalled=any;
-    }
-
-    if (!gXLGB6DataSourceHooksInstalled) {
-        BOOL any=NO;
-        for (NSString *className in @[
-            @"T1MainAppTabDataSource",
-            @"T1TwitterSwift.MainAppTabDataSource",
-            @"_TtC14T1TwitterSwift20MainAppTabDataSource"
-        ]) {
-            Class cls=NSClassFromString(className);
-            if (!cls) continue;
-            XLGB6ProbeRuntimeMethods(cls,@"main-tab-data-source");
-            if (XLGB6HookSetterForClass(
-                    cls,
-                    NSSelectorFromString(@"setTabContent:"),
-                    (IMP)XLGB6SetTabContent,
-                    gXLGB6DataSourceSetterOriginals)) {
-                any=YES;
-            }
-        }
-        gXLGB6DataSourceHooksInstalled=any;
-    }
-
-    if (!gXLGB6ProbeScheduled) {
-        gXLGB6ProbeScheduled=YES;
-        XLGB6ScheduleSnapshot(@"startup-0.25",0.25);
-        XLGB6ScheduleSnapshot(@"startup-0.75",0.75);
-        XLGB6ScheduleSnapshot(@"startup-1.50",1.50);
-        XLGB6ScheduleSnapshot(@"startup-3.00",3.00);
-    }
+    // Beta 6.5 deliberately disables the prior post-construction forcing
+    // (visiblePanelIDs, PanelID reconcile and legacy tabContent setters).
+    // The only active strategy is the source-level native connection bridge.
+    XLGB65InstallNativeConnectionBridge();
+    XLGB65ScheduleNativeRebuild();
 }
 
 
@@ -5202,7 +5788,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.4 Tab Probe";
+    self.title=@"Beta 6.5 Tab Bridge";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -5221,7 +5807,7 @@ static void XLGB6InstallCorrectionHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"A correção atua antes do XNavigation.TabBarController e o probe registra a cadeia de tabs. Faça o teste normalmente e use Copiar relatório.";
+    return @"A ponte conecta a configuração de abas do NFB à fonte nativa usada pelo Liquid Glass antes da criação do XNavigation.TabBarController. Depois do teste, use Copiar relatório.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -5243,7 +5829,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta64SwiftAppNavFixProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta65NativeTabConnectionProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -5260,7 +5846,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.4 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.5 Tab Bridge"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -5285,7 +5871,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.4 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.5 Tab Bridge"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -5306,7 +5892,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.4 Tab Probe"
+            alertControllerWithTitle:@"Beta 6.5 Tab Bridge"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -5329,8 +5915,8 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.4 Tab Probe",
-        @"subtitle": @"Correção no XTabbedAppNavigation + diagnóstico do Dock.",
+        @"title": @"Beta 6.5 Tab Bridge",
+        @"subtitle": @"Ponte NFB → configuração nativa do Dock + diagnóstico.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
     }];
@@ -8329,13 +8915,13 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.4 loaded: Swift XTabbedAppNavigation panel correction + focused probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.5 loaded: NFB native tab connection bridge + focused probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.4 Swift AppNavigation Fix + Probe ==========");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.5 Native Tab Connection Bridge + Probe ==========");
         XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
                  XLGEnabled() ? @"ON" : @"OFF",
                  [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
