@@ -34,6 +34,7 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static id XLGSafeValueForKey(id object, NSString *key);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
