@@ -70,6 +70,7 @@ static IMP gOrigXAppPremiumSettings = NULL;
 static IMP gOrigXAppShowDisplaySettings = NULL;
 static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
+static IMP gOrigSearchContainerViewDidAppear = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
 
@@ -6516,22 +6517,12 @@ static NSUInteger XLGRemoveSearchBlurViews(
     return removed;
 }
 
-static void XLGSearchContainerViewDidLayoutSubviews(
-    id self,
-    SEL cmd) {
+static void XLGApplySearchBlurRemoval(
+    UIViewController *controller,
+    NSString *reason) {
 
-    if (gOrigSearchContainerViewDidLayoutSubviews) {
-        ((void(*)(id,SEL))
-            gOrigSearchContainerViewDidLayoutSubviews)(
-                self,cmd);
-    }
+    if (!XLGEnabled() || !controller) return;
 
-    if (!XLGEnabled() ||
-        ![self isKindOfClass:UIViewController.class]) {
-        return;
-    }
-
-    UIViewController *controller=(UIViewController *)self;
     UIView *root=controller.view;
     if (!root) return;
 
@@ -6550,11 +6541,78 @@ static void XLGSearchContainerViewDidLayoutSubviews(
             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
         XLGNavigationProbeLog(
-            @"SEARCH_BLUR removed=%lu controller=%@ ptr=%p",
+            @"SEARCH_BLUR removed=%lu controller=%@ ptr=%p reason=%@",
             (unsigned long)removed,
             NSStringFromClass(controller.class),
-            controller);
+            controller,
+            reason ?: @"-");
     }
+}
+
+static void XLGScheduleSearchBlurRemoval(
+    UIViewController *controller) {
+
+    if (!controller) return;
+
+    for (NSNumber *delayValue in @[@0.04,@0.12,@0.30]) {
+        NSTimeInterval delay=delayValue.doubleValue;
+        __weak UIViewController *weakController=controller;
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                UIViewController *strongController=weakController;
+                if (!strongController) return;
+
+                XLGApplySearchBlurRemoval(
+                    strongController,
+                    [NSString stringWithFormat:
+                        @"delayed-%.2f",delay]);
+            });
+    }
+}
+
+static void XLGSearchContainerViewDidLayoutSubviews(
+    id self,
+    SEL cmd) {
+
+    if (gOrigSearchContainerViewDidLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigSearchContainerViewDidLayoutSubviews)(
+                self,cmd);
+    }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+
+    UIViewController *controller=(UIViewController *)self;
+
+    // Exact 1.9.0 Beta 1 behavior: remove the top blur after X lays out
+    // TTSSearchContainerViewControllerV2.
+    XLGApplySearchBlurRemoval(controller,@"layout");
+
+    // In later builds X can rebuild the visual-effect hierarchy just after the
+    // layout callback. Re-apply only inside this search controller so the blur
+    // cannot immediately return; no other 1.9.2 feature is touched.
+    XLGScheduleSearchBlurRemoval(controller);
+}
+
+static void XLGSearchContainerViewDidAppear(
+    id self,
+    SEL cmd,
+    BOOL animated) {
+
+    if (gOrigSearchContainerViewDidAppear) {
+        ((void(*)(id,SEL,BOOL))
+            gOrigSearchContainerViewDidAppear)(
+                self,cmd,animated);
+    }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+
+    UIViewController *controller=(UIViewController *)self;
+    XLGApplySearchBlurRemoval(controller,@"didAppear");
+    XLGScheduleSearchBlurRemoval(controller);
 }
 
 static void XLGInstallSearchBlurFix(void) {
@@ -6564,17 +6622,30 @@ static void XLGInstallSearchBlurFix(void) {
         @"TTSSearchContainerViewControllerV2");
     if (!cls) return;
 
-    SEL selector=@selector(viewDidLayoutSubviews);
-    Method method=class_getInstanceMethod(cls,selector);
-    if (!method) return;
+    SEL layoutSEL=@selector(viewDidLayoutSubviews);
+    Method layoutMethod=class_getInstanceMethod(cls,layoutSEL);
+    if (!layoutMethod) return;
 
-    gXLGSearchBlurFixInstalled=
+    BOOL layoutHooked=
         XLGHookMethod(
             cls,
-            selector,
+            layoutSEL,
             NO,
             (IMP)XLGSearchContainerViewDidLayoutSubviews,
             &gOrigSearchContainerViewDidLayoutSubviews);
+
+    SEL appearSEL=@selector(viewDidAppear:);
+    Method appearMethod=class_getInstanceMethod(cls,appearSEL);
+    if (appearMethod && !gOrigSearchContainerViewDidAppear) {
+        XLGHookMethod(
+            cls,
+            appearSEL,
+            NO,
+            (IMP)XLGSearchContainerViewDidAppear,
+            &gOrigSearchContainerViewDidAppear);
+    }
+
+    gXLGSearchBlurFixInstalled=layoutHooked;
 }
 
 static BOOL gXLGGuideRouterHookInstalled = NO;
