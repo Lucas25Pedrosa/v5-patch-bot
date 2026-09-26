@@ -1097,6 +1097,8 @@ static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
 #pragma mark - Liquid Glass Tab Bar visual fixes
 
 static char kXLGInjectedTabLabelKey;
+static char kXLGOriginalTintColorKey;
+static char kXLGOriginalBackgroundColorKey;
 
 static UIColor *XLGResolvedAccentColor(id controller, UITabBar *tabBar) {
     // 1.5.0 Theme Accent Fix:
@@ -1266,6 +1268,16 @@ static void XLGTintImageViews(UIView *root, UIColor *color, BOOL stripAvatar) {
 
     if ([root isKindOfClass:UIImageView.class]) {
         UIImageView *imageView=(UIImageView *)root;
+
+        if (!objc_getAssociatedObject(imageView,&kXLGOriginalTintColorKey)) {
+            UIColor *original=imageView.tintColor ?: UIColor.clearColor;
+            objc_setAssociatedObject(
+                imageView,
+                &kXLGOriginalTintColorKey,
+                original,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+
         UIImage *image=imageView.image;
         if (image && image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
             imageView.image=[image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
@@ -1276,6 +1288,34 @@ static void XLGTintImageViews(UIView *root, UIColor *color, BOOL stripAvatar) {
 
     for (UIView *subview in root.subviews ?: @[]) {
         XLGTintImageViews(subview,color,stripAvatar);
+    }
+}
+
+static void XLGRestoreTintedViews(UIView *root) {
+    if (!root) return;
+
+    UIColor *originalTint=
+        objc_getAssociatedObject(root,&kXLGOriginalTintColorKey);
+    if (originalTint) {
+        root.tintColor=
+            [originalTint isEqual:UIColor.clearColor] ? nil : originalTint;
+        objc_setAssociatedObject(
+            root,&kXLGOriginalTintColorKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    UIColor *originalBackground=
+        objc_getAssociatedObject(root,&kXLGOriginalBackgroundColorKey);
+    if (originalBackground) {
+        root.backgroundColor=
+            [originalBackground isEqual:UIColor.clearColor]
+                ? UIColor.clearColor
+                : originalBackground;
+        objc_setAssociatedObject(
+            root,&kXLGOriginalBackgroundColorKey,nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    for (UIView *subview in root.subviews ?: @[]) {
+        XLGRestoreTintedViews(subview);
     }
 }
 
@@ -1330,6 +1370,21 @@ static void XLGApplyAccentToTabBar(UITabBar *tabBar, UIColor *accent) {
 static void XLGApplySelectionChrome(UIView *chrome, UIColor *accent) {
     if (!chrome || !accent) return;
 
+    if (!objc_getAssociatedObject(chrome,&kXLGOriginalTintColorKey)) {
+        objc_setAssociatedObject(
+            chrome,
+            &kXLGOriginalTintColorKey,
+            chrome.tintColor ?: UIColor.clearColor,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!objc_getAssociatedObject(chrome,&kXLGOriginalBackgroundColorKey)) {
+        objc_setAssociatedObject(
+            chrome,
+            &kXLGOriginalBackgroundColorKey,
+            chrome.backgroundColor ?: UIColor.clearColor,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     chrome.tintColor=accent;
 
     UIColor *background=chrome.backgroundColor;
@@ -1346,6 +1401,13 @@ static void XLGApplySelectionChrome(UIView *chrome, UIColor *accent) {
     }
 
     for (UIView *subview in chrome.subviews ?: @[]) {
+        if (!objc_getAssociatedObject(subview,&kXLGOriginalTintColorKey)) {
+            objc_setAssociatedObject(
+                subview,
+                &kXLGOriginalTintColorKey,
+                subview.tintColor ?: UIColor.clearColor,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
         subview.tintColor=accent;
     }
 }
@@ -1480,11 +1542,15 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
 
     if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
 
-    // When theme coloring is disabled, the original XNavigation layout above
-    // remains authoritative and we do not modify its tint/chrome.
-    if (!XLGThemeAccentEnabled()) return;
-
     UIView *view=(UIView *)self;
+
+    // When theme coloring is disabled, restore values captured before our
+    // first theme application and leave the original XNavigation layout
+    // authoritative from this point on.
+    if (!XLGThemeAccentEnabled()) {
+        XLGRestoreTintedViews(view);
+        return;
+    }
     UIViewController *controller=nil;
     UIResponder *responder=view.nextResponder;
     for (NSInteger i=0;responder && i<16;i++,responder=responder.nextResponder) {
@@ -1504,28 +1570,44 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
 }
 
 
+static void XLGRefreshThemeAccentPass(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (!window || window.hidden) continue;
+
+            NSArray<UIView *> *bars=
+                XLGCollectViewsMatching(window,^BOOL(UIView *view) {
+                    NSString *name=NSStringFromClass(view.class);
+                    return [name isEqualToString:@"XNavigation.TabBarView"] ||
+                           [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
+                });
+
+            for (UIView *bar in bars) {
+                [bar setNeedsLayout];
+                [bar layoutIfNeeded];
+            }
+        }
+    }
+}
+
 static void XLGRefreshThemeAccentNow(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        XLGRefreshThemeAccentPass();
 
-            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                if (!window || window.hidden) continue;
-
-                NSArray<UIView *> *bars=
-                    XLGCollectViewsMatching(window,^BOOL(UIView *view) {
-                        NSString *name=NSStringFromClass(view.class);
-                        return [name isEqualToString:@"XNavigation.TabBarView"] ||
-                               [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
-                    });
-
-                for (UIView *bar in bars) {
-                    // layoutSubviews is hooked. Calling layoutIfNeeded after
-                    // setNeedsLayout reapplies the current theme immediately.
-                    [bar setNeedsLayout];
-                    [bar layoutIfNeeded];
-                }
-            }
+        // NFB updates its stored option and palette almost together. These
+        // short follow-up passes cover the same run-loop transition without
+        // requiring the user to touch a tab.
+        for (NSNumber *delayValue in @[@0.05,@0.15]) {
+            NSTimeInterval delay=delayValue.doubleValue;
+            dispatch_after(
+                dispatch_time(
+                    DISPATCH_TIME_NOW,
+                    (int64_t)(delay*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    XLGRefreshThemeAccentPass();
+                });
         }
     });
 }
