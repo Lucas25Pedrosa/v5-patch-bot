@@ -7,6 +7,7 @@
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
 static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
+static NSString *const kXLGThemeAccentEnabledKey = @"XLiquidGlassThemeAccentEnabled";
 
 static IMP gOrigInstallGate = NULL;
 static IMP gOrigInstallGateForAccount = NULL;
@@ -21,6 +22,7 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
+static id gXLGThemeDefaultsObserver = nil;
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -32,6 +34,12 @@ static BOOL XLGTabLabelsEnabled(void) {
     NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
     id stored=[defaults objectForKey:kXLGTabLabelsKey];
     return stored ? [stored boolValue] : NO;
+}
+
+static BOOL XLGThemeAccentEnabled(void) {
+    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+    id stored=[defaults objectForKey:kXLGThemeAccentEnabledKey];
+    return stored ? [stored boolValue] : YES;
 }
 
 static BOOL XLGHookMethod(Class cls,
@@ -125,6 +133,8 @@ static void XLGSyncCompatibilityGate(void) {
 @interface XLiquidGlassSettingsViewController : UITableViewController
 @end
 
+static void XLGRefreshThemeAccentNow(void);
+
 @implementation XLiquidGlassSettingsViewController
 
 - (instancetype)init {
@@ -146,7 +156,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -177,6 +187,13 @@ static void XLGSyncCompatibilityGate(void) {
         [toggle addTarget:self
                    action:@selector(xlgLiquidGlassToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
+    } else if (indexPath.row == 1) {
+        cell.textLabel.text = @"Cor do tema na Tab Bar";
+        cell.detailTextLabel.text = @"Aplica a cor primária do tema ao Liquid Glass.";
+        toggle.on = XLGThemeAccentEnabled();
+        [toggle addTarget:self
+                   action:@selector(xlgThemeAccentToggleChanged:)
+         forControlEvents:UIControlEventValueChanged];
     } else {
         cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
         cell.detailTextLabel.text = @"Exibe os nomes das abas no modo Liquid Glass.";
@@ -203,6 +220,14 @@ static void XLGSyncCompatibilityGate(void) {
                                              style:UIAlertActionStyleDefault
                                            handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)xlgThemeAccentToggleChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults]
+        setBool:sender.isOn
+         forKey:kXLGThemeAccentEnabledKey];
+
+    XLGRefreshThemeAccentNow();
 }
 
 - (void)xlgTabLabelsToggleChanged:(UISwitch *)sender {
@@ -1400,6 +1425,7 @@ static void XLGSyncLiquidGlassLabels(UITabBar *tabBar,
 
 static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
     if (!controller || !XLGEnabled()) return;
+    if (!XLGThemeAccentEnabled()) return;
     if (![controller isKindOfClass:UIViewController.class]) return;
 
     UIViewController *vc=(UIViewController *)controller;
@@ -1454,6 +1480,10 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
 
     if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
 
+    // When theme coloring is disabled, the original XNavigation layout above
+    // remains authoritative and we do not modify its tint/chrome.
+    if (!XLGThemeAccentEnabled()) return;
+
     UIView *view=(UIView *)self;
     UIViewController *controller=nil;
     UIResponder *responder=view.nextResponder;
@@ -1471,6 +1501,46 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
     XLGTintImageViews(view,accent,NO);
     UIView *chrome=XLGFindLiquidSelectionChrome(view);
     XLGApplySelectionChrome(chrome,accent);
+}
+
+
+static void XLGRefreshThemeAccentNow(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                if (!window || window.hidden) continue;
+
+                NSArray<UIView *> *bars=
+                    XLGCollectViewsMatching(window,^BOOL(UIView *view) {
+                        NSString *name=NSStringFromClass(view.class);
+                        return [name isEqualToString:@"XNavigation.TabBarView"] ||
+                               [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
+                    });
+
+                for (UIView *bar in bars) {
+                    // layoutSubviews is hooked. Calling layoutIfNeeded after
+                    // setNeedsLayout reapplies the current theme immediately.
+                    [bar setNeedsLayout];
+                    [bar layoutIfNeeded];
+                }
+            }
+        }
+    });
+}
+
+static void XLGInstallThemeAccentLiveRefresh(void) {
+    if (gXLGThemeDefaultsObserver) return;
+
+    gXLGThemeDefaultsObserver =
+        [NSNotificationCenter.defaultCenter
+            addObserverForName:NSUserDefaultsDidChangeNotification
+                       object:nil
+                        queue:NSOperationQueue.mainQueue
+                   usingBlock:^(__unused NSNotification *notification) {
+        XLGRefreshThemeAccentNow();
+    }];
 }
 
 static void XLGInstallXNavigationVisualFix(void) {
@@ -1661,6 +1731,7 @@ static void XLGInstallHooks(void) {
     XLGInstallSidebarFix();
     XLGInstallLiquidGlassBadgeFixes();
     XLGInstallXNavigationVisualFix();
+    XLGInstallThemeAccentLiveRefresh();
     XLGInstallNFBSettingsIntegration();
 }
 
@@ -1677,7 +1748,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.5.0 Theme Accent Fix Test loaded: original visual pipeline + X/NFB primary color");
+        NSLog(@"[XLiquidGlass] 1.5.0 Theme Accent Live Test loaded: live X/NFB color refresh + theme tint toggle");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
