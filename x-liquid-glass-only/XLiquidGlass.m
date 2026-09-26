@@ -1074,6 +1074,48 @@ static void XLGScheduleLiquidGlassBadgeRefresh(id controller) {
 static char kXLGInjectedTabLabelKey;
 
 static UIColor *XLGResolvedAccentColor(id controller, UITabBar *tabBar) {
+    // 1.5.0 Theme Accent Fix:
+    // Resolve the same primary color selected by X/NFB before falling back
+    // to UIKit tint. This preserves the original 1.5.0 visual pipeline.
+    NSUserDefaults *defaults=NSUserDefaults.standardUserDefaults;
+    NSInteger option=0;
+
+    id nfb=[defaults objectForKey:@"bh_color_theme_selectedColor"];
+    if ([nfb respondsToSelector:@selector(integerValue)]) {
+        option=[nfb integerValue];
+    } else {
+        id native=[defaults objectForKey:@"T1ColorSettingsPrimaryColorOptionKey"];
+        if ([native respondsToSelector:@selector(integerValue)]) {
+            option=[native integerValue];
+        }
+    }
+
+    if (option<1) option=1;
+
+    Class settingsClass=NSClassFromString(@"TAEColorSettings");
+    SEL sharedSEL=NSSelectorFromString(@"sharedSettings");
+    if (settingsClass && [settingsClass respondsToSelector:sharedSEL]) {
+        id settings=((id(*)(id,SEL))objc_msgSend)(settingsClass,sharedSEL);
+        SEL infoSEL=NSSelectorFromString(@"currentColorPalette");
+        id info=(settings && [settings respondsToSelector:infoSEL])
+            ? ((id(*)(id,SEL))objc_msgSend)(settings,infoSEL)
+            : nil;
+        SEL paletteSEL=NSSelectorFromString(@"colorPalette");
+        id palette=(info && [info respondsToSelector:paletteSEL])
+            ? ((id(*)(id,SEL))objc_msgSend)(info,paletteSEL)
+            : nil;
+        SEL primarySEL=NSSelectorFromString(@"primaryColorForOption:");
+        if (palette && [palette respondsToSelector:primarySEL]) {
+            id themeColor=((id(*)(id,SEL,NSUInteger))objc_msgSend)(
+                palette,primarySEL,(NSUInteger)option);
+            if ([themeColor isKindOfClass:UIColor.class]) {
+                return themeColor;
+            }
+        }
+    }
+
+    // Preserve the exact 1.5.0 fallback behavior if the theme palette is
+    // unavailable for any reason.
     UIColor *color=nil;
 
     if ([controller isKindOfClass:UIViewController.class]) {
@@ -1422,9 +1464,9 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
         }
     }
 
-    UIColor *accent=controller && controller.isViewLoaded ?
-        controller.view.tintColor : view.tintColor;
-    if (!accent) accent=UIColor.systemBlueColor;
+    // Use the X/NFB theme primary color here too. In original 1.5.0 this
+    // path read UIView.tintColor directly, which is why the glass was blue.
+    UIColor *accent=XLGResolvedAccentColor(controller,nil);
 
     XLGTintImageViews(view,accent,NO);
     UIView *chrome=XLGFindLiquidSelectionChrome(view);
@@ -1635,7 +1677,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.5.0 standalone + Moe Liquid Glass tab bar visual fixes loaded");
+        NSLog(@"[XLiquidGlass] 1.5.0 Theme Accent Fix Test loaded: original visual pipeline + X/NFB primary color");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
