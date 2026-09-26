@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.3 Beta 3
+#pragma mark - XLiquidGlass 1.9.3 Beta 4
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -671,7 +671,7 @@ static NSString *XLGTabBarSafeProbeLogPath(void) {
             NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     if (!documents.length) return nil;
     return [documents stringByAppendingPathComponent:
-        @"XLiquidGlass193Beta3DeepTabConfigProbe.log"];
+        @"XLiquidGlass193Beta4DirectIvarProbe.log"];
 }
 
 static NSString *XLGTabBarSafeProbeTimestamp(void) {
@@ -923,6 +923,243 @@ static void XLGTabBarSafeProbeDumpView(UIView *view) {
     }
 }
 
+
+
+static Ivar XLGTabBarProbeFindIvar(Class cls, NSString *name) {
+    if (!cls || !name.length) return NULL;
+
+    Class cursor=cls;
+    while (cursor) {
+        Ivar ivar=class_getInstanceVariable(
+            cursor,name.UTF8String);
+        if (ivar) return ivar;
+
+        NSString *underscored=
+            [@"_" stringByAppendingString:name];
+        ivar=class_getInstanceVariable(
+            cursor,underscored.UTF8String);
+        if (ivar) return ivar;
+
+        cursor=class_getSuperclass(cursor);
+    }
+    return NULL;
+}
+
+static id XLGTabBarProbeReadObjectIvar(
+    id object,
+    NSString *name,
+    NSString *prefix) {
+
+    if (!object || !name.length) return nil;
+
+    Ivar ivar=XLGTabBarProbeFindIvar([object class],name);
+    if (!ivar) {
+        XLGTabBarSafeProbeLog(
+            @"DIRECT_IVAR_MISSING prefix=%@ class=%@ name=%@",
+            prefix ?: @"-",
+            NSStringFromClass([object class]) ?: @"?",
+            name);
+        return nil;
+    }
+
+    ptrdiff_t offset=ivar_getOffset(ivar);
+    const char *rawName=ivar_getName(ivar);
+    const char *rawType=ivar_getTypeEncoding(ivar);
+
+    id value=nil;
+    @try {
+        value=object_getIvar(object,ivar);
+    } @catch (__unused NSException *exception) {
+        value=nil;
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"DIRECT_IVAR prefix=%@ owner=%@ ptr=%p name=%s requested=%@ type=%s offset=%td valueClass=%@ valuePtr=%p value=%@",
+        prefix ?: @"-",
+        NSStringFromClass([object class]) ?: @"?",
+        object,
+        rawName ?: "-",
+        name,
+        rawType ?: "-",
+        offset,
+        value ? NSStringFromClass([value class]) : @"nil",
+        value,
+        XLGTabBarSafeProbeDescribe(value));
+
+    return value;
+}
+
+static void XLGTabBarProbeDumpArrayEntries(
+    id value,
+    NSString *prefix) {
+
+    if (![value isKindOfClass:NSArray.class]) return;
+
+    NSArray *array=(NSArray *)value;
+    XLGTabBarSafeProbeLog(
+        @"DIRECT_ARRAY prefix=%@ count=%lu",
+        prefix ?: @"-",
+        (unsigned long)array.count);
+
+    [array enumerateObjectsUsingBlock:
+        ^(id entry, NSUInteger idx, BOOL *stop) {
+            (void)stop;
+            XLGTabBarSafeProbeLog(
+                @"DIRECT_ARRAY_ENTRY prefix=%@ index=%lu class=%@ ptr=%p identity=%@ raw=%@",
+                prefix ?: @"-",
+                (unsigned long)idx,
+                entry ? NSStringFromClass([entry class]) : @"nil",
+                entry,
+                XLGTabBarSafeProbeTabIdentity(entry),
+                XLGTabBarSafeProbeDescribe(entry));
+        }];
+}
+
+static void XLGTabBarProbeDumpControllerDirectIvars(
+    id tabBarController,
+    NSString *origin) {
+
+    if (!tabBarController) {
+        XLGTabBarSafeProbeLog(
+            @"DIRECT_CONTROLLER origin=%@ controller=nil",
+            origin ?: @"-");
+        return;
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"DIRECT_CONTROLLER origin=%@ class=%@ ptr=%p",
+        origin ?: @"-",
+        NSStringFromClass([tabBarController class]) ?: @"?",
+        tabBarController);
+
+    id tabs=XLGTabBarProbeReadObjectIvar(
+        tabBarController,@"tabs",@"tabBarController");
+    id installedTabs=XLGTabBarProbeReadObjectIvar(
+        tabBarController,@"installedTabs",@"tabBarController");
+    id selectedIdentifier=XLGTabBarProbeReadObjectIvar(
+        tabBarController,@"selectedIdentifier",@"tabBarController");
+
+    XLGTabBarProbeDumpArrayEntries(
+        tabs,@"tabBarController.tabs");
+    XLGTabBarProbeDumpArrayEntries(
+        installedTabs,@"tabBarController.installedTabs");
+
+    if (selectedIdentifier) {
+        XLGTabBarSafeProbeLog(
+            @"DIRECT_SELECTED_IDENTIFIER class=%@ ptr=%p value=%@",
+            NSStringFromClass([selectedIdentifier class]) ?: @"?",
+            selectedIdentifier,
+            XLGTabBarSafeProbeDescribe(selectedIdentifier));
+    }
+}
+
+static void XLGTabBarProbeDumpDirectIvars(void) {
+    id appNavigation=XLGSidebarAppNavigation();
+
+    XLGTabBarSafeProbeLog(
+        @"========== DIRECT_IVAR_BEGIN ==========");
+
+    if (appNavigation) {
+        id controller=XLGTabBarProbeReadObjectIvar(
+            appNavigation,
+            @"tabBarController",
+            @"XTabbedAppNavigation");
+
+        XLGTabBarProbeDumpControllerDirectIvars(
+            controller,
+            @"XTabbedAppNavigation.tabBarController");
+    } else {
+        XLGTabBarSafeProbeLog(
+            @"DIRECT_APPNAV nil");
+    }
+
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+    NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (window.rootViewController) {
+                [queue addObject:window.rootViewController];
+            }
+        }
+    }
+
+    for (NSUInteger i=0;i<queue.count && i<180;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *pointer=
+            [NSValue valueWithPointer:(__bridge const void *)vc];
+        if ([visited containsObject:pointer]) continue;
+        [visited addObject:pointer];
+
+        NSString *className=NSStringFromClass(vc.class) ?: @"";
+
+        if ([className isEqualToString:
+                @"T1TwitterSwift.XTabbedAppNavigationViewController"]) {
+            id container=XLGTabBarProbeReadObjectIvar(
+                vc,
+                @"tabBarContainer",
+                @"XTabbedAppNavigationViewController");
+            XLGTabBarSafeProbeLog(
+                @"DIRECT_CONTAINER class=%@ ptr=%p value=%@",
+                container ? NSStringFromClass([container class]) : @"nil",
+                container,
+                XLGTabBarSafeProbeDescribe(container));
+        }
+
+        if ([className isEqualToString:
+                @"XNavigation.TabBarController"]) {
+            XLGTabBarProbeDumpControllerDirectIvars(
+                vc,
+                @"view-controller-hierarchy");
+        }
+
+        for (UIViewController *child in vc.childViewControllers ?: @[]) {
+            if (child) [queue addObject:child];
+        }
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+    }
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            NSMutableArray<UIView *> *views=[NSMutableArray array];
+            XLGTabBarSafeProbeCollectViews(window,views,0);
+
+            for (UIView *view in views) {
+                NSString *className=
+                    NSStringFromClass(view.class) ?: @"";
+                if (![className isEqualToString:
+                        @"XNavigation.TabBarView"]) {
+                    continue;
+                }
+
+                id tabs=XLGTabBarProbeReadObjectIvar(
+                    view,@"tabs",@"TabBarView");
+                id itemViews=XLGTabBarProbeReadObjectIvar(
+                    view,@"itemViews",@"TabBarView");
+                id portalItemViews=XLGTabBarProbeReadObjectIvar(
+                    view,@"portalItemViews",@"TabBarView");
+                id carriedItemViews=XLGTabBarProbeReadObjectIvar(
+                    view,@"carriedItemViews",@"TabBarView");
+
+                XLGTabBarProbeDumpArrayEntries(
+                    tabs,@"TabBarView.tabs");
+                XLGTabBarProbeDumpArrayEntries(
+                    itemViews,@"TabBarView.itemViews");
+                XLGTabBarProbeDumpArrayEntries(
+                    portalItemViews,@"TabBarView.portalItemViews");
+                XLGTabBarProbeDumpArrayEntries(
+                    carriedItemViews,@"TabBarView.carriedItemViews");
+            }
+        }
+    }
+
+    XLGTabBarSafeProbeLog(
+        @"========== DIRECT_IVAR_END ==========");
+}
 
 static BOOL XLGTabBarSafeProbeInterestingRuntimeName(NSString *name) {
     NSString *lower=name.lowercaseString ?: @"";
@@ -1221,7 +1458,7 @@ static void XLGTabBarSafeProbeRun(void) {
     }
 
     XLGTabBarSafeProbeLog(
-        @"========== XLiquidGlass 1.9.3 Beta 3 Deep Tab Config Probe ==========");
+        @"========== XLiquidGlass 1.9.3 Beta 4 Direct Ivar Probe ==========");
     XLGTabBarSafeProbeLog(
         @"liquidGlass=%@",
         XLGEnabled() ? @"ON" : @"OFF");
@@ -1230,6 +1467,7 @@ static void XLGTabBarSafeProbeRun(void) {
     XLGTabBarSafeProbeDumpKnownClasses();
     XLGTabBarSafeProbeDumpNativeCustomizationConfig();
     XLGTabBarSafeProbeDumpViewControllerHierarchy();
+    XLGTabBarProbeDumpDirectIvars();
 
     NSMutableArray<UIView *> *matches=[NSMutableArray array];
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
@@ -7273,7 +7511,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 3 loaded: manual deep Tab configuration probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 4 loaded: manual direct Swift ivar Tab probe + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
