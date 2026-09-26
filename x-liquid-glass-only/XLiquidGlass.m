@@ -5349,7 +5349,6 @@ static IMP gOrigXLGB66XTabbedViewDidLoad=NULL;
 static IMP gOrigXLGB66SwiftRecalcWithIDs=NULL;
 static IMP gOrigXLGB66SwiftRecalc=NULL;
 static BOOL gXLGB66BridgeInstalled=NO;
-static char kXLGB66BridgeAppliedKey;
 
 static id XLGB66VisiblePanelIDs(id appNavigation) {
     if (!appNavigation) return nil;
