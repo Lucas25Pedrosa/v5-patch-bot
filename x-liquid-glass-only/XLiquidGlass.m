@@ -3704,12 +3704,18 @@ static BOOL gXLGB61PanelPipelineHooksInstalled=NO;
 static char kXLGB62ActiveReconcileAttemptsKey;
 static BOOL gXLGB62ActiveReconcileScheduled=NO;
 
+// Beta 6.4: target the real Swift appNavigation object instead of its VC.
+static IMP gOrigXLGB64SwiftVisiblePanelIDs=NULL;
+static IMP gOrigXLGB64SwiftRecalcWithPanelIDs=NULL;
+static BOOL gXLGB64SwiftAppNavHooksInstalled=NO;
+static char kXLGB64SwiftReconcileAttemptsKey;
+
 static NSString *XLGB6LogPath(void) {
     NSString *documents=NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta63SwiftAppNavProbe.log"]
+            @"XLiquidGlass193Beta64SwiftAppNavFixProbe.log"]
         : nil;
 }
 
@@ -4130,7 +4136,7 @@ static BOOL XLGB63InterestingName(NSString *name) {
 }
 
 static void XLGB63DumpClassMetadata(Class cls, NSString *origin) {
-    for (Class cursor=cls; cursor; cursor=class_getSuperclass(cursor)) {
+    for (Class cursor=cls; cursor; cursor=nil) {
         NSString *className=NSStringFromClass(cursor) ?: @"?";
         XLGB6Log(@"SWIFT_CLASS origin=%@ class=%@ superclass=%@ ptr=%p",
                  origin ?: @"-",
@@ -4236,6 +4242,7 @@ static void XLGB63DumpSwiftAppNavigation(NSString *reason) {
         @"descriptors",
         @"tabDescriptors",
         @"availableTabs",
+        @"visiblePanelIDs",
         @"visibleTabs",
         @"visibleTabEntries",
         @"tabBar",
@@ -4283,8 +4290,6 @@ static void XLGB63DumpSwiftAppNavigation(NSString *reason) {
                      vcAppNavigation,
                      (vcAppNavigation && vcAppNavigation==appNavigation)
                         ? @"YES" : @"NO");
-
-            XLGB63DumpClassMetadata(vc.class,@"swift-view-controller");
 
             for (NSString *key in @[
                 @"tabBarContainer",
@@ -4764,6 +4769,218 @@ static void XLGB61InstallPanelPipelineHooks(void) {
 
 
 
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6.4 Swift appNavigation correction
+
+static id XLGB64SwiftVisiblePanelIDs(id self, SEL cmd) {
+    id original=nil;
+    if (gOrigXLGB64SwiftVisiblePanelIDs) {
+        original=((id(*)(id,SEL))gOrigXLGB64SwiftVisiblePanelIDs)(self,cmd);
+    }
+
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+    if (!XLGEnabled() || !desired.count) {
+        XLGB6Log(@"SWIFT_FIX visiblePanelIDs result=ORIGINAL original=%@ missing=%@",
+                 XLGB61DescribePanelValue(original),
+                 missing ?: @"-");
+        return original;
+    }
+
+    XLGB6Log(@"SWIFT_FIX visiblePanelIDs result=OVERRIDE original=%@ corrected=%@",
+             XLGB61DescribePanelValue(original),
+             XLGB61DescribePanelValue(desired));
+    return desired;
+}
+
+static void XLGB64SwiftRecalcWithPanelIDs(id self, SEL cmd, id panelIDs) {
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+    id forwarded=(XLGEnabled() && desired.count) ? desired : panelIDs;
+
+    XLGB6Log(@"SWIFT_FIX recalculateVisiblePanelsWithUpdatedPanelIDs input=%@ forwarded=%@ missing=%@ owner=%@ ptr=%p",
+             XLGB61DescribePanelValue(panelIDs),
+             XLGB61DescribePanelValue(forwarded),
+             missing ?: @"-",
+             NSStringFromClass([self class]) ?: @"?",
+             self);
+
+    if (gOrigXLGB64SwiftRecalcWithPanelIDs) {
+        ((void(*)(id,SEL,id))gOrigXLGB64SwiftRecalcWithPanelIDs)(
+            self,cmd,forwarded);
+    }
+
+    id after=nil;
+    SEL visibleSEL=NSSelectorFromString(@"visiblePanelIDs");
+    if ([self respondsToSelector:visibleSEL]) {
+        @try {
+            // This intentionally goes through our getter hook so the log also
+            // records the effective six-ID view exposed to callers.
+            after=((id(*)(id,SEL))objc_msgSend)(self,visibleSEL);
+        } @catch (__unused NSException *exception) {
+            after=nil;
+        }
+    }
+
+    XLGB6Log(@"SWIFT_FIX recalculateVisiblePanelsWithUpdatedPanelIDs afterVisible=%@",
+             XLGB61DescribePanelValue(after));
+    XLGB6ScheduleSnapshot(@"after-swift-appnav-recalc",0.08);
+}
+
+static void XLGB64InstallSwiftAppNavHooks(void) {
+    if (gXLGB64SwiftAppNavHooksInstalled) return;
+
+    Class cls=NSClassFromString(@"_TtC14T1TwitterSwift20XTabbedAppNavigation");
+    if (!cls) cls=NSClassFromString(@"T1TwitterSwift.XTabbedAppNavigation");
+    if (!cls) {
+        XLGB6Log(@"SWIFT_FIX_INSTALL class=XTabbedAppNavigation missing");
+        return;
+    }
+
+    BOOL any=NO;
+
+    SEL visibleSEL=NSSelectorFromString(@"visiblePanelIDs");
+    Method visibleMethod=class_getInstanceMethod(cls,visibleSEL);
+    if (visibleMethod &&
+        method_getNumberOfArguments(visibleMethod)==2 &&
+        method_getTypeEncoding(visibleMethod) &&
+        method_getTypeEncoding(visibleMethod)[0]=='@') {
+        BOOL ok=XLGHookMethod(
+            cls,visibleSEL,NO,
+            (IMP)XLGB64SwiftVisiblePanelIDs,
+            &gOrigXLGB64SwiftVisiblePanelIDs);
+        XLGB6Log(@"SWIFT_FIX_INSTALL selector=visiblePanelIDs ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    } else {
+        XLGB6Log(@"SWIFT_FIX_INSTALL selector=visiblePanelIDs skipped=signature");
+    }
+
+    SEL recalcSEL=NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:");
+    Method recalcMethod=class_getInstanceMethod(cls,recalcSEL);
+    if (recalcMethod &&
+        method_getNumberOfArguments(recalcMethod)==3) {
+        BOOL ok=XLGHookMethod(
+            cls,recalcSEL,NO,
+            (IMP)XLGB64SwiftRecalcWithPanelIDs,
+            &gOrigXLGB64SwiftRecalcWithPanelIDs);
+        XLGB6Log(@"SWIFT_FIX_INSTALL selector=recalculateVisiblePanelsWithUpdatedPanelIDs: ok=%@",
+                 ok ? @"YES" : @"NO");
+        any = any || ok;
+    } else {
+        XLGB6Log(@"SWIFT_FIX_INSTALL selector=recalculateVisiblePanelsWithUpdatedPanelIDs: skipped=signature");
+    }
+
+    gXLGB64SwiftAppNavHooksInstalled=any;
+}
+
+static void XLGB64ActiveSwiftAppNavReconcile(NSString *reason) {
+    if (!XLGEnabled()) return;
+
+    id appNavigation=XLGSidebarAppNavigation();
+    if (!appNavigation ||
+        ![appNavigation respondsToSelector:
+            NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:")]) {
+        XLGB6Log(@"SWIFT_ACTIVE_RECONCILE reason=%@ result=NO_APPNAV appNavigation=%@",
+                 reason ?: @"-",
+                 appNavigation ? NSStringFromClass([appNavigation class]) : @"nil");
+        return;
+    }
+
+    NSNumber *attemptValue=objc_getAssociatedObject(
+        appNavigation,&kXLGB64SwiftReconcileAttemptsKey);
+    NSInteger attempts=[attemptValue integerValue];
+    if (attempts>=3) {
+        XLGB6Log(@"SWIFT_ACTIVE_RECONCILE reason=%@ result=SKIP_MAX_ATTEMPTS attempts=%ld ptr=%p",
+                 reason ?: @"-",(long)attempts,appNavigation);
+        return;
+    }
+
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+    if (!desired.count) {
+        XLGB6Log(@"SWIFT_ACTIVE_RECONCILE reason=%@ result=NO_DESIRED_IDS missing=%@",
+                 reason ?: @"-",missing ?: @"-");
+        return;
+    }
+
+    id before=nil;
+    SEL visibleSEL=NSSelectorFromString(@"visiblePanelIDs");
+    if ([appNavigation respondsToSelector:visibleSEL]) {
+        @try {
+            before=((id(*)(id,SEL))objc_msgSend)(appNavigation,visibleSEL);
+        } @catch (__unused NSException *exception) {
+            before=nil;
+        }
+    }
+
+    XLGB6Log(@"SWIFT_ACTIVE_RECONCILE reason=%@ appNavigation=%@ ptr=%p attempt=%ld before=%@ desired=%@",
+             reason ?: @"-",
+             NSStringFromClass([appNavigation class]) ?: @"?",
+             appNavigation,
+             (long)(attempts+1),
+             XLGB61DescribePanelValue(before),
+             XLGB61DescribePanelValue(desired));
+
+    @try {
+        ((void(*)(id,SEL,id))objc_msgSend)(
+            appNavigation,
+            NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:"),
+            desired);
+
+        objc_setAssociatedObject(
+            appNavigation,
+            &kXLGB64SwiftReconcileAttemptsKey,
+            @(attempts+1),
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (NSException *exception) {
+        XLGB6Log(@"SWIFT_ACTIVE_RECONCILE reason=%@ result=EXCEPTION name=%@ detail=%@",
+                 reason ?: @"-",
+                 exception.name ?: @"-",
+                 exception.reason ?: @"-");
+        return;
+    }
+
+    id after=nil;
+    if ([appNavigation respondsToSelector:visibleSEL]) {
+        @try {
+            after=((id(*)(id,SEL))objc_msgSend)(appNavigation,visibleSEL);
+        } @catch (__unused NSException *exception) {
+            after=nil;
+        }
+    }
+
+    XLGB6Log(@"SWIFT_ACTIVE_RECONCILE reason=%@ result=CALLED after=%@",
+             reason ?: @"-",
+             XLGB61DescribePanelValue(after));
+
+    XLGB6ScheduleSnapshot(
+        [NSString stringWithFormat:@"swift-active-%@",reason ?: @"-"],
+        0.10);
+}
+
+static void XLGB64ScheduleSwiftReconcile(NSString *reason,
+                                         NSTimeInterval delay) {
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(delay*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            XLGB64ActiveSwiftAppNavReconcile(reason);
+        });
+}
+
+static void XLGB64InstallSwiftReconcileSchedule(void) {
+    static BOOL scheduled=NO;
+    if (scheduled) return;
+    scheduled=YES;
+
+    XLGB64ScheduleSwiftReconcile(@"startup-0.55",0.55);
+    XLGB64ScheduleSwiftReconcile(@"startup-1.10",1.10);
+    XLGB64ScheduleSwiftReconcile(@"startup-2.20",2.20);
+    XLGB64ScheduleSwiftReconcile(@"startup-3.50",3.50);
+}
+
+
 static UIViewController *XLGB62FindActiveNavigationController(void) {
     NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
     NSMutableSet<NSValue *> *visited=[NSMutableSet set];
@@ -4907,6 +5124,8 @@ static void XLGB62InstallActiveReconcileSchedule(void) {
 
 
 static void XLGB6InstallCorrectionHooks(void) {
+    XLGB64InstallSwiftAppNavHooks();
+    XLGB64InstallSwiftReconcileSchedule();
     XLGB61InstallPanelPipelineHooks();
     XLGB62InstallActiveReconcileSchedule();
 
@@ -4983,7 +5202,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.3 Tab Probe";
+    self.title=@"Beta 6.4 Tab Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -5024,7 +5243,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta63SwiftAppNavProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta64SwiftAppNavFixProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -5041,7 +5260,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.3 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.4 Tab Probe"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -5066,7 +5285,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.3 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.4 Tab Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -5087,7 +5306,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.3 Tab Probe"
+            alertControllerWithTitle:@"Beta 6.4 Tab Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -5110,8 +5329,8 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.3 Tab Probe",
-        @"subtitle": @"Probe do XTabbedAppNavigation + diagnóstico do Dock.",
+        @"title": @"Beta 6.4 Tab Probe",
+        @"subtitle": @"Correção no XTabbedAppNavigation + diagnóstico do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
     }];
@@ -8110,13 +8329,13 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.3 loaded: focused Swift XTabbedAppNavigation source probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.4 loaded: Swift XTabbedAppNavigation panel correction + focused probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.3 Swift AppNavigation Probe ==========");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.4 Swift AppNavigation Fix + Probe ==========");
         XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
                  XLGEnabled() ? @"ON" : @"OFF",
                  [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
