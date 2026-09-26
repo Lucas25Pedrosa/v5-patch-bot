@@ -1310,6 +1310,109 @@ static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
     return matches.firstObject;
 }
 
+
+static UIColor *XLGNativeInactiveTabColor(void) {
+    Class tabViewClass=NSClassFromString(@"T1TabView");
+    SEL itemColorSEL=NSSelectorFromString(@"itemColor");
+    if (tabViewClass && [tabViewClass respondsToSelector:itemColorSEL]) {
+        id color=((id(*)(id,SEL))objc_msgSend)(tabViewClass,itemColorSEL);
+        if ([color isKindOfClass:UIColor.class]) return color;
+    }
+    return UIColor.secondaryLabelColor;
+}
+
+static NSArray<UIView *> *XLGXNavigationTabItems(UIView *bar) {
+    NSArray<UIView *> *items=
+        XLGCollectViewsMatching(bar,^BOOL(UIView *view) {
+            NSString *name=NSStringFromClass(view.class);
+            return [name isEqualToString:@"XNavigation.TabBarItemView"] ||
+                   [name containsString:@"TabBarItemView"];
+        });
+
+    return [items sortedArrayUsingComparator:^NSComparisonResult(UIView *a,UIView *b) {
+        CGFloat ax=CGRectGetMidX([a convertRect:a.bounds toView:bar]);
+        CGFloat bx=CGRectGetMidX([b convertRect:b.bounds toView:bar]);
+        if (ax<bx) return NSOrderedAscending;
+        if (ax>bx) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+}
+
+static BOOL XLGXNavigationItemLooksSelected(UIView *item,
+                                            UIView *bar,
+                                            UIView *chrome) {
+    if (!item || !bar) return NO;
+
+    if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) {
+        return YES;
+    }
+
+    if ([item isKindOfClass:UIControl.class]) {
+        UIControl *control=(UIControl *)item;
+        if (control.selected || control.highlighted) return YES;
+    }
+
+    if (chrome && !chrome.hidden && chrome.alpha>0.01) {
+        CGRect itemFrame=[item convertRect:item.bounds toView:bar];
+        CGRect chromeFrame=[chrome convertRect:chrome.bounds toView:bar];
+        CGRect intersection=CGRectIntersection(itemFrame,chromeFrame);
+        if (!CGRectIsNull(intersection) && !CGRectIsEmpty(intersection)) {
+            CGFloat itemArea=MAX(1.0,itemFrame.size.width*itemFrame.size.height);
+            CGFloat overlap=intersection.size.width*intersection.size.height;
+            if ((overlap/itemArea)>0.20) return YES;
+        }
+    }
+
+    return NO;
+}
+
+static void XLGApplyActiveOnlyToXNavigationTabBar(UIView *bar,
+                                                   UIColor *accent) {
+    if (!bar || !accent) return;
+
+    UIView *chrome=XLGFindLiquidSelectionChrome(bar);
+    UIColor *inactive=XLGNativeInactiveTabColor();
+    NSArray<UIView *> *items=XLGXNavigationTabItems(bar);
+
+    for (UIView *item in items) {
+        BOOL selected=XLGXNavigationItemLooksSelected(item,bar,chrome);
+        UIColor *color=selected ? accent : inactive;
+
+        XLGTintImageViews(item,color,NO);
+        item.tintColor=color;
+
+        for (UIView *subview in item.subviews ?: @[]) {
+            if ([subview isKindOfClass:UILabel.class]) {
+                ((UILabel *)subview).textColor=color;
+            }
+        }
+    }
+}
+
+static void XLGRefreshXNavigationColorModeNow(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                if (!window || window.hidden) continue;
+
+                NSArray<UIView *> *bars=
+                    XLGCollectViewsMatching(window,^BOOL(UIView *view) {
+                        NSString *name=NSStringFromClass(view.class);
+                        return [name isEqualToString:@"XNavigation.TabBarView"] ||
+                               [name isEqualToString:@"_TtC11XNavigation10TabBarView"];
+                    });
+
+                for (UIView *bar in bars) {
+                    [bar setNeedsLayout];
+                    [bar layoutIfNeeded];
+                }
+            }
+        }
+    });
+}
+
 static BOOL XLGViewLooksSelected(UIView *button, UITabBar *tabBar, NSUInteger index) {
     if ([button isKindOfClass:UIControl.class]) {
         UIControl *control=(UIControl *)button;
@@ -1529,8 +1632,10 @@ static void XLGSyncLiquidGlassLabels(UITabBar *tabBar,
 }
 
 static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
-    if (!controller || !XLGEnabled()) return;
-    if (!XLGThemeColorEnabled()) return;
+    if (!controller || !XLGEnabled() || !gXLGAllowTabColorHook) return;
+
+    XLGTabBarColorMode mode=XLGTabBarColorModeValue();
+    if (mode == XLGTabBarColorModeNative) return;
     if (![controller isKindOfClass:UIViewController.class]) return;
 
     UIViewController *vc=(UIViewController *)controller;
@@ -1554,7 +1659,10 @@ static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
     for (NSUInteger i=0;i<count;i++) {
         UIView *button=buttons[i];
         BOOL selected=XLGViewLooksSelected(button,tabBar,i);
-        UIColor *color=selected ? accent : secondary;
+        UIColor *color=
+            (mode == XLGTabBarColorModeAllTabs)
+                ? accent
+                : (selected ? accent : secondary);
 
         NSString *title=button.accessibilityLabel;
         if (i<tabBar.items.count) {
@@ -1568,8 +1676,10 @@ static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
         if (profile) XLGStripAvatarCircleStyling(button);
     }
 
-    UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
-    XLGApplySelectionChrome(chrome,accent);
+    if (mode == XLGTabBarColorModeAllTabs) {
+        UIView *chrome=XLGFindLiquidSelectionChrome(tabBar);
+        XLGApplySelectionChrome(chrome,accent);
+    }
 
     XLGSyncLiquidGlassLabels(tabBar,buttons,accent);
 
@@ -1583,8 +1693,11 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
         ((void(*)(id,SEL))gOrigXLGNavigationTabBarViewLayoutSubviews)(self,cmd);
     }
 
-    if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
-    if (!XLGThemeColorEnabled()) return;
+    if (!XLGEnabled() || !gXLGAllowTabColorHook ||
+        ![self isKindOfClass:UIView.class]) return;
+
+    XLGTabBarColorMode mode=XLGTabBarColorModeValue();
+    if (mode == XLGTabBarColorModeNative) return;
 
     UIView *view=(UIView *)self;
     UIViewController *controller=nil;
@@ -1596,10 +1709,16 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
         }
     }
 
-    // Use the X/NFB theme primary color here too. In original 1.5.0 this
-    // path read UIView.tintColor directly, which is why the glass was blue.
+    // Use the X/NFB primary theme color instead of UIView.tintColor.
     UIColor *accent=XLGResolvedAccentColor(controller,nil);
 
+    if (mode == XLGTabBarColorModeActiveOnly) {
+        XLGApplyActiveOnlyToXNavigationTabBar(view,accent);
+        return;
+    }
+
+    // All Tabs: preserve the exact 1.5.0 visual pipeline that was already
+    // runtime-validated, including the Liquid Glass selection chrome.
     XLGTintImageViews(view,accent,NO);
     UIView *chrome=XLGFindLiquidSelectionChrome(view);
     XLGApplySelectionChrome(chrome,accent);
@@ -1793,9 +1912,9 @@ static void XLGInstallHooks(void) {
     XLGInstallSidebarFix();
     XLGInstallLiquidGlassBadgeFixes();
 
-    // 1:1 with the 1.4.0 no-color path: when disabled, do not install
-    // the XNavigation visual hook introduced in 1.5.0 at all.
-    if (XLGThemeColorEnabled()) {
+    // Native mode is a true 1.4.0-style startup path: the XNavigation
+    // color hook introduced in 1.5.0 is not installed at all.
+    if (gXLGAllowTabColorHook) {
         XLGInstallXNavigationVisualFix();
     }
 
@@ -1815,7 +1934,10 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.5.0 Native-Off Toggle Test loaded: 1.4.0 no-color path vs 1.5.0 themed path");
+        gXLGAllowTabColorHook =
+            (XLGTabBarColorModeValue() != XLGTabBarColorModeNative);
+
+        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test loaded: Native / Active Only / All Tabs");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
