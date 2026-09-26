@@ -7,6 +7,7 @@
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
 static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
+static NSString *const kXLGThemeColorEnabledKey = @"XLiquidGlassThemeColorEnabled";
 
 static IMP gOrigInstallGate = NULL;
 static IMP gOrigInstallGateForAccount = NULL;
@@ -32,6 +33,12 @@ static BOOL XLGTabLabelsEnabled(void) {
     NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
     id stored=[defaults objectForKey:kXLGTabLabelsKey];
     return stored ? [stored boolValue] : NO;
+}
+
+static BOOL XLGThemeColorEnabled(void) {
+    NSUserDefaults *defaults=[NSUserDefaults standardUserDefaults];
+    id stored=[defaults objectForKey:kXLGThemeColorEnabledKey];
+    return stored ? [stored boolValue] : YES;
 }
 
 static BOOL XLGHookMethod(Class cls,
@@ -146,7 +153,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -177,6 +184,13 @@ static void XLGSyncCompatibilityGate(void) {
         [toggle addTarget:self
                    action:@selector(xlgLiquidGlassToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
+    } else if (indexPath.row == 1) {
+        cell.textLabel.text = @"Cor do tema na Tab Bar";
+        cell.detailTextLabel.text = @"Desligado usa o visual nativo sem tintura.";
+        toggle.on = XLGThemeColorEnabled();
+        [toggle addTarget:self
+                   action:@selector(xlgThemeColorToggleChanged:)
+         forControlEvents:UIControlEventValueChanged];
     } else {
         cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
         cell.detailTextLabel.text = @"Exibe os nomes das abas no modo Liquid Glass.";
@@ -199,6 +213,21 @@ static void XLGSyncCompatibilityGate(void) {
                                             message:@"Reinicie o X para aplicar completamente a alteração."
                                      preferredStyle:UIAlertControllerStyleAlert];
 
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                             style:UIAlertActionStyleDefault
+                                           handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)xlgThemeColorToggleChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults]
+        setBool:sender.isOn
+         forKey:kXLGThemeColorEnabledKey];
+
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"Cor da Tab Bar"
+                                            message:@"Reinicie o X para aplicar completamente esta alteração."
+                                     preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK"
                                              style:UIAlertActionStyleDefault
                                            handler:nil]];
@@ -1400,6 +1429,7 @@ static void XLGSyncLiquidGlassLabels(UITabBar *tabBar,
 
 static void XLGApplyLiquidGlassTabBarVisualFixes(id controller) {
     if (!controller || !XLGEnabled()) return;
+    if (!XLGThemeColorEnabled()) return;
     if (![controller isKindOfClass:UIViewController.class]) return;
 
     UIViewController *vc=(UIViewController *)controller;
@@ -1453,6 +1483,7 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
     }
 
     if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
+    if (!XLGThemeColorEnabled()) return;
 
     UIView *view=(UIView *)self;
     UIViewController *controller=nil;
@@ -1660,7 +1691,13 @@ static void XLGInstallHooks(void) {
     XLGSyncCompatibilityGate();
     XLGInstallSidebarFix();
     XLGInstallLiquidGlassBadgeFixes();
-    XLGInstallXNavigationVisualFix();
+
+    // 1:1 with the 1.4.0 no-color path: when disabled, do not install
+    // the XNavigation visual hook introduced in 1.5.0 at all.
+    if (XLGThemeColorEnabled()) {
+        XLGInstallXNavigationVisualFix();
+    }
+
     XLGInstallNFBSettingsIntegration();
 }
 
@@ -1677,7 +1714,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.5.0 Theme Accent Fix Test loaded: original visual pipeline + X/NFB primary color");
+        NSLog(@"[XLiquidGlass] 1.5.0 Native-Off Toggle Test loaded: 1.4.0 no-color path vs 1.5.0 themed path");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
