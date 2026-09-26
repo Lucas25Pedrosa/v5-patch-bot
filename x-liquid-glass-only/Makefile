@@ -5,7 +5,7 @@ INSTALL_TARGET_PROCESSES := Twitter
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := XLiquidGlass
-XLiquidGlass_FILES := XLiquidGlass.m
+XLiquidGlass_FILES := XLiquidGlass.m XLiquidGlass21Beta1.m
 XLiquidGlass_FRAMEWORKS := Foundation UIKit
 XLiquidGlass_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 
