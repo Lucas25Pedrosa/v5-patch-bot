@@ -3718,12 +3718,21 @@ static IMP gOrigXLGB64SwiftRecalcWithPanelIDs=NULL;
 static BOOL gXLGB64SwiftAppNavHooksInstalled=NO;
 static char kXLGB64SwiftReconcileAttemptsKey;
 
+
+// Beta 6.7: reconnect NFB's list only when X performs its own native
+// recalculate calls. These counters survive "Limpar relatório".
+static NSUInteger gXLGB67NativeRecalcWithIDsCount=0;
+static NSUInteger gXLGB67NativeRecalcCount=0;
+static NSString *gXLGB67LastInputDescription=nil;
+static NSString *gXLGB67LastForwardedDescription=nil;
+static NSString *gXLGB67LastAfterDescription=nil;
+
 static NSString *XLGB6LogPath(void) {
     NSString *documents=NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta66PreViewNativePanelBridge.log"]
+            @"XLiquidGlass193Beta67NativeRecalcConnection.log"]
         : nil;
 }
 
@@ -4329,6 +4338,13 @@ static void XLGB6ProbeSnapshot(NSString *reason) {
     XLGB6Log(@"STATE liquidGlass=%@ bh_tabs_visible=%@",
              XLGEnabled() ? @"ON" : @"OFF",
              desired.count ? [desired componentsJoinedByString:@","] : @"nil");
+
+    XLGB6Log(@"NATIVE_CONNECTION_SUMMARY withIDsCalls=%lu noArgCalls=%lu lastInput=%@ lastForwarded=%@ lastAfter=%@",
+             (unsigned long)gXLGB67NativeRecalcWithIDsCount,
+             (unsigned long)gXLGB67NativeRecalcCount,
+             gXLGB67LastInputDescription ?: @"-",
+             gXLGB67LastForwardedDescription ?: @"-",
+             gXLGB67LastAfterDescription ?: @"-");
 
     XLGB63DumpSwiftAppNavigation(reason);
 
@@ -5429,25 +5445,45 @@ static void XLGB66ObserveSwiftRecalcWithIDs(
     SEL cmd,
     id panelIDs) {
 
-    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanelsWithUpdatedPanelIDs: owner=%@ ptr=%p input=%@",
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+    id forwarded=(XLGEnabled() && desired.count) ? desired : panelIDs;
+
+    gXLGB67NativeRecalcWithIDsCount++;
+    gXLGB67LastInputDescription=
+        [XLGB61DescribePanelValue(panelIDs) copy];
+    gXLGB67LastForwardedDescription=
+        [XLGB61DescribePanelValue(forwarded) copy];
+
+    XLGB6Log(@"NATIVE_CONNECTION selector=recalculateVisiblePanelsWithUpdatedPanelIDs: call=%lu owner=%@ ptr=%p input=%@ forwarded=%@ missing=%@",
+             (unsigned long)gXLGB67NativeRecalcWithIDsCount,
              NSStringFromClass([self class]) ?: @"?",
              self,
-             XLGB61DescribePanelValue(panelIDs));
+             gXLGB67LastInputDescription ?: @"-",
+             gXLGB67LastForwardedDescription ?: @"-",
+             missing ?: @"-");
 
     if (gOrigXLGB66SwiftRecalcWithIDs) {
         ((void(*)(id,SEL,id))gOrigXLGB66SwiftRecalcWithIDs)(
-            self,cmd,panelIDs);
+            self,cmd,forwarded);
     }
 
-    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanelsWithUpdatedPanelIDs: after=%@",
-             XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)));
+    gXLGB67LastAfterDescription=
+        [XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)) copy];
+
+    XLGB6Log(@"NATIVE_CONNECTION selector=recalculateVisiblePanelsWithUpdatedPanelIDs: call=%lu after=%@",
+             (unsigned long)gXLGB67NativeRecalcWithIDsCount,
+             gXLGB67LastAfterDescription ?: @"-");
 }
 
 static void XLGB66ObserveSwiftRecalc(
     id self,
     SEL cmd) {
 
-    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanels owner=%@ ptr=%p before=%@",
+    gXLGB67NativeRecalcCount++;
+
+    XLGB6Log(@"NATIVE_CONNECTION selector=recalculateVisiblePanels call=%lu owner=%@ ptr=%p before=%@",
+             (unsigned long)gXLGB67NativeRecalcCount,
              NSStringFromClass([self class]) ?: @"?",
              self,
              XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)));
@@ -5456,7 +5492,8 @@ static void XLGB66ObserveSwiftRecalc(
         ((void(*)(id,SEL))gOrigXLGB66SwiftRecalc)(self,cmd);
     }
 
-    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanels after=%@",
+    XLGB6Log(@"NATIVE_CONNECTION selector=recalculateVisiblePanels call=%lu after=%@",
+             (unsigned long)gXLGB67NativeRecalcCount,
              XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)));
 }
 
@@ -5464,9 +5501,9 @@ static void XLGB66XTabbedViewDidLoad(id self, SEL cmd) {
     id beforeAppNavigation=XLGB6ObjectBySelector(self,@"appNavigation");
     XLGB66LogState(@"before-viewDidLoad",self,beforeAppNavigation);
 
-    // Feed NFB's already-proven six PanelIDs into the Swift app-navigation
-    // before the XNavigation view hierarchy is materialized.
-    XLGB66ApplyBridge(self,@"before-viewDidLoad");
+    // Beta 6.7 does not call recalculate manually. The connection is applied
+    // only if X itself invokes its native recalculate-with-IDs pipeline.
+    XLGB6Log(@"NATIVE_CONNECTION phase=before-viewDidLoad mode=PASSIVE_UNTIL_NATIVE_RECALC");
 
     if (gOrigXLGB66XTabbedViewDidLoad) {
         ((void(*)(id,SEL))gOrigXLGB66XTabbedViewDidLoad)(self,cmd);
@@ -5936,8 +5973,8 @@ static void XLGB6InstallCorrectionHooks(void) {
     XLGB65InstallNativeConnectionBridge();
     XLGB65ScheduleNativeRebuild();
 
-    // Beta 6.6: bridge NFB's six PanelIDs before the Swift LG view builds
-    // XNavigation.TabBarController. Native recalc hooks are observation-only.
+    // Beta 6.7: do not force a late/pre-view recalc. Intercept only X's own
+    // native recalculate-with-IDs calls and reconnect them to NFB's six IDs.
     XLGB66InstallPreViewBridge();
 }
 
@@ -5956,7 +5993,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.6 Tab Bridge";
+    self.title=@"Beta 6.7 Native Connection";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -5975,7 +6012,7 @@ static void XLGB6InstallCorrectionHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"A ponte entrega os PanelIDs do NFB ao XTabbedAppNavigation antes do viewDidLoad do Liquid Glass. O relatório registra o estado antes e depois da criação do Dock.";
+    return @"A ponte não chama recalculate manualmente. Ela substitui a lista somente quando o próprio X executa o recálculo nativo do Liquid Glass e mantém um resumo em memória mesmo após limpar o relatório.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -5997,7 +6034,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta66PreViewNativePanelBridge.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta67NativeRecalcConnection.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -6014,7 +6051,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.6 Tab Bridge"
+                alertControllerWithTitle:@"Beta 6.7 Native Connection"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -6039,7 +6076,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.6 Tab Bridge"
+                alertControllerWithTitle:@"Beta 6.7 Native Connection"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -6060,7 +6097,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.6 Tab Bridge"
+            alertControllerWithTitle:@"Beta 6.7 Native Connection"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -6083,7 +6120,7 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.6 Tab Bridge",
+        @"title": @"Beta 6.7 Native Connection",
         @"subtitle": @"Diagnóstico read-only da fonte nativa do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
@@ -9083,7 +9120,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.6 loaded: pre-view native PanelID bridge + source probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.7 loaded: native recalc connection + persistent probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
