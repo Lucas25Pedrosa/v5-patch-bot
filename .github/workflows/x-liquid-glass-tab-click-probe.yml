@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Tab Click Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-tab-click-probe/**"
+      - ".github/workflows/x-liquid-glass-tab-click-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-tab-click-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassTabClickProbe.dylib ! -path '*/XLiquidGlassTabClickProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassTabClickProbe.dylib
+          file artifacts/XLiquidGlassTabClickProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassTabClickProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassTabClickProbe-0.1.0-X12.28.1-arm64
+          path: x-liquid-glass-tab-click-probe/artifacts/
+          if-no-files-found: error
