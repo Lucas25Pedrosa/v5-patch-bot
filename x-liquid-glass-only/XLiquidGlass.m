@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2
+#pragma mark - XLiquidGlass 1.9.3 Beta 6
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -81,6 +81,11 @@ static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
 static BOOL gAppearanceSettingsHooked = NO;
+
+static IMP gOrigMainAppTabDataSourceSetTabContent = NULL;
+static BOOL gMainAppTabDataSourceHooked = NO;
+static char kXLGBHTabBridgeScheduledKey;
+static char kXLGBHTabBridgeAppliedSignatureKey;
 
 static IMP gOrigToastBridgeToasterInit = NULL;
 static IMP gOrigToastBridgeRegisterVC = NULL;
@@ -618,6 +623,364 @@ static UINavigationController *XLGNavigationControllerForPresenter(
     return presenter.navigationController;
 }
 
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6 BH/NeoFreeBird Tab Bridge
+
+static NSArray<NSString *> *XLGBHTabBridgeVisiblePages(void) {
+    id raw=[[NSUserDefaults standardUserDefaults]
+        objectForKey:@"bh_tabs_visible"];
+    if (![raw isKindOfClass:NSArray.class]) return nil;
+
+    NSMutableArray<NSString *> *pages=[NSMutableArray array];
+    for (id value in (NSArray *)raw) {
+        if (![value isKindOfClass:NSString.class]) continue;
+        NSString *page=[(NSString *)value lowercaseString];
+        if (!page.length || [pages containsObject:page]) continue;
+        [pages addObject:page];
+    }
+
+    // The native Liquid Glass dock is useful only with at least two entries.
+    return pages.count>=2 ? [pages copy] : nil;
+}
+
+static NSString *XLGBHTabBridgePageForEntry(id entry) {
+    if (!entry) return nil;
+
+    NSString *className=
+        NSStringFromClass([entry class]).lowercaseString ?: @"";
+
+    if ([className containsString:@"hometimelineappnavigationtabentry"]) {
+        return @"home";
+    }
+    if ([className containsString:@"guideappnavigationtabentry"]) {
+        return @"guide";
+    }
+    if ([className containsString:@"grokappnavigationtabentry"]) {
+        return @"grok";
+    }
+    if ([className containsString:@"communitiesappnavigationtabentry"]) {
+        return @"communities";
+    }
+    if ([className containsString:@"notificationsappnavigationtabentry"]) {
+        return @"ntab";
+    }
+    if ([className containsString:@"xchatappnavigationtabentry"]) {
+        return @"messages";
+    }
+    if ([className containsString:@"profileappnavigationtabentry"]) {
+        return @"profile";
+    }
+    if ([className containsString:@"newsappnavigationtabentry"]) {
+        return @"news";
+    }
+    if ([className containsString:@"listsappnavigationtabentry"]) {
+        return @"lists";
+    }
+    if ([className containsString:@"bookmarksappnavigationtabentry"]) {
+        return @"bookmarks";
+    }
+    if ([className containsString:@"premiumhubappnavigationtabentry"]) {
+        return @"premium";
+    }
+    if ([className containsString:@"jobsappnavigationtabentry"]) {
+        return @"jobs";
+    }
+    if ([className containsString:@"paymentsappnavigationtabentry"]) {
+        return @"payments";
+    }
+    if ([className containsString:@"birdwatchappnavigationtabentry"]) {
+        return @"birdwatch";
+    }
+    if ([className containsString:@"connectappnavigationtabentry"]) {
+        return @"connect";
+    }
+    if ([className containsString:@"voiceappnavigationtabentry"]) {
+        return @"voice";
+    }
+    if ([className containsString:@"activityhistoryappnavigationtabentry"]) {
+        return @"activity";
+    }
+    if ([className containsString:@"offlinecacheappnavigationtabentry"]) {
+        return @"offline";
+    }
+
+    // Fallbacks for wrappers/proxies whose class name does not expose the page.
+    for (NSString *key in @[@"identifier",@"displayName",@"tabDisplayName",@"title"]) {
+        id value=XLGSafeValueForKey(entry,key);
+        if (![value isKindOfClass:NSString.class]) continue;
+        NSString *text=[(NSString *)value lowercaseString];
+
+        if ([text isEqualToString:@"home"] ||
+            [text containsString:@"início"] ||
+            [text containsString:@"inicio"]) return @"home";
+        if ([text isEqualToString:@"guide"] ||
+            [text containsString:@"explorar"] ||
+            [text containsString:@"search"]) return @"guide";
+        if ([text containsString:@"grok"]) return @"grok";
+        if ([text containsString:@"comunidade"] ||
+            [text containsString:@"communit"]) return @"communities";
+        if ([text containsString:@"notifica"] ||
+            [text containsString:@"notification"]) return @"ntab";
+        if ([text containsString:@"mensag"] ||
+            [text containsString:@"message"] ||
+            [text containsString:@"bate-papo"] ||
+            [text containsString:@"chat"]) return @"messages";
+        if ([text containsString:@"perfil"] ||
+            [text containsString:@"profile"]) return @"profile";
+        if ([text isEqualToString:@"news"] ||
+            [text containsString:@"notícias"] ||
+            [text containsString:@"noticias"]) return @"news";
+    }
+
+    return nil;
+}
+
+static id XLGBHTabBridgeValueBySelector(id object,
+                                        NSString *selectorName) {
+    if (!object || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) return nil;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method || method_getNumberOfArguments(method)!=2) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void XLGBHTabBridgeAddEntriesFromValue(
+    id value,
+    NSMutableArray *pool) {
+
+    if (!value || !pool) return;
+
+    if ([value isKindOfClass:NSArray.class]) {
+        for (id entry in (NSArray *)value) {
+            if (entry && ![pool containsObject:entry]) {
+                [pool addObject:entry];
+            }
+        }
+        return;
+    }
+
+    if ([value isKindOfClass:NSDictionary.class]) {
+        for (id entry in [(NSDictionary *)value allValues]) {
+            if (entry && ![pool containsObject:entry]) {
+                [pool addObject:entry];
+            }
+        }
+        return;
+    }
+
+    if ([value isKindOfClass:NSSet.class]) {
+        for (id entry in (NSSet *)value) {
+            if (entry && ![pool containsObject:entry]) {
+                [pool addObject:entry];
+            }
+        }
+    }
+}
+
+static NSArray *XLGBHTabBridgeOrderedContent(
+    id dataSource,
+    NSArray *currentContent) {
+
+    if (!XLGEnabled()) return currentContent;
+
+    NSArray<NSString *> *visible=XLGBHTabBridgeVisiblePages();
+    if (!visible.count) return currentContent;
+
+    NSMutableArray *pool=[NSMutableArray array];
+    XLGBHTabBridgeAddEntriesFromValue(currentContent,pool);
+
+    // MainAppTabDataSource keeps a dictionary containing all available native
+    // entries. Prefer the public ObjC bridge if present; fall back to KVC only
+    // inside an exception boundary.
+    id allEntries=
+        XLGBHTabBridgeValueBySelector(dataSource,@"tabContentByIdentifier");
+    XLGBHTabBridgeAddEntriesFromValue(allEntries,pool);
+
+    if (!allEntries) {
+        @try {
+            allEntries=[dataSource valueForKey:@"tabContentByIdentifier"];
+        } @catch (__unused NSException *exception) {
+            allEntries=nil;
+        }
+        XLGBHTabBridgeAddEntriesFromValue(allEntries,pool);
+    }
+
+    NSMutableDictionary<NSString *,id> *byPage=
+        [NSMutableDictionary dictionary];
+
+    for (id entry in pool) {
+        NSString *page=XLGBHTabBridgePageForEntry(entry);
+        if (page.length && !byPage[page]) {
+            byPage[page]=entry;
+        }
+    }
+
+    NSMutableArray *ordered=
+        [NSMutableArray arrayWithCapacity:visible.count];
+
+    for (NSString *page in visible) {
+        id entry=byPage[page];
+        if (!entry) {
+            // Never replace the native array with a partial configuration.
+            return currentContent;
+        }
+        [ordered addObject:entry];
+    }
+
+    return ordered.count==visible.count ? [ordered copy] : currentContent;
+}
+
+static NSString *XLGBHTabBridgeSignature(NSArray *content) {
+    if (![content isKindOfClass:NSArray.class]) return @"";
+
+    NSMutableArray<NSString *> *parts=[NSMutableArray array];
+    for (id entry in content) {
+        NSString *page=XLGBHTabBridgePageForEntry(entry);
+        [parts addObject:page.length ? page :
+            (NSStringFromClass([entry class]) ?: @"?")];
+    }
+    return [parts componentsJoinedByString:@","];
+}
+
+static void XLGBHTabBridgeReconcile(id dataSource) {
+    if (!XLGEnabled() ||
+        !dataSource ||
+        !gOrigMainAppTabDataSourceSetTabContent) {
+        return;
+    }
+
+    id current=
+        XLGBHTabBridgeValueBySelector(dataSource,@"tabContent");
+    if (![current isKindOfClass:NSArray.class]) {
+        @try {
+            current=[dataSource valueForKey:@"tabContent"];
+        } @catch (__unused NSException *exception) {
+            current=nil;
+        }
+    }
+    if (![current isKindOfClass:NSArray.class]) return;
+
+    NSArray *ordered=
+        XLGBHTabBridgeOrderedContent(dataSource,(NSArray *)current);
+    if (ordered==current ||
+        [ordered isEqualToArray:(NSArray *)current]) {
+        return;
+    }
+
+    NSString *signature=XLGBHTabBridgeSignature(ordered);
+    NSString *last=
+        objc_getAssociatedObject(
+            dataSource,&kXLGBHTabBridgeAppliedSignatureKey);
+    if (signature.length && [last isEqualToString:signature]) return;
+
+    if (signature.length) {
+        objc_setAssociatedObject(
+            dataSource,
+            &kXLGBHTabBridgeAppliedSignatureKey,
+            signature,
+            OBJC_ASSOCIATION_COPY_NONATOMIC);
+    }
+
+    ((void(*)(id,SEL,id))
+        gOrigMainAppTabDataSourceSetTabContent)(
+            dataSource,
+            NSSelectorFromString(@"setTabContent:"),
+            ordered);
+}
+
+static void XLGBHTabBridgeScheduleReconcile(id dataSource) {
+    if (!dataSource || !XLGEnabled()) return;
+
+    NSNumber *scheduled=
+        objc_getAssociatedObject(
+            dataSource,&kXLGBHTabBridgeScheduledKey);
+    if (scheduled.boolValue) return;
+
+    objc_setAssociatedObject(
+        dataSource,
+        &kXLGBHTabBridgeScheduledKey,
+        @YES,
+        OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    __weak id weakDataSource=dataSource;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(0.12*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            id strongDataSource=weakDataSource;
+            if (!strongDataSource) return;
+
+            objc_setAssociatedObject(
+                strongDataSource,
+                &kXLGBHTabBridgeScheduledKey,
+                nil,
+                OBJC_ASSOCIATION_ASSIGN);
+
+            XLGBHTabBridgeReconcile(strongDataSource);
+        });
+}
+
+static void XLGBHTabBridgeSetTabContent(
+    id self, SEL cmd, id content) {
+
+    id forwarded=content;
+
+    if (XLGEnabled() &&
+        [content isKindOfClass:NSArray.class]) {
+        NSArray *ordered=
+            XLGBHTabBridgeOrderedContent(
+                self,(NSArray *)content);
+        if ([ordered isKindOfClass:NSArray.class]) {
+            forwarded=ordered;
+        }
+    }
+
+    if (gOrigMainAppTabDataSourceSetTabContent) {
+        ((void(*)(id,SEL,id))
+            gOrigMainAppTabDataSourceSetTabContent)(
+                self,cmd,forwarded);
+    }
+
+    // The all-entry dictionary is sometimes populated immediately after the
+    // first setTabContent:. Reconcile once after that initialization finishes.
+    XLGBHTabBridgeScheduleReconcile(self);
+}
+
+static void XLGInstallBHTabBridge(void) {
+    if (gMainAppTabDataSourceHooked) return;
+
+    Class cls=NSClassFromString(@"T1MainAppTabDataSource");
+    if (!cls) {
+        cls=NSClassFromString(
+            @"T1TwitterSwift.MainAppTabDataSource");
+    }
+    if (!cls) return;
+
+    SEL setter=NSSelectorFromString(@"setTabContent:");
+    if (![cls instancesRespondToSelector:setter]) return;
+
+    gMainAppTabDataSourceHooked=
+        XLGHookMethod(
+            cls,
+            setter,
+            NO,
+            (IMP)XLGBHTabBridgeSetTabContent,
+            &gOrigMainAppTabDataSourceSetTabContent);
+}
 
 #pragma mark - XLiquidGlass 1.9.2 native toast bridge
 
@@ -6604,6 +6967,7 @@ static void XLGInstallHooks(void) {
     }
 
     XLGSyncCompatibilityGate();
+    XLGInstallBHTabBridge();
     // Beta 21: do not install our extra UIScreenEdgePanGestureRecognizer.
     // X 12.28.1 already owns a UIPanGestureRecognizer on T1Window; Beta 20
     // proved both were recognizing the same left-edge swipe simultaneously.
@@ -6631,7 +6995,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6 loaded: BH/NeoFreeBird native Tab bridge + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
