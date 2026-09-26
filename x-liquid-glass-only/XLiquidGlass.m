@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2
+#pragma mark - XLiquidGlass 1.9.3 Beta 1
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -34,6 +34,9 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static id XLGSafeValueForKey(id object, NSString *key);
+static NSString *XLGTabBarProbeLogPath(void);
+static void XLGTabBarProbeSnapshot(NSString *reason, BOOL force);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -81,6 +84,14 @@ static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
 static BOOL gAppearanceSettingsHooked = NO;
+
+static IMP gOrigTabBarProbeBarLayout = NULL;
+static IMP gOrigTabBarProbeCustomizeViewDidAppear = NULL;
+static IMP gOrigTabBarProbeCustomizeViewWillDisappear = NULL;
+static id gXLGTabBarProbeDefaultsObserver = nil;
+static BOOL gXLGTabBarProbeLogInitialized = NO;
+static NSMutableSet<NSString *> *gXLGTabBarProbeDumpedClasses = nil;
+static NSString *gXLGTabBarProbeLastSignature = nil;
 
 static IMP gOrigToastBridgeToasterInit = NULL;
 static IMP gOrigToastBridgeRegisterVC = NULL;
@@ -220,7 +231,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return 2;
+    return 3;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -243,6 +254,15 @@ static void XLGSyncCompatibilityGate(void) {
     cell.accessoryView=nil;
     cell.accessoryType=UITableViewCellAccessoryNone;
     cell.selectionStyle=UITableViewCellSelectionStyleNone;
+
+    if (indexPath.row == 2) {
+        cell.textLabel.text = @"Copiar relatório do Dock";
+        cell.detailTextLabel.text =
+            @"Copia a ordem, os identificadores e a estrutura da Tab Bar.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
 
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
@@ -285,6 +305,37 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 2) return;
+
+    XLGTabBarProbeSnapshot(@"settings-copy", YES);
+
+    NSString *path=XLGTabBarProbeLogPath();
+    NSData *data=path.length ? [NSData dataWithContentsOfFile:path] : nil;
+    NSString *report=data.length
+        ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+        : @"";
+
+    if (report.length) {
+        UIPasteboard.generalPasteboard.string=report;
+    }
+
+    UIAlertController *alert=
+        [UIAlertController
+            alertControllerWithTitle:@"Relatório do Dock"
+                             message:report.length
+                                ? @"Relatório copiado para a área de transferência."
+                                : @"Ainda não há dados do Dock registrados."
+                      preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
@@ -618,6 +669,605 @@ static UINavigationController *XLGNavigationControllerForPresenter(
     return presenter.navigationController;
 }
 
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 1 Tab Bar Probe
+
+static NSString *XLGTabBarProbeLogPath(void) {
+    NSString *documents=
+        NSSearchPathForDirectoriesInDomains(
+            NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    if (!documents.length) return nil;
+    return [documents stringByAppendingPathComponent:
+        @"XLiquidGlass193Beta1TabBarProbe.log"];
+}
+
+static NSString *XLGTabBarProbeTimestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGTabBarProbeLog(NSString *format, ...) {
+    if (!format.length) return;
+
+    va_list args;
+    va_start(args,format);
+    NSString *message=
+        [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGTabBarProbeTimestamp(),
+                    message ?: @"-"];
+    NSLog(@"[XLiquidGlass/TabBarProbe] %@",message ?: @"-");
+
+    NSString *path=XLGTabBarProbeLogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=
+                [NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static NSString *XLGTabBarProbeDescribe(id object) {
+    if (!object) return @"nil";
+    @try {
+        NSString *description=[object description] ?: @"-";
+        description=[description
+            stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+        description=[description
+            stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+        while ([description containsString:@"  "]) {
+            description=[description
+                stringByReplacingOccurrencesOfString:@"  "
+                                           withString:@" "];
+        }
+        if (description.length>700) {
+            description=[[description substringToIndex:700]
+                stringByAppendingString:@"…"];
+        }
+        return [NSString stringWithFormat:@"%@{%@}",
+                NSStringFromClass([object class]) ?: @"?",
+                description];
+    } @catch (__unused NSException *exception) {
+        return [NSString stringWithFormat:@"%@{description-error}",
+                NSStringFromClass([object class]) ?: @"?"];
+    }
+}
+
+static BOOL XLGTabBarProbeInterestingName(NSString *name) {
+    NSString *lower=name.lowercaseString ?: @"";
+    for (NSString *needle in @[
+        @"tab",
+        @"item",
+        @"navigation",
+        @"custom",
+        @"dock",
+        @"limit",
+        @"maximum",
+        @"minimum",
+        @"order",
+        @"premium"
+    ]) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static BOOL XLGTabBarProbeSensitiveDefaultsKey(NSString *key) {
+    NSString *lower=key.lowercaseString ?: @"";
+    for (NSString *needle in @[
+        @"token",
+        @"password",
+        @"secret",
+        @"cookie",
+        @"auth",
+        @"credential",
+        @"session"
+    ]) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static void XLGTabBarProbeDumpDefaults(NSString *reason) {
+    NSDictionary *dictionary=
+        NSUserDefaults.standardUserDefaults.dictionaryRepresentation;
+    NSMutableArray<NSString *> *keys=[NSMutableArray array];
+
+    for (NSString *key in dictionary) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        if (!XLGTabBarProbeInterestingName(key)) continue;
+        if (XLGTabBarProbeSensitiveDefaultsKey(key)) continue;
+        [keys addObject:key];
+    }
+
+    [keys sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+
+    XLGTabBarProbeLog(
+        @"DEFAULTS_BEGIN reason=%@ matching=%lu",
+        reason ?: @"-",
+        (unsigned long)keys.count);
+
+    for (NSString *key in keys) {
+        id value=dictionary[key];
+        XLGTabBarProbeLog(
+            @"DEFAULT key=%@ value=%@",
+            key,
+            XLGTabBarProbeDescribe(value));
+    }
+
+    XLGTabBarProbeLog(@"DEFAULTS_END reason=%@",reason ?: @"-");
+}
+
+static void XLGTabBarProbeDumpClassNamed(NSString *className) {
+    if (!className.length) return;
+
+    Class cls=NSClassFromString(className);
+    if (!cls) {
+        XLGTabBarProbeLog(@"CLASS %@ missing",className);
+        return;
+    }
+
+    if (!gXLGTabBarProbeDumpedClasses) {
+        gXLGTabBarProbeDumpedClasses=[NSMutableSet set];
+    }
+    NSString *resolved=NSStringFromClass(cls) ?: className;
+    if ([gXLGTabBarProbeDumpedClasses containsObject:resolved]) return;
+    [gXLGTabBarProbeDumpedClasses addObject:resolved];
+
+    XLGTabBarProbeLog(@"CLASS_DUMP_BEGIN %@ ptr=%p",resolved,cls);
+
+    unsigned int propertyCount=0;
+    objc_property_t *properties=
+        class_copyPropertyList(cls,&propertyCount);
+    for (unsigned int i=0;i<propertyCount;i++) {
+        const char *rawName=property_getName(properties[i]);
+        if (!rawName) continue;
+        NSString *name=[NSString stringWithUTF8String:rawName];
+        if (!XLGTabBarProbeInterestingName(name)) continue;
+        const char *attrs=property_getAttributes(properties[i]);
+        XLGTabBarProbeLog(
+            @"PROPERTY %@.%@ attrs=%s",
+            resolved,
+            name,
+            attrs ?: "-");
+    }
+    if (properties) free(properties);
+
+    unsigned int ivarCount=0;
+    Ivar *ivars=class_copyIvarList(cls,&ivarCount);
+    for (unsigned int i=0;i<ivarCount;i++) {
+        const char *rawName=ivar_getName(ivars[i]);
+        if (!rawName) continue;
+        NSString *name=[NSString stringWithUTF8String:rawName];
+        if (!XLGTabBarProbeInterestingName(name)) continue;
+        XLGTabBarProbeLog(
+            @"IVAR %@.%@ type=%s offset=%td",
+            resolved,
+            name,
+            ivar_getTypeEncoding(ivars[i]) ?: "-",
+            ivar_getOffset(ivars[i]));
+    }
+    if (ivars) free(ivars);
+
+    unsigned int methodCount=0;
+    Method *methods=class_copyMethodList(cls,&methodCount);
+    for (unsigned int i=0;i<methodCount;i++) {
+        Method method=methods[i];
+        NSString *name=NSStringFromSelector(method_getName(method));
+        if (!XLGTabBarProbeInterestingName(name)) continue;
+        XLGTabBarProbeLog(
+            @"METHOD %@.%@ types=%s",
+            resolved,
+            name,
+            method_getTypeEncoding(method) ?: "-");
+    }
+    if (methods) free(methods);
+
+    XLGTabBarProbeLog(@"CLASS_DUMP_END %@",resolved);
+}
+
+static void XLGTabBarProbeCollectBars(
+    UIView *view,
+    NSMutableArray<UIView *> *bars,
+    NSUInteger depth) {
+
+    if (!view || depth>80 || bars.count>=12) return;
+
+    NSString *name=NSStringFromClass(view.class) ?: @"";
+    if ([name isEqualToString:@"XNavigation.TabBarView"] ||
+        [name hasSuffix:@".TabBarView"] ||
+        [name containsString:@"TabBarView"]) {
+        if (![bars containsObject:view]) [bars addObject:view];
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        XLGTabBarProbeCollectBars(subview,bars,depth+1);
+    }
+}
+
+static NSString *XLGTabBarProbeTabIdentity(id tab) {
+    if (!tab) return @"nil";
+
+    NSMutableArray<NSString *> *parts=[NSMutableArray array];
+    for (NSString *key in @[
+        @"identifier",
+        @"tabIdentifier",
+        @"itemIdentifier",
+        @"title",
+        @"name",
+        @"accessibilityLabel",
+        @"key",
+        @"id"
+    ]) {
+        id value=XLGSafeValueForKey(tab,key);
+        if (!value || value==NSNull.null) continue;
+        [parts addObject:
+            [NSString stringWithFormat:@"%@=%@",key,value]];
+    }
+
+    if (!parts.count) {
+        [parts addObject:XLGTabBarProbeDescribe(tab)];
+    }
+
+    NSString *identity=[parts componentsJoinedByString:@" | "];
+    if (identity.length>500) {
+        identity=[[identity substringToIndex:500]
+            stringByAppendingString:@"…"];
+    }
+    return identity;
+}
+
+static NSString *XLGTabBarProbeSignatureForBar(UIView *bar) {
+    id tabs=XLGSafeValueForKey(bar,@"tabs");
+    id itemViews=XLGSafeValueForKey(bar,@"itemViews");
+    id selectedIndex=XLGSafeValueForKey(bar,@"selectedIndex");
+
+    NSMutableArray<NSString *> *ids=[NSMutableArray array];
+    if ([tabs isKindOfClass:NSArray.class]) {
+        for (id tab in (NSArray *)tabs) {
+            [ids addObject:XLGTabBarProbeTabIdentity(tab)];
+        }
+    }
+
+    return [NSString stringWithFormat:
+        @"bar=%p tabs=%lu items=%lu selected=%@ ids=%@",
+        bar,
+        [tabs isKindOfClass:NSArray.class]
+            ? (unsigned long)[(NSArray *)tabs count] : 0,
+        [itemViews isKindOfClass:NSArray.class]
+            ? (unsigned long)[(NSArray *)itemViews count] : 0,
+        selectedIndex ?: @"-",
+        [ids componentsJoinedByString:@" || "]];
+}
+
+static void XLGTabBarProbeDumpAppNavigation(id appNavigation) {
+    if (!appNavigation) {
+        XLGTabBarProbeLog(@"APPNAV nil");
+        return;
+    }
+
+    XLGTabBarProbeLog(
+        @"APPNAV class=%@ ptr=%p",
+        NSStringFromClass([appNavigation class]),
+        appNavigation);
+
+    for (NSString *key in @[
+        @"tabs",
+        @"tabItems",
+        @"items",
+        @"navigationItems",
+        @"appTabs",
+        @"entries",
+        @"tabBar",
+        @"tabBarView",
+        @"tabBarController",
+        @"selectedTab",
+        @"selectedIndex",
+        @"currentTab",
+        @"customizedTabs"
+    ]) {
+        id value=XLGSafeValueForKey(appNavigation,key);
+        if (!value) continue;
+        XLGTabBarProbeLog(
+            @"APPNAV_VALUE key=%@ value=%@",
+            key,
+            XLGTabBarProbeDescribe(value));
+    }
+}
+
+static void XLGTabBarProbeDumpBar(UIView *bar,
+                                  NSString *reason) {
+    if (!bar) return;
+
+    id tabs=XLGSafeValueForKey(bar,@"tabs");
+    id itemViews=XLGSafeValueForKey(bar,@"itemViews");
+    id selectedIndex=XLGSafeValueForKey(bar,@"selectedIndex");
+
+    XLGTabBarProbeLog(
+        @"BAR reason=%@ class=%@ ptr=%p frame=%@ bounds=%@ tabsCount=%lu itemViewsCount=%lu selectedIndex=%@ subviews=%lu",
+        reason ?: @"-",
+        NSStringFromClass(bar.class),
+        bar,
+        NSStringFromCGRect(bar.frame),
+        NSStringFromCGRect(bar.bounds),
+        [tabs isKindOfClass:NSArray.class]
+            ? (unsigned long)[(NSArray *)tabs count] : 0,
+        [itemViews isKindOfClass:NSArray.class]
+            ? (unsigned long)[(NSArray *)itemViews count] : 0,
+        selectedIndex ?: @"-",
+        (unsigned long)bar.subviews.count);
+
+    if ([tabs isKindOfClass:NSArray.class]) {
+        [(NSArray *)tabs enumerateObjectsUsingBlock:
+            ^(id tab, NSUInteger idx, BOOL *stop) {
+                (void)stop;
+                XLGTabBarProbeLog(
+                    @"TAB index=%lu class=%@ ptr=%p identity=%@ raw=%@",
+                    (unsigned long)idx,
+                    NSStringFromClass([tab class]) ?: @"nil",
+                    tab,
+                    XLGTabBarProbeTabIdentity(tab),
+                    XLGTabBarProbeDescribe(tab));
+            }];
+    } else {
+        XLGTabBarProbeLog(
+            @"BAR_VALUE tabs=%@",
+            XLGTabBarProbeDescribe(tabs));
+    }
+
+    if ([itemViews isKindOfClass:NSArray.class]) {
+        [(NSArray *)itemViews enumerateObjectsUsingBlock:
+            ^(id item, NSUInteger idx, BOOL *stop) {
+                (void)stop;
+                if (![item isKindOfClass:UIView.class]) {
+                    XLGTabBarProbeLog(
+                        @"ITEM index=%lu value=%@",
+                        (unsigned long)idx,
+                        XLGTabBarProbeDescribe(item));
+                    return;
+                }
+
+                UIView *view=(UIView *)item;
+                XLGTabBarProbeLog(
+                    @"ITEM index=%lu class=%@ ptr=%p frame=%@ label=%@ identifier=%@ value=%@ traits=%llu subviews=%lu",
+                    (unsigned long)idx,
+                    NSStringFromClass(view.class),
+                    view,
+                    NSStringFromCGRect(view.frame),
+                    view.accessibilityLabel ?: @"-",
+                    view.accessibilityIdentifier ?: @"-",
+                    view.accessibilityValue ?: @"-",
+                    (unsigned long long)view.accessibilityTraits,
+                    (unsigned long)view.subviews.count);
+            }];
+    }
+}
+
+static void XLGTabBarProbeSnapshot(NSString *reason, BOOL force) {
+    dispatch_block_t work=^{
+        id appNavigation=XLGSidebarAppNavigation();
+
+        NSMutableArray<UIView *> *bars=[NSMutableArray array];
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+                if (window.hidden || window.alpha<=0.01) continue;
+                XLGTabBarProbeCollectBars(window,bars,0);
+            }
+        }
+
+        NSMutableArray<NSString *> *signatures=[NSMutableArray array];
+        for (UIView *bar in bars) {
+            [signatures addObject:XLGTabBarProbeSignatureForBar(bar)];
+        }
+        NSString *signature=[NSString stringWithFormat:
+            @"app=%@ bars=%@",
+            appNavigation ? NSStringFromClass([appNavigation class]) : @"nil",
+            [signatures componentsJoinedByString:@" ### "]];
+
+        if (!force &&
+            gXLGTabBarProbeLastSignature &&
+            [gXLGTabBarProbeLastSignature isEqualToString:signature]) {
+            return;
+        }
+        gXLGTabBarProbeLastSignature=[signature copy];
+
+        XLGTabBarProbeLog(
+            @"========== SNAPSHOT %@ ==========",
+            reason ?: @"-");
+        XLGTabBarProbeLog(
+            @"liquidGlass=%@ appNavigation=%@ bars=%lu",
+            XLGEnabled() ? @"ON" : @"OFF",
+            appNavigation
+                ? NSStringFromClass([appNavigation class]) : @"nil",
+            (unsigned long)bars.count);
+
+        XLGTabBarProbeDumpAppNavigation(appNavigation);
+
+        for (UIView *bar in bars) {
+            XLGTabBarProbeDumpBar(bar,reason);
+        }
+
+        XLGTabBarProbeLog(
+            @"========== END SNAPSHOT %@ ==========",
+            reason ?: @"-");
+    };
+
+    if (NSThread.isMainThread) work();
+    else dispatch_async(dispatch_get_main_queue(),work);
+}
+
+static void XLGTabBarProbeBarLayout(id self, SEL cmd) {
+    if (gOrigTabBarProbeBarLayout) {
+        ((void(*)(id,SEL))gOrigTabBarProbeBarLayout)(self,cmd);
+    }
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(0.03*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            XLGTabBarProbeSnapshot(@"tabbar-layout",NO);
+        });
+}
+
+static void XLGTabBarProbeCustomizeViewDidAppear(
+    id self, SEL cmd, BOOL animated) {
+
+    if (gOrigTabBarProbeCustomizeViewDidAppear) {
+        ((void(*)(id,SEL,BOOL))
+            gOrigTabBarProbeCustomizeViewDidAppear)(
+                self,cmd,animated);
+    }
+
+    XLGTabBarProbeLog(
+        @"CUSTOMIZER_DID_APPEAR class=%@ ptr=%p",
+        NSStringFromClass([self class]),self);
+    XLGTabBarProbeSnapshot(@"customizer-did-appear",YES);
+    XLGTabBarProbeDumpDefaults(@"customizer-did-appear");
+}
+
+static void XLGTabBarProbeCustomizeViewWillDisappear(
+    id self, SEL cmd, BOOL animated) {
+
+    XLGTabBarProbeLog(
+        @"CUSTOMIZER_WILL_DISAPPEAR class=%@ ptr=%p",
+        NSStringFromClass([self class]),self);
+    XLGTabBarProbeSnapshot(@"customizer-will-disappear",YES);
+    XLGTabBarProbeDumpDefaults(@"customizer-will-disappear");
+
+    if (gOrigTabBarProbeCustomizeViewWillDisappear) {
+        ((void(*)(id,SEL,BOOL))
+            gOrigTabBarProbeCustomizeViewWillDisappear)(
+                self,cmd,animated);
+    }
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(0.25*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            XLGTabBarProbeSnapshot(
+                @"after-customizer-disappear",YES);
+            XLGTabBarProbeDumpDefaults(
+                @"after-customizer-disappear");
+        });
+}
+
+static void XLGInstallTabBarProbe(void) {
+    if (!gXLGTabBarProbeLogInitialized) {
+        gXLGTabBarProbeLogInitialized=YES;
+        NSString *path=XLGTabBarProbeLogPath();
+        if (path.length) {
+            [NSFileManager.defaultManager
+                removeItemAtPath:path error:nil];
+        }
+
+        XLGTabBarProbeLog(
+            @"========== XLiquidGlass 1.9.3 Beta 1 Tab Bar Probe ==========");
+        XLGTabBarProbeLog(
+            @"liquidGlass=%@",
+            XLGEnabled() ? @"ON" : @"OFF");
+
+        for (NSString *className in @[
+            @"_TtC14T1TwitterSwift20XTabbedAppNavigation",
+            @"XNavigation.TabBarView",
+            @"_TtC11XNavigation10TabBarView",
+            @"XNavigation.TabBarItemView",
+            @"_TtC11XNavigation14TabBarItemView",
+            @"T1TabCustomizationViewController"
+        ]) {
+            XLGTabBarProbeDumpClassNamed(className);
+        }
+
+        XLGTabBarProbeDumpDefaults(@"startup");
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(0.80*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                XLGTabBarProbeSnapshot(@"startup-0.8s",YES);
+            });
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(2.50*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                XLGTabBarProbeSnapshot(@"startup-2.5s",YES);
+            });
+    }
+
+    Class barClass=NSClassFromString(@"XNavigation.TabBarView");
+    if (!barClass) {
+        barClass=NSClassFromString(@"_TtC11XNavigation10TabBarView");
+    }
+    if (barClass && !gOrigTabBarProbeBarLayout) {
+        XLGHookMethod(
+            barClass,
+            @selector(layoutSubviews),
+            NO,
+            (IMP)XLGTabBarProbeBarLayout,
+            &gOrigTabBarProbeBarLayout);
+        XLGTabBarProbeDumpClassNamed(NSStringFromClass(barClass));
+    }
+
+    Class customizer=
+        NSClassFromString(@"T1TabCustomizationViewController");
+    if (customizer) {
+        if (!gOrigTabBarProbeCustomizeViewDidAppear &&
+            [customizer instancesRespondToSelector:@selector(viewDidAppear:)]) {
+            XLGHookMethod(
+                customizer,
+                @selector(viewDidAppear:),
+                NO,
+                (IMP)XLGTabBarProbeCustomizeViewDidAppear,
+                &gOrigTabBarProbeCustomizeViewDidAppear);
+        }
+
+        if (!gOrigTabBarProbeCustomizeViewWillDisappear &&
+            [customizer instancesRespondToSelector:@selector(viewWillDisappear:)]) {
+            XLGHookMethod(
+                customizer,
+                @selector(viewWillDisappear:),
+                NO,
+                (IMP)XLGTabBarProbeCustomizeViewWillDisappear,
+                &gOrigTabBarProbeCustomizeViewWillDisappear);
+        }
+
+        XLGTabBarProbeDumpClassNamed(NSStringFromClass(customizer));
+    }
+
+    if (!gXLGTabBarProbeDefaultsObserver) {
+        gXLGTabBarProbeDefaultsObserver=
+            [NSNotificationCenter.defaultCenter
+                addObserverForName:NSUserDefaultsDidChangeNotification
+                           object:nil
+                            queue:NSOperationQueue.mainQueue
+                       usingBlock:^(__unused NSNotification *notification) {
+            dispatch_after(
+                dispatch_time(DISPATCH_TIME_NOW,
+                              (int64_t)(0.12*NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{
+                    XLGTabBarProbeSnapshot(
+                        @"defaults-changed",NO);
+                });
+        }];
+    }
+}
 
 #pragma mark - XLiquidGlass 1.9.2 native toast bridge
 
@@ -6614,6 +7264,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
     XLGInstallGuideRouterHook();
+    XLGInstallTabBarProbe();
     XLGInstallCompositionSentToastBridge();
     XLGInstallToastBridge();
 }
@@ -6631,7 +7282,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 1 loaded: Tab Bar structure/order probe + 1.9.2 stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
