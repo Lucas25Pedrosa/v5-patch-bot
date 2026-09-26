@@ -3723,7 +3723,7 @@ static NSString *XLGB6LogPath(void) {
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta651CrashSafeSourceProbe.log"]
+            @"XLiquidGlass193Beta66PreViewNativePanelBridge.log"]
         : nil;
 }
 
@@ -5256,6 +5256,10 @@ static void XLGB65InstallOnClass(Class cls) {
 }
 
 static void XLGB65InstallNativeConnectionBridge(void) {
+    static BOOL dumped=NO;
+    if (dumped) return;
+    dumped=YES;
+
     NSMutableSet<NSString *> *seen=[NSMutableSet set];
 
     for (NSString *requested in @[
@@ -5320,6 +5324,232 @@ static void XLGB65ScheduleNativeRebuild(void) {
                         delay.doubleValue]);
             });
     }
+}
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6.6 pre-view native panel bridge
+
+static IMP gOrigXLGB66XTabbedViewDidLoad=NULL;
+static IMP gOrigXLGB66SwiftRecalcWithIDs=NULL;
+static IMP gOrigXLGB66SwiftRecalc=NULL;
+static BOOL gXLGB66BridgeInstalled=NO;
+static char kXLGB66BridgeAppliedKey;
+
+static id XLGB66VisiblePanelIDs(id appNavigation) {
+    if (!appNavigation) return nil;
+    SEL sel=NSSelectorFromString(@"visiblePanelIDs");
+    if (![appNavigation respondsToSelector:sel]) return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(appNavigation,sel);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static void XLGB66LogState(NSString *phase,
+                           id controller,
+                           id appNavigation) {
+    XLGB6Log(@"PREVIEW_BRIDGE_STATE phase=%@ controller=%@ ptr=%p appNavigation=%@ ptr=%p visible=%@",
+             phase ?: @"-",
+             controller ? NSStringFromClass([controller class]) : @"nil",
+             controller,
+             appNavigation ? NSStringFromClass([appNavigation class]) : @"nil",
+             appNavigation,
+             XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(appNavigation)));
+}
+
+static void XLGB66ApplyBridge(id controller, NSString *phase) {
+    if (!XLGEnabled() || !controller) return;
+
+    id appNavigation=XLGB6ObjectBySelector(controller,@"appNavigation");
+    NSString *appClass=appNavigation
+        ? NSStringFromClass([appNavigation class]) : @"";
+
+    if (![appClass containsString:@"XTabbedAppNavigation"]) {
+        XLGB6Log(@"PREVIEW_BRIDGE phase=%@ result=SKIP_APPNAV class=%@ ptr=%p",
+                 phase ?: @"-",appClass.length ? appClass : @"nil",appNavigation);
+        return;
+    }
+
+    if ([objc_getAssociatedObject(controller,&kXLGB66BridgeAppliedKey) boolValue]) {
+        XLGB66LogState(
+            [NSString stringWithFormat:@"%@-already-applied",phase ?: @"-"],
+            controller,appNavigation);
+        return;
+    }
+
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+    if (!desired.count) {
+        XLGB6Log(@"PREVIEW_BRIDGE phase=%@ result=NO_DESIRED_IDS missing=%@",
+                 phase ?: @"-",missing ?: @"-");
+        return;
+    }
+
+    SEL recalcSEL=
+        NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:");
+    if (![appNavigation respondsToSelector:recalcSEL]) {
+        XLGB6Log(@"PREVIEW_BRIDGE phase=%@ result=NO_RECALC_SELECTOR appNavigation=%@",
+                 phase ?: @"-",appClass);
+        return;
+    }
+
+    id before=XLGB66VisiblePanelIDs(appNavigation);
+    XLGB6Log(@"PREVIEW_BRIDGE phase=%@ result=CALL_BEFORE_UI before=%@ desired=%@",
+             phase ?: @"-",
+             XLGB61DescribePanelValue(before),
+             XLGB61DescribePanelValue(desired));
+
+    @try {
+        ((void(*)(id,SEL,id))objc_msgSend)(
+            appNavigation,recalcSEL,desired);
+
+        objc_setAssociatedObject(
+            controller,
+            &kXLGB66BridgeAppliedKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (NSException *exception) {
+        XLGB6Log(@"PREVIEW_BRIDGE phase=%@ result=EXCEPTION name=%@ detail=%@",
+                 phase ?: @"-",
+                 exception.name ?: @"-",
+                 exception.reason ?: @"-");
+        return;
+    }
+
+    id after=XLGB66VisiblePanelIDs(appNavigation);
+    XLGB6Log(@"PREVIEW_BRIDGE phase=%@ result=CALLED after=%@",
+             phase ?: @"-",
+             XLGB61DescribePanelValue(after));
+}
+
+static void XLGB66ObserveSwiftRecalcWithIDs(
+    id self,
+    SEL cmd,
+    id panelIDs) {
+
+    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanelsWithUpdatedPanelIDs: owner=%@ ptr=%p input=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             self,
+             XLGB61DescribePanelValue(panelIDs));
+
+    if (gOrigXLGB66SwiftRecalcWithIDs) {
+        ((void(*)(id,SEL,id))gOrigXLGB66SwiftRecalcWithIDs)(
+            self,cmd,panelIDs);
+    }
+
+    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanelsWithUpdatedPanelIDs: after=%@",
+             XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)));
+}
+
+static void XLGB66ObserveSwiftRecalc(
+    id self,
+    SEL cmd) {
+
+    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanels owner=%@ ptr=%p before=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             self,
+             XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)));
+
+    if (gOrigXLGB66SwiftRecalc) {
+        ((void(*)(id,SEL))gOrigXLGB66SwiftRecalc)(self,cmd);
+    }
+
+    XLGB6Log(@"PREVIEW_NATIVE_RECALC selector=recalculateVisiblePanels after=%@",
+             XLGB61DescribePanelValue(XLGB66VisiblePanelIDs(self)));
+}
+
+static void XLGB66XTabbedViewDidLoad(id self, SEL cmd) {
+    id beforeAppNavigation=XLGB6ObjectBySelector(self,@"appNavigation");
+    XLGB66LogState(@"before-viewDidLoad",self,beforeAppNavigation);
+
+    // Feed NFB's already-proven six PanelIDs into the Swift app-navigation
+    // before the XNavigation view hierarchy is materialized.
+    XLGB66ApplyBridge(self,@"before-viewDidLoad");
+
+    if (gOrigXLGB66XTabbedViewDidLoad) {
+        ((void(*)(id,SEL))gOrigXLGB66XTabbedViewDidLoad)(self,cmd);
+    }
+
+    id afterAppNavigation=XLGB6ObjectBySelector(self,@"appNavigation");
+    XLGB66LogState(@"after-viewDidLoad",self,afterAppNavigation);
+
+    XLGB6ScheduleSnapshot(@"beta66-after-viewDidLoad-0.05",0.05);
+    XLGB6ScheduleSnapshot(@"beta66-after-viewDidLoad-0.25",0.25);
+}
+
+static void XLGB66InstallPreViewBridge(void) {
+    if (gXLGB66BridgeInstalled) return;
+
+    Class appNav=NSClassFromString(
+        @"_TtC14T1TwitterSwift20XTabbedAppNavigation");
+    if (!appNav) {
+        appNav=NSClassFromString(
+            @"T1TwitterSwift.XTabbedAppNavigation");
+    }
+
+    if (appNav) {
+        SEL withIDs=
+            NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:");
+        Method withIDsMethod=class_getInstanceMethod(appNav,withIDs);
+        if (withIDsMethod &&
+            method_getNumberOfArguments(withIDsMethod)==3) {
+            BOOL ok=XLGHookMethod(
+                appNav,
+                withIDs,
+                NO,
+                (IMP)XLGB66ObserveSwiftRecalcWithIDs,
+                &gOrigXLGB66SwiftRecalcWithIDs);
+            XLGB6Log(@"PREVIEW_BRIDGE_INSTALL target=XTabbedAppNavigation selector=recalculateVisiblePanelsWithUpdatedPanelIDs: ok=%@",
+                     ok ? @"YES" : @"NO");
+        }
+
+        SEL recalc=NSSelectorFromString(@"recalculateVisiblePanels");
+        Method recalcMethod=class_getInstanceMethod(appNav,recalc);
+        if (recalcMethod &&
+            method_getNumberOfArguments(recalcMethod)==2) {
+            BOOL ok=XLGHookMethod(
+                appNav,
+                recalc,
+                NO,
+                (IMP)XLGB66ObserveSwiftRecalc,
+                &gOrigXLGB66SwiftRecalc);
+            XLGB6Log(@"PREVIEW_BRIDGE_INSTALL target=XTabbedAppNavigation selector=recalculateVisiblePanels ok=%@",
+                     ok ? @"YES" : @"NO");
+        }
+    }
+
+    Class vc=NSClassFromString(
+        @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController");
+    if (!vc) {
+        vc=NSClassFromString(
+            @"T1TwitterSwift.XTabbedAppNavigationViewController");
+    }
+
+    if (!vc) {
+        XLGB6Log(@"PREVIEW_BRIDGE_INSTALL target=XTabbedAppNavigationViewController result=MISSING");
+        return;
+    }
+
+    SEL selector=@selector(viewDidLoad);
+    Method method=class_getInstanceMethod(vc,selector);
+    if (!method) {
+        XLGB6Log(@"PREVIEW_BRIDGE_INSTALL target=XTabbedAppNavigationViewController selector=viewDidLoad result=MISSING");
+        return;
+    }
+
+    BOOL ok=XLGHookMethod(
+        vc,
+        selector,
+        NO,
+        (IMP)XLGB66XTabbedViewDidLoad,
+        &gOrigXLGB66XTabbedViewDidLoad);
+
+    XLGB6Log(@"PREVIEW_BRIDGE_INSTALL target=XTabbedAppNavigationViewController selector=viewDidLoad ok=%@",
+             ok ? @"YES" : @"NO");
+
+    gXLGB66BridgeInstalled=ok;
 }
 
 #pragma mark - XLiquidGlass 1.9.3 Beta 6.4 Swift appNavigation correction
@@ -5705,6 +5935,10 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     XLGB65InstallNativeConnectionBridge();
     XLGB65ScheduleNativeRebuild();
+
+    // Beta 6.6: bridge NFB's six PanelIDs before the Swift LG view builds
+    // XNavigation.TabBarController. Native recalc hooks are observation-only.
+    XLGB66InstallPreViewBridge();
 }
 
 
@@ -5722,7 +5956,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.5.1 Source Probe";
+    self.title=@"Beta 6.6 Tab Bridge";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -5741,7 +5975,7 @@ static void XLGB6InstallCorrectionHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Esta build não altera getters nem força o estado de personalização. Ela apenas identifica a fonte nativa usada pelo Liquid Glass. Depois do teste, use Copiar relatório.";
+    return @"A ponte entrega os PanelIDs do NFB ao XTabbedAppNavigation antes do viewDidLoad do Liquid Glass. O relatório registra o estado antes e depois da criação do Dock.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -5763,7 +5997,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta651CrashSafeSourceProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta66PreViewNativePanelBridge.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -5780,7 +6014,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.5.1 Source Probe"
+                alertControllerWithTitle:@"Beta 6.6 Tab Bridge"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -5805,7 +6039,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.5.1 Source Probe"
+                alertControllerWithTitle:@"Beta 6.6 Tab Bridge"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -5826,7 +6060,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.5.1 Source Probe"
+            alertControllerWithTitle:@"Beta 6.6 Tab Bridge"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -5849,7 +6083,7 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.5.1 Source Probe",
+        @"title": @"Beta 6.6 Tab Bridge",
         @"subtitle": @"Diagnóstico read-only da fonte nativa do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
@@ -8849,13 +9083,13 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.5.1 loaded: crash-safe native tab source probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.6 loaded: pre-view native PanelID bridge + source probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.5.1 Crash-Safe Native Source Probe ==========");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.6 Pre-View Native Panel Bridge + Probe ==========");
         XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
                  XLGEnabled() ? @"ON" : @"OFF",
                  [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
