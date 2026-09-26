@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2
+#pragma mark - XLiquidGlass 1.9.3 Beta 6
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -3665,6 +3665,660 @@ static id XLGSafeValueForKey(id object, NSString *key) {
     }
 }
 
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6 correction + probe
+
+static NSMutableDictionary<NSString *,NSValue *> *gXLGB6VisibleSetterOriginals=nil;
+static NSMutableDictionary<NSString *,NSValue *> *gXLGB6DataSourceSetterOriginals=nil;
+static BOOL gXLGB6VisibleHooksInstalled=NO;
+static BOOL gXLGB6DataSourceHooksInstalled=NO;
+static BOOL gXLGB6ProbeScheduled=NO;
+static char kXLGB6LastAppliedSignatureKey;
+
+static NSString *XLGB6LogPath(void) {
+    NSString *documents=NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    return documents.length
+        ? [documents stringByAppendingPathComponent:
+            @"XLiquidGlass193Beta6FixProbe.log"]
+        : nil;
+}
+
+static NSString *XLGB6Timestamp(void) {
+    NSDateFormatter *formatter=[[NSDateFormatter alloc] init];
+    formatter.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.dateFormat=@"yyyy-MM-dd HH:mm:ss.SSS";
+    return [formatter stringFromDate:NSDate.date] ?: @"-";
+}
+
+static void XLGB6Log(NSString *format, ...) {
+    if (!format.length) return;
+    va_list args;
+    va_start(args,format);
+    NSString *message=[[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *line=[NSString stringWithFormat:@"[%@] %@\n",
+                    XLGB6Timestamp(),message ?: @"-"];
+    NSString *path=XLGB6LogPath();
+    if (!path.length) return;
+
+    @synchronized(NSFileManager.defaultManager) {
+        NSData *data=[line dataUsingEncoding:NSUTF8StringEncoding];
+        if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
+            [NSFileManager.defaultManager createFileAtPath:path
+                                                  contents:nil
+                                                attributes:nil];
+        }
+        @try {
+            NSFileHandle *handle=[NSFileHandle fileHandleForWritingAtPath:path];
+            [handle seekToEndOfFile];
+            [handle writeData:data];
+            [handle closeFile];
+        } @catch (__unused NSException *exception) {
+        }
+    }
+}
+
+static id XLGB6ObjectBySelector(id object, NSString *selectorName) {
+    if (!object || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![object respondsToSelector:selector]) return nil;
+
+    Method method=class_getInstanceMethod([object class],selector);
+    if (!method || method_getNumberOfArguments(method)!=2) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(object,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static id XLGB6ClassObjectBySelector(Class cls, NSString *selectorName) {
+    if (!cls || !selectorName.length) return nil;
+    SEL selector=NSSelectorFromString(selectorName);
+    if (![cls respondsToSelector:selector]) return nil;
+
+    Method method=class_getClassMethod(cls,selector);
+    if (!method || method_getNumberOfArguments(method)!=2) return nil;
+
+    char returnType[32]={0};
+    method_getReturnType(method,returnType,sizeof(returnType));
+    const char *p=returnType;
+    while (*p && strchr("rnNoORV",*p)) p++;
+    if (*p!='@' && *p!='#') return nil;
+
+    @try {
+        return ((id(*)(id,SEL))objc_msgSend)(cls,selector);
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static NSArray<NSString *> *XLGB6NormalizePageArray(id raw) {
+    if (![raw isKindOfClass:NSArray.class]) return nil;
+    NSMutableArray<NSString *> *pages=[NSMutableArray array];
+
+    for (id item in (NSArray *)raw) {
+        NSString *page=nil;
+        if ([item isKindOfClass:NSString.class]) {
+            page=[(NSString *)item lowercaseString];
+        } else {
+            id candidate=XLGSafeValueForKey(item,@"pageID");
+            if (![candidate isKindOfClass:NSString.class]) {
+                candidate=XLGSafeValueForKey(item,@"identifier");
+            }
+            if ([candidate isKindOfClass:NSString.class]) {
+                page=[(NSString *)candidate lowercaseString];
+            }
+        }
+        if (!page.length || [pages containsObject:page]) continue;
+        [pages addObject:page];
+    }
+
+    return pages.count ? [pages copy] : nil;
+}
+
+static NSArray<NSString *> *XLGB6DesiredPages(void) {
+    id raw=[[NSUserDefaults standardUserDefaults]
+        objectForKey:@"bh_tabs_visible"];
+    NSArray<NSString *> *pages=XLGB6NormalizePageArray(raw);
+    if (pages.count) return pages;
+
+    Class utility=NSClassFromString(@"CustomTabBarUtility");
+    pages=XLGB6NormalizePageArray(
+        XLGB6ClassObjectBySelector(utility,@"visiblePageIDsInOrder"));
+    return pages;
+}
+
+static NSString *XLGB6PageForEntry(id entry) {
+    if (!entry) return nil;
+
+    NSString *className=
+        NSStringFromClass([entry class]).lowercaseString ?: @"";
+
+    if ([className containsString:@"hometimelineappnavigationtabentry"] ||
+        [className containsString:@"homeappnavigationtabentry"]) return @"home";
+    if ([className containsString:@"newsappnavigationtabentry"]) return @"news";
+    if ([className containsString:@"grokappnavigationtabentry"]) return @"grok";
+    if ([className containsString:@"guideappnavigationtabentry"] ||
+        [className containsString:@"exploreappnavigationtabentry"]) return @"guide";
+    if ([className containsString:@"notificationsappnavigationtabentry"]) return @"ntab";
+    if ([className containsString:@"xchatappnavigationtabentry"] ||
+        [className containsString:@"messagesappnavigationtabentry"] ||
+        [className containsString:@"dmappnavigationtabentry"]) return @"messages";
+    if ([className containsString:@"communitiesappnavigationtabentry"]) return @"communities";
+    if ([className containsString:@"profileappnavigationtabentry"]) return @"profile";
+    if ([className containsString:@"listsappnavigationtabentry"]) return @"lists";
+    if ([className containsString:@"bookmarksappnavigationtabentry"]) return @"bookmarks";
+    if ([className containsString:@"premiumhubappnavigationtabentry"]) return @"premium";
+    if ([className containsString:@"jobsappnavigationtabentry"]) return @"jobs";
+    if ([className containsString:@"paymentsappnavigationtabentry"]) return @"payments";
+    if ([className containsString:@"birdwatchappnavigationtabentry"]) return @"birdwatch";
+    if ([className containsString:@"connectappnavigationtabentry"]) return @"connect";
+
+    for (NSString *key in @[
+        @"identifier",@"tabIdentifier",@"itemIdentifier",
+        @"pageID",@"pageId",@"displayName",@"tabDisplayName",
+        @"title",@"name",@"key"
+    ]) {
+        id value=XLGSafeValueForKey(entry,key);
+        if (![value isKindOfClass:NSString.class]) continue;
+        NSString *text=[(NSString *)value lowercaseString];
+
+        if ([text isEqualToString:@"home"] ||
+            [text containsString:@"início"] ||
+            [text containsString:@"inicio"]) return @"home";
+        if ([text isEqualToString:@"news"] ||
+            [text containsString:@"notícias"] ||
+            [text containsString:@"noticias"]) return @"news";
+        if ([text containsString:@"grok"]) return @"grok";
+        if ([text isEqualToString:@"guide"] ||
+            [text containsString:@"explorar"] ||
+            [text containsString:@"explore"] ||
+            [text containsString:@"search"]) return @"guide";
+        if ([text isEqualToString:@"ntab"] ||
+            [text containsString:@"notifica"] ||
+            [text containsString:@"notification"]) return @"ntab";
+        if ([text isEqualToString:@"messages"] ||
+            [text containsString:@"mensag"] ||
+            [text containsString:@"message"] ||
+            [text containsString:@"chat"] ||
+            [text containsString:@"dm"]) return @"messages";
+        if ([text containsString:@"comunidade"] ||
+            [text containsString:@"communit"]) return @"communities";
+        if ([text containsString:@"perfil"] ||
+            [text containsString:@"profile"]) return @"profile";
+    }
+
+    return nil;
+}
+
+static NSString *XLGB6DescribeArray(NSArray *array) {
+    if (![array isKindOfClass:NSArray.class]) return @"not-array";
+    NSMutableArray<NSString *> *parts=[NSMutableArray array];
+
+    [array enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
+        (void)stop;
+        NSString *page=XLGB6PageForEntry(obj);
+        NSString *className=NSStringFromClass([obj class]) ?: @"?";
+        [parts addObject:[NSString stringWithFormat:
+            @"%lu:%@<%@>",
+            (unsigned long)idx,
+            page.length ? page : @"?",
+            className]];
+    }];
+    return [parts componentsJoinedByString:@","];
+}
+
+static void XLGB6AddPoolValue(id value, NSMutableArray *pool) {
+    if (!value || !pool) return;
+
+    if ([value isKindOfClass:NSArray.class]) {
+        for (id obj in (NSArray *)value) {
+            if (obj && ![pool containsObject:obj]) [pool addObject:obj];
+        }
+        return;
+    }
+    if ([value isKindOfClass:NSDictionary.class]) {
+        for (id obj in [(NSDictionary *)value allValues]) {
+            if (obj && ![pool containsObject:obj]) [pool addObject:obj];
+        }
+        return;
+    }
+    if ([value isKindOfClass:NSSet.class]) {
+        for (id obj in (NSSet *)value) {
+            if (obj && ![pool containsObject:obj]) [pool addObject:obj];
+        }
+    }
+}
+
+static void XLGB6CollectFromObject(id object,
+                                   NSMutableArray *pool,
+                                   NSString *source) {
+    if (!object || !pool) return;
+
+    for (NSString *key in @[
+        @"visibleTabEntries",
+        @"tabContent",
+        @"tabContentByIdentifier",
+        @"allTabEntries",
+        @"availableTabEntries",
+        @"tabEntries",
+        @"entries",
+        @"tabs",
+        @"items"
+    ]) {
+        id value=XLGB6ObjectBySelector(object,key);
+        if (!value) value=XLGSafeValueForKey(object,key);
+        NSUInteger before=pool.count;
+        XLGB6AddPoolValue(value,pool);
+        if (pool.count!=before) {
+            XLGB6Log(@"POOL source=%@ owner=%@ key=%@ added=%lu total=%lu valueClass=%@",
+                     source ?: @"-",
+                     NSStringFromClass([object class]) ?: @"?",
+                     key,
+                     (unsigned long)(pool.count-before),
+                     (unsigned long)pool.count,
+                     value ? NSStringFromClass([value class]) : @"nil");
+        }
+    }
+}
+
+static NSArray *XLGB6CorrectedEntries(id owner,
+                                      NSArray *current,
+                                      NSString *stage,
+                                      NSString **missingOut) {
+    if (!XLGEnabled() || ![current isKindOfClass:NSArray.class]) {
+        return current;
+    }
+
+    NSArray<NSString *> *desired=XLGB6DesiredPages();
+    if (!desired.count) {
+        XLGB6Log(@"CORRECTION stage=%@ skipped=no-bh-pages current=%@",
+                 stage ?: @"-",XLGB6DescribeArray(current));
+        return current;
+    }
+
+    NSMutableArray *pool=[NSMutableArray array];
+    XLGB6AddPoolValue(current,pool);
+    XLGB6CollectFromObject(owner,pool,@"owner");
+
+    id dataSource=XLGB6ObjectBySelector(owner,@"dataSource");
+    if (!dataSource) dataSource=XLGSafeValueForKey(owner,@"dataSource");
+    if (!dataSource) dataSource=XLGSafeValueForKey(owner,@"_dataSource");
+    if (dataSource && dataSource!=owner) {
+        XLGB6CollectFromObject(dataSource,pool,@"dataSource");
+    }
+
+    id appNavigation=XLGB6ObjectBySelector(owner,@"appNavigation");
+    if (!appNavigation) appNavigation=XLGSafeValueForKey(owner,@"appNavigation");
+    if (appNavigation && appNavigation!=owner && appNavigation!=dataSource) {
+        XLGB6CollectFromObject(appNavigation,pool,@"appNavigation");
+    }
+
+    Class utility=NSClassFromString(@"CustomTabBarUtility");
+    id registry=XLGB6ClassObjectBySelector(utility,@"registry");
+    XLGB6AddPoolValue(registry,pool);
+
+    NSMutableDictionary<NSString *,id> *byPage=[NSMutableDictionary dictionary];
+    for (id entry in pool) {
+        NSString *page=XLGB6PageForEntry(entry);
+        if (page.length && !byPage[page]) byPage[page]=entry;
+    }
+
+    NSMutableArray *ordered=[NSMutableArray arrayWithCapacity:desired.count];
+    NSMutableArray<NSString *> *missing=[NSMutableArray array];
+
+    for (NSString *page in desired) {
+        id entry=byPage[page];
+        if (entry) [ordered addObject:entry];
+        else [missing addObject:page];
+    }
+
+    if (missing.count) {
+        NSString *missingString=[missing componentsJoinedByString:@","];
+        if (missingOut) *missingOut=missingString;
+        XLGB6Log(@"CORRECTION stage=%@ result=INCOMPLETE desired=%@ current=%@ pool=%@ missing=%@",
+                 stage ?: @"-",
+                 [desired componentsJoinedByString:@","],
+                 XLGB6DescribeArray(current),
+                 XLGB6DescribeArray(pool),
+                 missingString);
+        return current;
+    }
+
+    NSString *signature=[desired componentsJoinedByString:@","];
+    XLGB6Log(@"CORRECTION stage=%@ result=READY desired=%@ current=%@ corrected=%@",
+             stage ?: @"-",
+             signature,
+             XLGB6DescribeArray(current),
+             XLGB6DescribeArray(ordered));
+
+    if (ordered.count==current.count &&
+        [ordered isEqualToArray:current]) {
+        return current;
+    }
+
+    if (owner && signature.length) {
+        objc_setAssociatedObject(
+            owner,&kXLGB6LastAppliedSignatureKey,
+            signature,OBJC_ASSOCIATION_COPY_NONATOMIC);
+    }
+
+    return [ordered copy];
+}
+
+static IMP XLGB6OriginalForObject(
+    id object,
+    NSMutableDictionary<NSString *,NSValue *> *table) {
+    if (!object || !table.count) return NULL;
+    for (Class cls=[object class]; cls; cls=class_getSuperclass(cls)) {
+        NSValue *value=table[NSStringFromClass(cls) ?: @""];
+        if (value) return (IMP)[value pointerValue];
+    }
+    return NULL;
+}
+
+static void XLGB6ProbeRuntimeMethods(Class cls, NSString *label) {
+    if (!cls) return;
+
+    XLGB6Log(@"RUNTIME class=%@ label=%@ ptr=%p",
+             NSStringFromClass(cls) ?: @"?",
+             label ?: @"-",cls);
+
+    unsigned int count=0;
+    Method *methods=class_copyMethodList(cls,&count);
+    for (unsigned int i=0;i<count;i++) {
+        Method method=methods[i];
+        NSString *name=NSStringFromSelector(method_getName(method));
+        NSString *lower=name.lowercaseString ?: @"";
+        if (![lower containsString:@"tab"] &&
+            ![lower containsString:@"entry"] &&
+            ![lower containsString:@"content"] &&
+            ![lower containsString:@"visible"] &&
+            ![lower containsString:@"descriptor"] &&
+            ![lower containsString:@"navigation"]) {
+            continue;
+        }
+        XLGB6Log(@"METHOD class=%@ selector=%@ types=%s",
+                 NSStringFromClass(cls) ?: @"?",
+                 name,
+                 method_getTypeEncoding(method) ?: "-");
+    }
+    if (methods) free(methods);
+}
+
+static void XLGB6ProbeView(UIView *view, NSUInteger depth) {
+    if (!view || depth>60) return;
+    NSString *name=NSStringFromClass(view.class) ?: @"";
+    NSString *lower=name.lowercaseString ?: @"";
+
+    if ([lower containsString:@"tabbarview"] ||
+        [lower containsString:@"tabviewgroup"]) {
+        id tabs=XLGSafeValueForKey(view,@"tabs");
+        id itemViews=XLGSafeValueForKey(view,@"itemViews");
+        id tabViews=XLGSafeValueForKey(view,@"tabViews");
+
+        XLGB6Log(@"VIEW class=%@ ptr=%p tabs=%lu itemViews=%lu tabViews=%lu frame=%@",
+                 name,view,
+                 [tabs isKindOfClass:NSArray.class]
+                    ? (unsigned long)[(NSArray *)tabs count] : 0,
+                 [itemViews isKindOfClass:NSArray.class]
+                    ? (unsigned long)[(NSArray *)itemViews count] : 0,
+                 [tabViews isKindOfClass:NSArray.class]
+                    ? (unsigned long)[(NSArray *)tabViews count] : 0,
+                 NSStringFromCGRect(view.frame));
+
+        if ([tabs isKindOfClass:NSArray.class]) {
+            XLGB6Log(@"VIEW_TABS class=%@ entries=%@",
+                     name,XLGB6DescribeArray((NSArray *)tabs));
+        }
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        XLGB6ProbeView(subview,depth+1);
+    }
+}
+
+static void XLGB6ProbeSnapshot(NSString *reason) {
+    NSArray<NSString *> *desired=XLGB6DesiredPages();
+    XLGB6Log(@"========== SNAPSHOT %@ ==========",reason ?: @"-");
+    XLGB6Log(@"STATE liquidGlass=%@ bh_tabs_visible=%@",
+             XLGEnabled() ? @"ON" : @"OFF",
+             desired.count ? [desired componentsJoinedByString:@","] : @"nil");
+
+    Class utility=NSClassFromString(@"CustomTabBarUtility");
+    XLGB6Log(@"BH utility=%@ registryClass=%@ available=%@ visible=%@ defaults=%@",
+             utility ? NSStringFromClass(utility) : @"nil",
+             XLGB6ClassObjectBySelector(utility,@"registry")
+                ? NSStringFromClass([XLGB6ClassObjectBySelector(utility,@"registry") class])
+                : @"nil",
+             XLGB6ClassObjectBySelector(utility,@"availableTabs") ?: @"nil",
+             XLGB6ClassObjectBySelector(utility,@"visiblePageIDsInOrder") ?: @"nil",
+             XLGB6ClassObjectBySelector(utility,@"defaultVisiblePageIDs") ?: @"nil");
+
+    NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (window.rootViewController) [queue addObject:window.rootViewController];
+            XLGB6ProbeView(window,0);
+        }
+    }
+
+    for (NSUInteger i=0;i<queue.count && i<220;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *pointer=[NSValue valueWithPointer:(__bridge const void *)vc];
+        if ([visited containsObject:pointer]) continue;
+        [visited addObject:pointer];
+
+        NSString *name=NSStringFromClass(vc.class) ?: @"";
+        NSString *lower=name.lowercaseString ?: @"";
+        if ([lower containsString:@"tabbedappnavigation"] ||
+            [lower containsString:@"tabbarcontroller"]) {
+            id visible=XLGB6ObjectBySelector(vc,@"visibleTabEntries");
+            if (!visible) visible=XLGSafeValueForKey(vc,@"visibleTabEntries");
+            id tabs=XLGB6ObjectBySelector(vc,@"tabs");
+            if (!tabs) tabs=XLGSafeValueForKey(vc,@"tabs");
+            id dataSource=XLGB6ObjectBySelector(vc,@"dataSource");
+            if (!dataSource) dataSource=XLGSafeValueForKey(vc,@"dataSource");
+            if (!dataSource) dataSource=XLGSafeValueForKey(vc,@"_dataSource");
+
+            XLGB6Log(@"VC class=%@ ptr=%p visible=%@ tabs=%@ dataSource=%@",
+                     name,vc,
+                     [visible isKindOfClass:NSArray.class]
+                        ? XLGB6DescribeArray((NSArray *)visible) : @"-",
+                     [tabs isKindOfClass:NSArray.class]
+                        ? XLGB6DescribeArray((NSArray *)tabs) : @"-",
+                     dataSource
+                        ? NSStringFromClass([dataSource class]) : @"nil");
+
+            if (dataSource) {
+                for (NSString *key in @[
+                    @"tabContent",@"tabContentByIdentifier",
+                    @"visibleTabEntries",@"allTabEntries",
+                    @"availableTabEntries",@"tabEntries"
+                ]) {
+                    id value=XLGB6ObjectBySelector(dataSource,key);
+                    if (!value) value=XLGSafeValueForKey(dataSource,key);
+                    if (!value) continue;
+                    XLGB6Log(@"DATASOURCE class=%@ key=%@ valueClass=%@ value=%@",
+                             NSStringFromClass([dataSource class]) ?: @"?",
+                             key,
+                             NSStringFromClass([value class]) ?: @"?",
+                             [value isKindOfClass:NSArray.class]
+                                ? XLGB6DescribeArray((NSArray *)value)
+                                : [value description]);
+                }
+            }
+        }
+
+        for (UIViewController *child in vc.childViewControllers ?: @[]) {
+            if (child) [queue addObject:child];
+        }
+        if (vc.presentedViewController) [queue addObject:vc.presentedViewController];
+    }
+}
+
+static void XLGB6ScheduleSnapshot(NSString *reason, NSTimeInterval delay) {
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,(int64_t)(delay*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            XLGB6ProbeSnapshot(reason);
+        });
+}
+
+static void XLGB6SetVisibleTabEntries(id self, SEL cmd, id value) {
+    NSArray *current=[value isKindOfClass:NSArray.class] ? value : nil;
+    XLGB6Log(@"HOOK setVisibleTabEntries owner=%@ ptr=%p inputCount=%lu input=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             self,
+             (unsigned long)current.count,
+             current ? XLGB6DescribeArray(current) : @"not-array");
+
+    NSString *missing=nil;
+    NSArray *forwarded=current
+        ? XLGB6CorrectedEntries(self,current,@"visibleTabEntries",&missing)
+        : current;
+
+    IMP original=XLGB6OriginalForObject(
+        self,gXLGB6VisibleSetterOriginals);
+    if (original) {
+        ((void(*)(id,SEL,id))original)(
+            self,cmd,forwarded ?: value);
+    }
+
+    XLGB6Log(@"HOOK setVisibleTabEntries forwardedCount=%lu forwarded=%@ missing=%@",
+             (unsigned long)forwarded.count,
+             forwarded ? XLGB6DescribeArray(forwarded) : @"not-array",
+             missing ?: @"-");
+    XLGB6ScheduleSnapshot(@"after-visibleTabEntries",0.08);
+}
+
+static void XLGB6SetTabContent(id self, SEL cmd, id value) {
+    NSArray *current=[value isKindOfClass:NSArray.class] ? value : nil;
+    XLGB6Log(@"HOOK setTabContent owner=%@ ptr=%p inputCount=%lu input=%@",
+             NSStringFromClass([self class]) ?: @"?",
+             self,
+             (unsigned long)current.count,
+             current ? XLGB6DescribeArray(current) : @"not-array");
+
+    NSString *missing=nil;
+    NSArray *forwarded=current
+        ? XLGB6CorrectedEntries(self,current,@"tabContent",&missing)
+        : current;
+
+    IMP original=XLGB6OriginalForObject(
+        self,gXLGB6DataSourceSetterOriginals);
+    if (original) {
+        ((void(*)(id,SEL,id))original)(
+            self,cmd,forwarded ?: value);
+    }
+
+    XLGB6Log(@"HOOK setTabContent forwardedCount=%lu forwarded=%@ missing=%@",
+             (unsigned long)forwarded.count,
+             forwarded ? XLGB6DescribeArray(forwarded) : @"not-array",
+             missing ?: @"-");
+    XLGB6ScheduleSnapshot(@"after-tabContent",0.08);
+}
+
+static BOOL XLGB6HookSetterForClass(Class cls,
+                                    SEL selector,
+                                    IMP replacement,
+                                    NSMutableDictionary<NSString *,NSValue *> *table) {
+    if (!cls || !selector || !replacement || !table) return NO;
+    Method method=class_getInstanceMethod(cls,selector);
+    if (!method) return NO;
+
+    IMP current=class_getMethodImplementation(cls,selector);
+    if (!current) return NO;
+    if (current==replacement) return YES;
+
+    const char *types=method_getTypeEncoding(method);
+    if (!types) return NO;
+
+    NSString *name=NSStringFromClass(cls) ?: @"?";
+    table[name]=[NSValue valueWithPointer:current];
+    class_replaceMethod(cls,selector,replacement,types);
+
+    BOOL ok=class_getMethodImplementation(cls,selector)==replacement;
+    XLGB6Log(@"INSTALL class=%@ selector=%@ ok=%@ original=%p replacement=%p",
+             name,NSStringFromSelector(selector),
+             ok ? @"YES" : @"NO",current,replacement);
+    return ok;
+}
+
+static void XLGB6InstallCorrectionHooks(void) {
+    if (!gXLGB6VisibleSetterOriginals) {
+        gXLGB6VisibleSetterOriginals=[NSMutableDictionary dictionary];
+    }
+    if (!gXLGB6DataSourceSetterOriginals) {
+        gXLGB6DataSourceSetterOriginals=[NSMutableDictionary dictionary];
+    }
+
+    if (!gXLGB6VisibleHooksInstalled) {
+        BOOL any=NO;
+        for (NSString *className in @[
+            @"T1TabbedAppNavigationViewController",
+            @"T1TwitterSwift.XTabbedAppNavigationViewController",
+            @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController"
+        ]) {
+            Class cls=NSClassFromString(className);
+            if (!cls) continue;
+            XLGB6ProbeRuntimeMethods(cls,@"visible-owner");
+            if (XLGB6HookSetterForClass(
+                    cls,
+                    NSSelectorFromString(@"setVisibleTabEntries:"),
+                    (IMP)XLGB6SetVisibleTabEntries,
+                    gXLGB6VisibleSetterOriginals)) {
+                any=YES;
+            }
+        }
+        gXLGB6VisibleHooksInstalled=any;
+    }
+
+    if (!gXLGB6DataSourceHooksInstalled) {
+        BOOL any=NO;
+        for (NSString *className in @[
+            @"T1MainAppTabDataSource",
+            @"T1TwitterSwift.MainAppTabDataSource",
+            @"_TtC14T1TwitterSwift20MainAppTabDataSource"
+        ]) {
+            Class cls=NSClassFromString(className);
+            if (!cls) continue;
+            XLGB6ProbeRuntimeMethods(cls,@"main-tab-data-source");
+            if (XLGB6HookSetterForClass(
+                    cls,
+                    NSSelectorFromString(@"setTabContent:"),
+                    (IMP)XLGB6SetTabContent,
+                    gXLGB6DataSourceSetterOriginals)) {
+                any=YES;
+            }
+        }
+        gXLGB6DataSourceHooksInstalled=any;
+    }
+
+    if (!gXLGB6ProbeScheduled) {
+        gXLGB6ProbeScheduled=YES;
+        XLGB6ScheduleSnapshot(@"startup-0.25",0.25);
+        XLGB6ScheduleSnapshot(@"startup-0.75",0.75);
+        XLGB6ScheduleSnapshot(@"startup-1.50",1.50);
+        XLGB6ScheduleSnapshot(@"startup-3.00",3.00);
+    }
+}
+
+
 static NSString *XLGNormalizedUserID(id value) {
     if (!value || value == NSNull.null) return nil;
     if ([value isKindOfClass:NSString.class]) {
@@ -6607,6 +7261,7 @@ static void XLGInstallHooks(void) {
     // Beta 21: do not install our extra UIScreenEdgePanGestureRecognizer.
     // X 12.28.1 already owns a UIPanGestureRecognizer on T1Window; Beta 20
     // proved both were recognizing the same left-edge swipe simultaneously.
+    XLGB6InstallCorrectionHooks();
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
@@ -6631,7 +7286,16 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6 loaded: pre-controller tab correction + safe pipeline probe + 1.9.2 stable feature set");
+
+        NSString *beta6Log=XLGB6LogPath();
+        if (beta6Log.length) {
+            [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
+        }
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6 Correction + Probe ==========");
+        XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
+                 XLGEnabled() ? @"ON" : @"OFF",
+                 [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
