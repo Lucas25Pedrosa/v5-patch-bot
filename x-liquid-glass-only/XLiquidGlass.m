@@ -5694,6 +5694,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     // Beta 6.5.1 is read-only at the native tab source. It does not
     // replace getters, force isTabCustomizationEnabled or call recalculate.
+    (void)&XLGB65ShouldBridgeObjectGetter;
     (void)&XLGB65NativeArrayGetter;
     (void)&XLGB65NativeBoolGetter;
     (void)&XLGB65BuildConnectedArray;
