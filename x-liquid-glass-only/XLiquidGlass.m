@@ -31,6 +31,7 @@ static BOOL gNFBSettingsHooked = NO;
 static BOOL gXLGAllowTabColorHook = NO;
 
 static void XLGRefreshXNavigationColorModeNow(void);
+static void XLGTintImageViews(UIView *root, UIColor *color, BOOL stripAvatar);
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
