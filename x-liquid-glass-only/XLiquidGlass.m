@@ -5,7 +5,6 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <mach/mach.h>
-#import <mach/mach_vm.h>
 
 #pragma mark - XLiquidGlass 1.9.3 Beta 5
 
@@ -942,18 +941,18 @@ static Ivar XLGTabBarSafeProbeFindIvar(Class cls, NSString *name) {
 }
 
 static BOOL XLGTabBarSafeProbeReadMemory(
-    mach_vm_address_t address,
+    vm_address_t address,
     void *buffer,
-    mach_vm_size_t size) {
+    vm_size_t size) {
 
     if (!address || !buffer || !size) return NO;
 
-    mach_vm_size_t copied=0;
-    kern_return_t kr=mach_vm_read_overwrite(
+    vm_size_t copied=0;
+    kern_return_t kr=vm_read_overwrite(
         mach_task_self(),
         address,
         size,
-        (mach_vm_address_t)(uintptr_t)buffer,
+        (vm_address_t)(uintptr_t)buffer,
         &copied);
 
     return kr==KERN_SUCCESS && copied==size;
@@ -978,7 +977,7 @@ static NSString *XLGTabBarSafeProbeWordsString(
 }
 
 static void XLGTabBarSafeProbeDumpAddress(
-    mach_vm_address_t address,
+    vm_address_t address,
     NSString *prefix,
     NSUInteger qwordCount) {
 
@@ -992,8 +991,8 @@ static void XLGTabBarSafeProbeDumpAddress(
 
     qwordCount=MIN(qwordCount,(NSUInteger)12);
     uint64_t words[12]={0};
-    mach_vm_size_t size=
-        (mach_vm_size_t)(qwordCount*sizeof(uint64_t));
+    vm_size_t size=
+        (vm_size_t)(qwordCount*sizeof(uint64_t));
 
     BOOL ok=XLGTabBarSafeProbeReadMemory(
         address,words,size);
@@ -1029,9 +1028,9 @@ static uint64_t XLGTabBarSafeProbeReadIvarWord(
     const char *rawName=ivar_getName(ivar);
     const char *rawType=ivar_getTypeEncoding(ivar);
 
-    mach_vm_address_t fieldAddress=
-        (mach_vm_address_t)(uintptr_t)(__bridge void *)object +
-        (mach_vm_address_t)offset;
+    vm_address_t fieldAddress=
+        (vm_address_t)(uintptr_t)(__bridge void *)object +
+        (vm_address_t)offset;
 
     uint64_t word=0;
     BOOL ok=XLGTabBarSafeProbeReadMemory(
@@ -1060,11 +1059,11 @@ static uint64_t XLGTabBarSafeProbeReadIvarWord(
         4);
 
     // For Swift Array-like values the first machine word commonly references
-    // native storage. Probe that address through mach_vm_read_overwrite only;
+    // native storage. Probe that address through vm_read_overwrite only;
     // invalid/non-pointer values simply return KERN_FAILURE instead of crashing.
     if (ok && word>0x10000ULL) {
         XLGTabBarSafeProbeDumpAddress(
-            (mach_vm_address_t)word,
+            (vm_address_t)word,
             [NSString stringWithFormat:@"%@.%@.word0-target",
              prefix ?: @"-",name],
             8);
