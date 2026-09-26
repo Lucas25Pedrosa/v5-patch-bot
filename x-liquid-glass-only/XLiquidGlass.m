@@ -1640,17 +1640,24 @@ static void XLGNavigationTabBarViewLayoutSubviews(id self,SEL cmd) {
     UIView *chrome=XLGFindLiquidSelectionChrome(view);
     XLGApplySelectionChrome(chrome,accent);
 
-    // Active Only cold-start orchestration: after one exact 9473 ON pass has
-    // really executed, perform the exact old toggle-OFF action.
+    // Active Only cold-start orchestration.
+    // 9473a2be produced the partial state only after the fully tinted tab bar
+    // had already settled. Keep the exact old ON pipeline alive long enough for
+    // its delayed badge/layout passes to finish, then execute the same live
+    // toggle-OFF action and the same refresh routine.
     if (gXLGActiveOnlyNeedsPrime &&
         XLGTabBarColorModeValue() == XLGTabBarColorModeActiveOnly) {
         gXLGActiveOnlyNeedsPrime=NO;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [[NSUserDefaults standardUserDefaults]
-                setBool:NO
-                 forKey:kXLGThemeAccentEnabledKey];
-            XLGRefreshThemeAccentNow();
-        });
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.75*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                if (XLGTabBarColorModeValue() != XLGTabBarColorModeActiveOnly) return;
+                [[NSUserDefaults standardUserDefaults]
+                    setBool:NO
+                     forKey:kXLGThemeAccentEnabledKey];
+                XLGRefreshThemeAccentNow();
+            }
+        );
     }
 }
 static BOOL XLGThemeColorPreferenceKey(NSString *key) {
@@ -1975,7 +1982,7 @@ static void XLiquidGlassInit(void) {
             [defaults setBool:NO forKey:kXLGThemeAccentEnabledKey];
         }
 
-        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test4 loaded: 9473a2be exact Active Only transition");
+        NSLog(@"[XLiquidGlass] 1.5.0 Tab Color Mode Selector Test5 loaded: delayed 9473a2be Active Only transition");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
