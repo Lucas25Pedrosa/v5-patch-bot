@@ -34,6 +34,10 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static NSString *XLGB6LogPath(void);
+static void XLGB6ProbeSnapshot(NSString *reason);
+static void XLGB6InjectNFBProbeEntry(id controller);
+static void XLGB6ShowProbeSettings(id self, SEL cmd);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -345,6 +349,7 @@ static void XLGNFBSetupSections(id self, SEL _cmd) {
         ((void (*)(id, SEL))gOrigNFBSetupSections)(self, _cmd);
     }
     XLGRemoveLiquidGlassFromRoot(self);
+    XLGB6InjectNFBProbeEntry(self);
 }
 
 static void XLGNFBViewWillAppear(id self, SEL _cmd, BOOL animated) {
@@ -352,6 +357,7 @@ static void XLGNFBViewWillAppear(id self, SEL _cmd, BOOL animated) {
         ((void (*)(id, SEL, BOOL))gOrigNFBViewWillAppear)(self, _cmd, animated);
     }
     XLGRemoveLiquidGlassFromRoot(self);
+    XLGB6InjectNFBProbeEntry(self);
     XLGReloadControllerTable(self);
 }
 
@@ -423,6 +429,14 @@ static void XLGAppearanceViewWillAppear(id self, SEL _cmd, BOOL animated) {
 static void XLGInstallNFBSettingsIntegration(void) {
     Class rootClass=NSClassFromString(@"ModernSettingsViewController");
     if (rootClass && !gNFBSettingsHooked) {
+        SEL probeSEL=NSSelectorFromString(@"showXLiquidGlassBeta6Probe");
+        if (![rootClass instancesRespondToSelector:probeSEL]) {
+            class_addMethod(rootClass,
+                            probeSEL,
+                            (IMP)XLGB6ShowProbeSettings,
+                            "v@:");
+        }
+
         BOOL setupHooked=
             XLGHookMethod(rootClass,
                           NSSelectorFromString(@"setupSections"),
@@ -4315,6 +4329,180 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ScheduleSnapshot(@"startup-0.75",0.75);
         XLGB6ScheduleSnapshot(@"startup-1.50",1.50);
         XLGB6ScheduleSnapshot(@"startup-3.00",3.00);
+    }
+}
+
+
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6 NFB probe UI
+
+@interface XLiquidGlassBeta6ProbeViewController : UITableViewController
+@end
+
+@implementation XLiquidGlassBeta6ProbeViewController
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title=@"Beta 6 Tab Probe";
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void)tableView;
+    return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView
+ numberOfRowsInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return 3;
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+ titleForFooterInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return @"A correção atua antes do XNavigation.TabBarController e o probe registra a cadeia de tabs. Faça o teste normalmente e use Copiar relatório.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView
+         cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier=@"XLGB6ProbeCell";
+    UITableViewCell *cell=
+        [tableView dequeueReusableCellWithIdentifier:identifier];
+
+    if (!cell) {
+        cell=[[UITableViewCell alloc]
+            initWithStyle:UITableViewCellStyleSubtitle
+          reuseIdentifier:identifier];
+    }
+
+    cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+
+    if (indexPath.row==0) {
+        cell.textLabel.text=@"Captura completa";
+        cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
+    } else if (indexPath.row==1) {
+        cell.textLabel.text=@"Copiar relatório";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta6FixProbe.log";
+    } else {
+        cell.textLabel.text=@"Limpar relatório";
+        cell.detailTextLabel.text=@"Remove o relatório anterior.";
+    }
+
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+    if (indexPath.row==0) {
+        XLGB6ProbeSnapshot(@"manual-NFB");
+        UIAlertController *alert=
+            [UIAlertController
+                alertControllerWithTitle:@"Beta 6 Tab Probe"
+                                 message:@"Captura completa adicionada ao relatório."
+                          preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:
+            [UIAlertAction actionWithTitle:@"OK"
+                                     style:UIAlertActionStyleDefault
+                                   handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    if (indexPath.row==1) {
+        // Add a fresh snapshot immediately before copying so the pasted report
+        // always contains the current visible state.
+        XLGB6ProbeSnapshot(@"copy-NFB");
+
+        NSString *report=
+            [NSString stringWithContentsOfFile:XLGB6LogPath()
+                                      encoding:NSUTF8StringEncoding
+                                         error:nil] ?: @"";
+
+        UIPasteboard.generalPasteboard.string=report;
+
+        UIAlertController *alert=
+            [UIAlertController
+                alertControllerWithTitle:@"Beta 6 Tab Probe"
+                                 message:
+                    [NSString stringWithFormat:
+                        @"Relatório copiado (%lu caracteres).",
+                        (unsigned long)report.length]
+                          preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:
+            [UIAlertAction actionWithTitle:@"OK"
+                                     style:UIAlertActionStyleDefault
+                                   handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    [[NSFileManager defaultManager]
+        removeItemAtPath:XLGB6LogPath()
+                   error:nil];
+    XLGB6Log(@"========== LOG RESET FROM NFB ==========");
+
+    UIAlertController *alert=
+        [UIAlertController
+            alertControllerWithTitle:@"Beta 6 Tab Probe"
+                             message:@"Relatório limpo."
+                      preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:
+        [UIAlertAction actionWithTitle:@"OK"
+                                 style:UIAlertActionStyleDefault
+                               handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+@end
+
+static void XLGB6InjectNFBProbeEntry(id controller) {
+    NSArray *sections=XLGArrayForKey(controller,@"sections");
+    if (!sections) return;
+
+    if (XLGArrayContainsAction(
+            sections,@"showXLiquidGlassBeta6Probe")) {
+        return;
+    }
+
+    NSMutableArray *updated=[sections mutableCopy];
+    [updated addObject:@{
+        @"title": @"Beta 6 Tab Probe",
+        @"subtitle": @"Correção + diagnóstico do Dock.",
+        @"icon": @"flask",
+        @"action": @"showXLiquidGlassBeta6Probe"
+    }];
+
+    XLGSetArrayForKey(controller,@"sections",[updated copy]);
+}
+
+static void XLGB6ShowProbeSettings(id self, SEL cmd) {
+    (void)cmd;
+    if (![self isKindOfClass:UIViewController.class]) return;
+
+    XLiquidGlassBeta6ProbeViewController *vc=
+        [XLiquidGlassBeta6ProbeViewController new];
+
+    UINavigationController *navigation=
+        ((UIViewController *)self).navigationController;
+
+    if (navigation) {
+        [navigation pushViewController:vc animated:YES];
+    } else {
+        UINavigationController *wrapper=
+            [[UINavigationController alloc]
+                initWithRootViewController:vc];
+        [(UIViewController *)self
+            presentViewController:wrapper
+                         animated:YES
+                       completion:nil];
     }
 }
 
