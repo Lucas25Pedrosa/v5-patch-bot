@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Timeline Blur Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-timeline-blur-probe/**"
+      - ".github/workflows/x-liquid-glass-timeline-blur-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-timeline-blur-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassTimelineBlurProbe.dylib ! -path '*/XLiquidGlassTimelineBlurProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassTimelineBlurProbe.dylib
+          file artifacts/XLiquidGlassTimelineBlurProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassTimelineBlurProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassTimelineBlurProbe-0.1.0-X12.28.1-arm64
+          path: x-liquid-glass-timeline-blur-probe/artifacts/
+          if-no-files-found: error
