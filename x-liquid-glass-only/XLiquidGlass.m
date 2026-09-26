@@ -4,6 +4,9 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
+#import <mach-o/dyld.h>
+#import <mach-o/loader.h>
+#import <mach-o/nlist.h>
 
 #pragma mark - XLiquidGlass 1.9.3 Beta 6
 
@@ -37,6 +40,7 @@ static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
 static NSString *XLGB6LogPath(void);
 static void XLGB6ProbeSnapshot(NSString *reason);
 static void XLGB68DumpConstructorProbe(NSString *reason);
+static void XLGB69DumpSwiftSymbolSources(NSString *reason);
 static void XLGB6InjectNFBProbeEntry(id controller);
 static void XLGB6ShowProbeSettings(id self, SEL cmd);
 
@@ -3733,7 +3737,7 @@ static NSString *XLGB6LogPath(void) {
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta68ConstructorFactoryProbe.log"]
+            @"XLiquidGlass193Beta69SwiftSymbolSourceProbe.log"]
         : nil;
 }
 
@@ -4348,6 +4352,7 @@ static void XLGB6ProbeSnapshot(NSString *reason) {
              gXLGB67LastAfterDescription ?: @"-");
 
     XLGB68DumpConstructorProbe(reason);
+    XLGB69DumpSwiftSymbolSources(reason);
     XLGB63DumpSwiftAppNavigation(reason);
 
     Class utility=NSClassFromString(@"CustomTabBarUtility");
@@ -5917,6 +5922,214 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 
 
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6.9 Swift symbol source probe
+
+typedef char *(*XLGB69SwiftDemangleFn)(
+    const char *mangledName,
+    size_t mangledNameLength,
+    char *outputBuffer,
+    size_t *outputBufferSize,
+    uint32_t flags);
+
+static NSString *XLGB69DemangleSymbol(const char *rawName) {
+    if (!rawName || !rawName[0]) return nil;
+
+    static XLGB69SwiftDemangleFn demangleFn=NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        demangleFn=(XLGB69SwiftDemangleFn)
+            dlsym(RTLD_DEFAULT,"swift_demangle");
+    });
+
+    if (!demangleFn) return nil;
+
+    const char *input=rawName;
+    if (input[0]=='_' && input[1]=='$') input++;
+
+    if (!(input[0]=='$' && (input[1]=='s' || input[1]=='S'))) {
+        return nil;
+    }
+
+    char *result=demangleFn(input,strlen(input),NULL,NULL,0);
+    if (!result) return nil;
+
+    NSString *string=[NSString stringWithUTF8String:result];
+    free(result);
+    return string;
+}
+
+static BOOL XLGB69SymbolInteresting(NSString *raw,
+                                    NSString *demangled) {
+    NSString *joined=[NSString stringWithFormat:@"%@ %@",
+        raw ?: @"",demangled ?: @""];
+    NSString *lower=joined.lowercaseString ?: @"";
+
+    for (NSString *needle in @[
+        @"xnavigation",
+        @"tabbarcontroller",
+        @"descriptor",
+        @"xtabbedappnavigation",
+        @"mainappnavigationsettings",
+        @"mainapptabdatasource",
+        @"tabidentifier",
+        @"visiblepanel",
+        @"appnavigationtab",
+        @"tabcustomization",
+        @"newsappnavigation",
+        @"newsappnavigationtab",
+        @"tabcontent"
+    ]) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static BOOL XLGB69ImageInteresting(const char *imageName) {
+    if (!imageName) return NO;
+    NSString *path=[NSString stringWithUTF8String:imageName];
+    NSString *base=path.lastPathComponent ?: path;
+    return [base containsString:@"T1Twitter"] ||
+           [base containsString:@"XServiceLibraries"];
+}
+
+static void XLGB69DumpSymbolsForImage(uint32_t imageIndex,
+                                      NSUInteger *globalCount) {
+    const char *imageName=_dyld_get_image_name(imageIndex);
+    if (!XLGB69ImageInteresting(imageName)) return;
+
+    const struct mach_header *genericHeader=
+        _dyld_get_image_header(imageIndex);
+    if (!genericHeader) return;
+
+    if (genericHeader->magic!=MH_MAGIC_64 &&
+        genericHeader->magic!=MH_CIGAM_64) {
+        XLGB6Log(@"SYMBOL_IMAGE image=%s result=UNSUPPORTED_MAGIC magic=0x%x",
+                 imageName ?: "-",genericHeader->magic);
+        return;
+    }
+
+    const struct mach_header_64 *header=
+        (const struct mach_header_64 *)genericHeader;
+    intptr_t slide=_dyld_get_image_vmaddr_slide(imageIndex);
+
+    const struct symtab_command *symtabCommand=NULL;
+    const struct segment_command_64 *linkeditSegment=NULL;
+
+    const uint8_t *cursor=
+        (const uint8_t *)(header+1);
+
+    for (uint32_t i=0;i<header->ncmds;i++) {
+        const struct load_command *lc=
+            (const struct load_command *)cursor;
+        if (!lc || lc->cmdsize<sizeof(struct load_command)) break;
+
+        if (lc->cmd==LC_SYMTAB &&
+            lc->cmdsize>=sizeof(struct symtab_command)) {
+            symtabCommand=(const struct symtab_command *)lc;
+        } else if (lc->cmd==LC_SEGMENT_64 &&
+                  lc->cmdsize>=sizeof(struct segment_command_64)) {
+            const struct segment_command_64 *segment=
+                (const struct segment_command_64 *)lc;
+            if (strncmp(segment->segname,SEG_LINKEDIT,16)==0) {
+                linkeditSegment=segment;
+            }
+        }
+
+        cursor+=lc->cmdsize;
+    }
+
+    NSString *base=imageName
+        ? [[[NSString stringWithUTF8String:imageName]
+            lastPathComponent] copy]
+        : @"-";
+
+    if (!symtabCommand || !linkeditSegment) {
+        XLGB6Log(@"SYMBOL_IMAGE image=%@ result=NO_SYMTAB_OR_LINKEDIT symtab=%@ linkedit=%@",
+                 base,
+                 symtabCommand ? @"YES" : @"NO",
+                 linkeditSegment ? @"YES" : @"NO");
+        return;
+    }
+
+    uintptr_t linkeditBase=
+        (uintptr_t)slide +
+        (uintptr_t)linkeditSegment->vmaddr -
+        (uintptr_t)linkeditSegment->fileoff;
+
+    const struct nlist_64 *symbols=
+        (const struct nlist_64 *)(linkeditBase+symtabCommand->symoff);
+    const char *strings=
+        (const char *)(linkeditBase+symtabCommand->stroff);
+
+    XLGB6Log(@"SYMBOL_IMAGE image=%@ slide=0x%llx nsyms=%u strsize=%u",
+             base,
+             (unsigned long long)slide,
+             symtabCommand->nsyms,
+             symtabCommand->strsize);
+
+    NSUInteger matched=0;
+    for (uint32_t i=0;i<symtabCommand->nsyms;i++) {
+        if (matched>=260 || (globalCount && *globalCount>=520)) break;
+
+        uint32_t stringIndex=symbols[i].n_un.n_strx;
+        if (stringIndex==0 ||
+            stringIndex>=symtabCommand->strsize) {
+            continue;
+        }
+
+        const char *rawName=strings+stringIndex;
+        if (!rawName || !rawName[0]) continue;
+
+        size_t remaining=
+            (size_t)(symtabCommand->strsize-stringIndex);
+        if (!memchr(rawName,'\0',remaining)) continue;
+
+        NSString *raw=[NSString stringWithUTF8String:rawName];
+        if (!raw.length) continue;
+
+        NSString *demangled=XLGB69DemangleSymbol(rawName);
+        if (!XLGB69SymbolInteresting(raw,demangled)) continue;
+
+        uintptr_t runtimeAddress=0;
+        if (symbols[i].n_value) {
+            runtimeAddress=
+                (uintptr_t)symbols[i].n_value+(uintptr_t)slide;
+        }
+
+        XLGB6Log(@"SWIFT_SYMBOL image=%@ index=%u address=%p type=0x%x raw=%@ demangled=%@",
+                 base,
+                 i,
+                 (void *)runtimeAddress,
+                 symbols[i].n_type,
+                 raw,
+                 demangled ?: @"-");
+
+        matched++;
+        if (globalCount) (*globalCount)++;
+    }
+
+    XLGB6Log(@"SYMBOL_IMAGE_END image=%@ matched=%lu",
+             base,(unsigned long)matched);
+}
+
+static void XLGB69DumpSwiftSymbolSources(NSString *reason) {
+    XLGB6Log(@"========== SWIFT_SYMBOL_SOURCE_PROBE %@ ==========",
+             reason ?: @"-");
+
+    NSUInteger totalMatched=0;
+    uint32_t imageCount=_dyld_image_count();
+    for (uint32_t i=0;i<imageCount;i++) {
+        XLGB69DumpSymbolsForImage(i,&totalMatched);
+        if (totalMatched>=520) break;
+    }
+
+    XLGB6Log(@"SWIFT_SYMBOL_SOURCE_SUMMARY matched=%lu images=%u",
+             (unsigned long)totalMatched,imageCount);
+    XLGB6Log(@"========== SWIFT_SYMBOL_SOURCE_PROBE_END %@ ==========",
+             reason ?: @"-");
+}
+
 #pragma mark - XLiquidGlass 1.9.3 Beta 6.8 constructor/factory source probe
 
 static BOOL XLGB68InterestingMethodName(NSString *name) {
@@ -6116,7 +6329,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.8 Constructor Probe";
+    self.title=@"Beta 6.9 Swift Symbol Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -6135,7 +6348,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"O probe mapeia inicializadores, factories, símbolos e classes do pipeline Swift que cria os descriptors do Dock. Não lê ivars Swift nem chama inicializadores diretamente.";
+    return @"O probe enumera somente leitura os símbolos Swift de T1Twitter e XServiceLibraries para localizar quem produz descriptors, tabIdentifiers e o XTabbedAppNavigation antes do Dock.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -6157,7 +6370,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta68ConstructorFactoryProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta69SwiftSymbolSourceProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -6174,7 +6387,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.8 Constructor Probe"
+                alertControllerWithTitle:@"Beta 6.9 Swift Symbol Probe"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -6199,7 +6412,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.8 Constructor Probe"
+                alertControllerWithTitle:@"Beta 6.9 Swift Symbol Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -6220,7 +6433,7 @@ static void XLGB68DumpConstructorProbe(NSString *reason) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.8 Constructor Probe"
+            alertControllerWithTitle:@"Beta 6.9 Swift Symbol Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -6243,7 +6456,7 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.8 Constructor Probe",
+        @"title": @"Beta 6.9 Swift Symbol Probe",
         @"subtitle": @"Diagnóstico read-only da fonte nativa do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
@@ -9243,7 +9456,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.8 loaded: constructor/factory source probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.9 loaded: Swift symbol source probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
