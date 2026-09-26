@@ -248,11 +248,6 @@ static void XLGSyncCompatibilityGate(void) {
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
     (void)tableView;
-    return 1;
-}
-
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    (void)tableView;
     return 2;
 }
 
