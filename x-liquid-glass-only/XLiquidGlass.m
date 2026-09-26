@@ -33,11 +33,19 @@ static NSInteger XLGChatDisplayCountForState(NSDictionary *state);
 static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
+static void XLGRefreshTabBarColorModeNow(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
 static NSString *const kXLGTabLabelsKey = @"XLiquidGlassTabLabelsEnabled";
+static NSString *const kXLGTabBarColorModeKey = @"XLiquidGlassTabBarColorMode";
+
+typedef NS_ENUM(NSInteger, XLGTabBarColorMode) {
+    XLGTabBarColorModeNative = 0,
+    XLGTabBarColorModeActiveOnly = 1,
+    XLGTabBarColorModeAllTabs = 2,
+};
 
 static IMP gOrigInstallGate = NULL;
 static IMP gOrigInstallGateForAccount = NULL;
@@ -106,6 +114,32 @@ static BOOL XLGTabLabelsEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     id stored = [defaults objectForKey:kXLGTabLabelsKey];
     return stored ? [stored boolValue] : NO;
+}
+
+static XLGTabBarColorMode XLGTabBarColorModeValue(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    id stored = [defaults objectForKey:kXLGTabBarColorModeKey];
+
+    // Preserve the stable visual behavior for existing users by default.
+    NSInteger value = stored ? [stored integerValue]
+                             : XLGTabBarColorModeActiveOnly;
+    if (value < XLGTabBarColorModeNative ||
+        value > XLGTabBarColorModeAllTabs) {
+        value = XLGTabBarColorModeActiveOnly;
+    }
+    return (XLGTabBarColorMode)value;
+}
+
+static NSString *XLGTabBarColorModeTitle(XLGTabBarColorMode mode) {
+    switch (mode) {
+        case XLGTabBarColorModeNative:
+            return @"Nativa";
+        case XLGTabBarColorModeAllTabs:
+            return @"Todas as abas";
+        case XLGTabBarColorModeActiveOnly:
+        default:
+            return @"Aba ativa";
+    }
 }
 
 static BOOL XLGHookMethod(Class cls,
@@ -217,20 +251,51 @@ static void XLGSyncCompatibilityGate(void) {
     return 1;
 }
 
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void)tableView;
+    return 2;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
-    (void)section;
-    return 2;
+    return section == 0 ? 2 : 1;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    (void)tableView;
+    return section == 1 ? @"Coloração da Tab Bar" : nil;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
-    (void)section;
-    return @"Reinicie o X após alterar esta opção para aplicar completamente a interface.";
+    if (section == 0) {
+        return @"Reinicie o X após alterar esta opção para aplicar completamente a interface.";
+    }
+    return @"Escolha entre a aparência nativa, somente a aba ativa com a cor do tema ou todas as abas com a cor do tema.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section == 1) {
+        static NSString *colorIdentifier = @"XLiquidGlassTabBarColorModeCell";
+        UITableViewCell *cell =
+            [tableView dequeueReusableCellWithIdentifier:colorIdentifier];
+        if (!cell) {
+            cell = [[UITableViewCell alloc]
+                initWithStyle:UITableViewCellStyleValue1
+              reuseIdentifier:colorIdentifier];
+        }
+
+        cell.textLabel.text = @"Cor do tema";
+        cell.detailTextLabel.text =
+            XLGTabBarColorModeTitle(XLGTabBarColorModeValue());
+        cell.accessoryView = nil;
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        return cell;
+    }
+
+    // Stable 1.9.3 controls: intentionally unchanged.
     static NSString *identifier = @"XLiquidGlassToggleCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) {
@@ -285,6 +350,71 @@ static void XLGSyncCompatibilityGate(void) {
     [[NSUserDefaults standardUserDefaults] setBool:sender.isOn forKey:kXLGTabLabelsKey];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"XLiquidGlassRefreshTabBar"
                                                         object:nil];
+}
+
+
+- (void)xlgSelectTabBarColorMode:(XLGTabBarColorMode)mode {
+    if (mode == XLGTabBarColorModeValue()) return;
+
+    [[NSUserDefaults standardUserDefaults]
+        setInteger:mode
+            forKey:kXLGTabBarColorModeKey];
+
+    XLGRefreshTabBarColorModeNow();
+
+    NSIndexPath *path = [NSIndexPath indexPathForRow:0 inSection:1];
+    [self.tableView reloadRowsAtIndexPaths:@[path]
+                          withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)xlgShowTabBarColorModeSelector {
+    UIAlertController *sheet =
+        [UIAlertController alertControllerWithTitle:@"Cor do tema na Tab Bar"
+                                            message:nil
+                                     preferredStyle:UIAlertControllerStyleActionSheet];
+
+    NSArray<NSDictionary *> *options = @[
+        @{@"title": @"Nativa", @"value": @(XLGTabBarColorModeNative)},
+        @{@"title": @"Aba ativa", @"value": @(XLGTabBarColorModeActiveOnly)},
+        @{@"title": @"Todas as abas", @"value": @(XLGTabBarColorModeAllTabs)}
+    ];
+
+    __weak typeof(self) weakSelf = self;
+    for (NSDictionary *option in options) {
+        XLGTabBarColorMode mode =
+            (XLGTabBarColorMode)[option[@"value"] integerValue];
+
+        [sheet addAction:
+            [UIAlertAction actionWithTitle:option[@"title"]
+                                     style:UIAlertActionStyleDefault
+                                   handler:^(__unused UIAlertAction *action) {
+                [weakSelf xlgSelectTabBarColorMode:mode];
+            }]];
+    }
+
+    [sheet addAction:
+        [UIAlertAction actionWithTitle:@"Cancelar"
+                                 style:UIAlertActionStyleCancel
+                               handler:nil]];
+
+    UIPopoverPresentationController *popover = sheet.popoverPresentationController;
+    if (popover) {
+        popover.sourceView = self.view;
+        popover.sourceRect = CGRectMake(CGRectGetMidX(self.view.bounds),
+                                        CGRectGetMaxY(self.view.bounds)-1.0,
+                                        1.0,
+                                        1.0);
+    }
+
+    [self presentViewController:sheet animated:YES completion:nil];
+}
+
+- (void)tableView:(UITableView *)tableView
+ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == 1 && indexPath.row == 0) {
+        [self xlgShowTabBarColorModeSelector];
+    }
 }
 
 @end
@@ -5051,35 +5181,62 @@ static void XLGApplyThemeToXNavItem(UIView *item) {
     UIImageView *imageView = XLGImageViewForXNavItem(item);
     if (!imageView || !imageView.image) return;
 
+    XLGTabBarColorMode mode = XLGTabBarColorModeValue();
     BOOL selected = XLGXNavItemIsSelected(item);
-    UIColor *color = selected ? XLGResolvedAccentColor()
-                              : XLGNativeInactiveTabColor();
+    UIColor *accent = XLGResolvedAccentColor();
+    UIColor *inactive = XLGNativeInactiveTabColor();
+    UIColor *imageColor = nil;
 
-    if (imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-        imageView.image =
-            [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    if (mode == XLGTabBarColorModeAllTabs) {
+        imageColor = accent;
+    } else if (mode == XLGTabBarColorModeActiveOnly) {
+        // Validated Test7/Test8 state:
+        // labeled items are the visible primary row and remain native;
+        // unlabeled Portal/Carried copies keep the theme accent.
+        imageColor = item.accessibilityLabel.length ? inactive : accent;
     }
-    imageView.tintColor = color;
-    item.tintColor = color;
+
+    if (imageColor) {
+        if (imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+            imageView.image =
+                [imageView.image imageWithRenderingMode:
+                    UIImageRenderingModeAlwaysTemplate];
+        }
+        imageView.tintColor = imageColor;
+
+        // The probe showed Active Only changes the UIImageView, not the
+        // TabBarItemView tint itself. Preserve item-level tint only for All Tabs.
+        if (mode == XLGTabBarColorModeAllTabs) {
+            item.tintColor = imageColor;
+        }
+    }
 
     UIView *bar = XLGAncestorNamed(item, @"XNavigation.TabBarView");
-    if (selected && bar) {
+    if (mode != XLGTabBarColorModeNative && selected && bar) {
         for (NSString *key in @[@"pill", @"platter"]) {
             id chrome = XLGSafeValueForKey(bar, key);
             if ([chrome isKindOfClass:UIView.class]) {
-                ((UIView *)chrome).tintColor = XLGResolvedAccentColor();
+                ((UIView *)chrome).tintColor = accent;
             }
         }
     }
 
+    // Keep the stable labels feature independent from the new color selector.
     for (UIView *subview in item.subviews ?: @[]) {
         if (![subview isKindOfClass:UILabel.class]) continue;
         UILabel *label = (UILabel *)subview;
-        if ([label.accessibilityIdentifier isEqualToString:@"XLiquidGlassUnreadBadge"]) {
+        if ([label.accessibilityIdentifier
+                isEqualToString:@"XLiquidGlassUnreadBadge"]) {
             continue;
         }
+
         label.hidden = !XLGTabLabelsEnabled();
-        if (!label.hidden) label.textColor = color;
+        if (label.hidden || mode == XLGTabBarColorModeNative) continue;
+
+        label.textColor =
+            (mode == XLGTabBarColorModeAllTabs)
+                ? accent
+                : (selected ? accent : inactive);
     }
 }
 
@@ -5126,6 +5283,28 @@ static void XLGRefreshGlobalTabBar(void) {
                 XLGApplyBadgeToXNavItem(item);
             }
         }
+    });
+}
+
+static void XLGRefreshTabBarColorModeNow(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Run X's original layouts first. Native mode then stays untouched;
+        // the two theme modes are reapplied by the already-existing 1.9.3 hook.
+        for (UIWindow *window in XLGVisibleWindows()) {
+            for (UIView *bar in
+                 XLGSubviewsMatchingClassName(window, @"XNavigation.TabBarView")) {
+                [bar setNeedsLayout];
+                [bar layoutIfNeeded];
+            }
+
+            for (UIView *item in
+                 XLGSubviewsMatchingClassName(window, @"XNavigation.TabBarItemView")) {
+                [item setNeedsLayout];
+                [item layoutIfNeeded];
+            }
+        }
+
+        XLGRefreshGlobalTabBar();
     });
 }
 
@@ -6631,7 +6810,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
+        NSLog(@"[XLiquidGlass] 2.0 Beta 1 loaded: 1.9.3 stable base + Tab Bar color modes");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
