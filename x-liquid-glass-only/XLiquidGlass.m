@@ -3732,7 +3732,7 @@ static NSString *XLGB6LogPath(void) {
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta67NativeRecalcConnection.log"]
+            @"XLiquidGlass193Beta68ConstructorFactoryProbe.log"]
         : nil;
 }
 
@@ -4346,6 +4346,7 @@ static void XLGB6ProbeSnapshot(NSString *reason) {
              gXLGB67LastForwardedDescription ?: @"-",
              gXLGB67LastAfterDescription ?: @"-");
 
+    XLGB68DumpConstructorProbe(reason);
     XLGB63DumpSwiftAppNavigation(reason);
 
     Class utility=NSClassFromString(@"CustomTabBarUtility");
@@ -5914,6 +5915,193 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 
 
+
+#pragma mark - XLiquidGlass 1.9.3 Beta 6.8 constructor/factory source probe
+
+static BOOL XLGB68InterestingMethodName(NSString *name) {
+    if (!name.length) return NO;
+    NSString *lower=name.lowercaseString ?: @"";
+    return [lower hasPrefix:@"init"] ||
+           [lower containsString:@"descriptor"] ||
+           [lower containsString:@"factory"] ||
+           [lower containsString:@"create"] ||
+           [lower containsString:@"make"] ||
+           [lower containsString:@"build"] ||
+           [lower containsString:@"tab"] ||
+           [lower containsString:@"navigation"] ||
+           [lower containsString:@"setting"] ||
+           [lower containsString:@"config"] ||
+           [lower containsString:@"identifier"] ||
+           [lower containsString:@"content"] ||
+           [lower containsString:@"source"];
+}
+
+static NSString *XLGB68SymbolForIMP(IMP imp, NSString **imageOut) {
+    if (!imp) return @"-";
+    Dl_info info={0};
+    if (!dladdr((const void *)imp,&info)) return @"-";
+
+    if (imageOut) {
+        *imageOut=info.dli_fname
+            ? [[NSString stringWithUTF8String:info.dli_fname] lastPathComponent]
+            : @"-";
+    }
+
+    return info.dli_sname
+        ? [NSString stringWithUTF8String:info.dli_sname]
+        : @"-";
+}
+
+static void XLGB68DumpMethodsForClass(Class cls, NSString *origin) {
+    if (!cls) return;
+    NSString *className=NSStringFromClass(cls) ?: @"?";
+
+    unsigned int count=0;
+    Method *methods=class_copyMethodList(cls,&count);
+    for (unsigned int i=0;i<count;i++) {
+        Method method=methods[i];
+        NSString *selectorName=
+            NSStringFromSelector(method_getName(method)) ?: @"";
+        if (!XLGB68InterestingMethodName(selectorName)) continue;
+
+        IMP imp=method_getImplementation(method);
+        NSString *image=nil;
+        NSString *symbol=XLGB68SymbolForIMP(imp,&image);
+
+        XLGB6Log(@"CTOR_METHOD origin=%@ kind=instance class=%@ selector=%@ types=%s imp=%p symbol=%@ image=%@",
+                 origin ?: @"-",
+                 className,
+                 selectorName,
+                 method_getTypeEncoding(method) ?: "-",
+                 imp,
+                 symbol ?: @"-",
+                 image ?: @"-");
+    }
+    if (methods) free(methods);
+
+    Class meta=object_getClass(cls);
+    if (!meta) return;
+
+    count=0;
+    methods=class_copyMethodList(meta,&count);
+    for (unsigned int i=0;i<count;i++) {
+        Method method=methods[i];
+        NSString *selectorName=
+            NSStringFromSelector(method_getName(method)) ?: @"";
+        if (!XLGB68InterestingMethodName(selectorName)) continue;
+
+        IMP imp=method_getImplementation(method);
+        NSString *image=nil;
+        NSString *symbol=XLGB68SymbolForIMP(imp,&image);
+
+        XLGB6Log(@"CTOR_METHOD origin=%@ kind=class class=%@ selector=%@ types=%s imp=%p symbol=%@ image=%@",
+                 origin ?: @"-",
+                 className,
+                 selectorName,
+                 method_getTypeEncoding(method) ?: "-",
+                 imp,
+                 symbol ?: @"-",
+                 image ?: @"-");
+    }
+    if (methods) free(methods);
+}
+
+static BOOL XLGB68InterestingRuntimeClassName(NSString *name) {
+    if (!name.length) return NO;
+    BOOL module=
+        [name containsString:@"XNavigation"] ||
+        [name containsString:@"T1TwitterSwift"] ||
+        [name containsString:@"T1TabCustomization"] ||
+        [name containsString:@"T1MainAppTabDataSource"];
+    if (!module) return NO;
+
+    NSString *lower=name.lowercaseString ?: @"";
+    return [lower containsString:@"tab"] ||
+           [lower containsString:@"navigation"] ||
+           [lower containsString:@"descriptor"] ||
+           [lower containsString:@"setting"] ||
+           [lower containsString:@"customization"];
+}
+
+static void XLGB68DumpConstructorProbe(NSString *reason) {
+    XLGB6Log(@"========== CTOR_FACTORY_PROBE %@ ==========",reason ?: @"-");
+
+    NSArray<NSString *> *targets=@[
+        @"T1TwitterSwift.XTabbedAppNavigation",
+        @"_TtC14T1TwitterSwift20XTabbedAppNavigation",
+        @"T1TwitterSwift.XTabbedAppNavigationViewController",
+        @"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController",
+        @"T1TwitterSwift.MainAppNavigationSettings",
+        @"_TtC14T1TwitterSwift25MainAppNavigationSettings",
+        @"T1MainAppTabDataSource",
+        @"T1TwitterSwift.MainAppTabDataSource",
+        @"_TtC14T1TwitterSwift20MainAppTabDataSource",
+        @"T1TabCustomizationConfig",
+        @"XNavigation.TabBarController",
+        @"_TtC11XNavigation16TabBarController",
+        @"XNavigation.TabBarView",
+        @"_TtC11XNavigation10TabBarView",
+        @"XNavigation.TabBarItemView",
+        @"_TtC11XNavigation14TabBarItemView"
+    ];
+
+    NSMutableSet<NSString *> *seen=[NSMutableSet set];
+    for (NSString *requested in targets) {
+        Class cls=NSClassFromString(requested);
+        NSString *resolved=cls ? NSStringFromClass(cls) : @"nil";
+        XLGB6Log(@"CTOR_CLASS_LOOKUP requested=%@ resolved=%@ ptr=%p",
+                 requested,resolved,cls);
+        if (!cls || [seen containsObject:resolved]) continue;
+        [seen addObject:resolved];
+        XLGB68DumpMethodsForClass(cls,@"target");
+    }
+
+    int total=objc_getClassList(NULL,0);
+    if (total>0 && total<100000) {
+        Class *classes=(Class *)calloc((size_t)total,sizeof(Class));
+        if (classes) {
+            int fetched=objc_getClassList(classes,total);
+            NSUInteger matched=0;
+            for (int i=0;i<fetched;i++) {
+                Class cls=classes[i];
+                NSString *name=cls ? NSStringFromClass(cls) : nil;
+                if (!XLGB68InterestingRuntimeClassName(name)) continue;
+                if ([seen containsObject:name]) continue;
+                [seen addObject:name];
+                matched++;
+                XLGB6Log(@"CTOR_DISCOVERED_CLASS class=%@ ptr=%p superclass=%@",
+                         name ?: @"?",
+                         cls,
+                         class_getSuperclass(cls)
+                            ? NSStringFromClass(class_getSuperclass(cls))
+                            : @"nil");
+                XLGB68DumpMethodsForClass(cls,@"discovered");
+                if (matched>=80) break;
+            }
+            free(classes);
+        }
+    }
+
+    for (NSString *symbolName in @[
+        @"$s11XNavigation16TabBarControllerC11descriptorsACSayAC0B0VG_tcfc",
+        @"_$s11XNavigation16TabBarControllerC11descriptorsACSayAC0B0VG_tcfc"
+    ]) {
+        void *address=dlsym(RTLD_DEFAULT,symbolName.UTF8String);
+        Dl_info info={0};
+        BOOL ok=address && dladdr(address,&info);
+        XLGB6Log(@"CTOR_DLSYM requested=%@ address=%p resolvedSymbol=%@ image=%@",
+                 symbolName,
+                 address,
+                 (ok && info.dli_sname)
+                    ? [NSString stringWithUTF8String:info.dli_sname] : @"-",
+                 (ok && info.dli_fname)
+                    ? [[NSString stringWithUTF8String:info.dli_fname] lastPathComponent]
+                    : @"-");
+    }
+
+    XLGB6Log(@"========== CTOR_FACTORY_PROBE_END %@ ==========",reason ?: @"-");
+}
+
 #pragma mark - XLiquidGlass 1.9.3 Beta 6 NFB probe UI
 
 @interface XLiquidGlassBeta6ProbeViewController : UITableViewController
@@ -5927,7 +6115,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.7 Native Connection";
+    self.title=@"Beta 6.8 Constructor Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -5946,7 +6134,7 @@ static void XLGB6InstallCorrectionHooks(void) {
  titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"A ponte não chama recalculate manualmente. Ela substitui a lista somente quando o próprio X executa o recálculo nativo do Liquid Glass e mantém um resumo em memória mesmo após limpar o relatório.";
+    return @"O probe mapeia inicializadores, factories, símbolos e classes do pipeline Swift que cria os descriptors do Dock. Não lê ivars Swift nem chama inicializadores diretamente.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -5968,7 +6156,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta67NativeRecalcConnection.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta68ConstructorFactoryProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -5985,7 +6173,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.7 Native Connection"
+                alertControllerWithTitle:@"Beta 6.8 Constructor Probe"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -6010,7 +6198,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.7 Native Connection"
+                alertControllerWithTitle:@"Beta 6.8 Constructor Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -6031,7 +6219,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.7 Native Connection"
+            alertControllerWithTitle:@"Beta 6.8 Constructor Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -6054,7 +6242,7 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.7 Native Connection",
+        @"title": @"Beta 6.8 Constructor Probe",
         @"subtitle": @"Diagnóstico read-only da fonte nativa do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
@@ -9054,7 +9242,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.7 loaded: native recalc connection + persistent probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.8 loaded: constructor/factory source probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
