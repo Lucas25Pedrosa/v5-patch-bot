@@ -3700,12 +3700,16 @@ static IMP gOrigXLGB61RecalculateWithPanelIDs=NULL;
 static IMP gOrigXLGB61InitializeTabContent=NULL;
 static BOOL gXLGB61PanelPipelineHooksInstalled=NO;
 
+// Beta 6.2: active post-initialization reconcile on the real Swift navigation VC.
+static char kXLGB62ActiveReconcileAttemptsKey;
+static BOOL gXLGB62ActiveReconcileScheduled=NO;
+
 static NSString *XLGB6LogPath(void) {
     NSString *documents=NSSearchPathForDirectoriesInDomains(
         NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     return documents.length
         ? [documents stringByAppendingPathComponent:
-            @"XLiquidGlass193Beta61PanelIDFixProbe.log"]
+            @"XLiquidGlass193Beta62ActiveReconcileProbe.log"]
         : nil;
 }
 
@@ -4564,8 +4568,152 @@ static void XLGB61InstallPanelPipelineHooks(void) {
 }
 
 
+
+static UIViewController *XLGB62FindActiveNavigationController(void) {
+    NSMutableArray<UIViewController *> *queue=[NSMutableArray array];
+    NSMutableSet<NSValue *> *visited=[NSMutableSet set];
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows ?: @[]) {
+            if (window.rootViewController) {
+                [queue addObject:window.rootViewController];
+            }
+        }
+    }
+
+    for (NSUInteger i=0;i<queue.count && i<260;i++) {
+        UIViewController *vc=queue[i];
+        NSValue *pointer=[NSValue valueWithPointer:(__bridge const void *)vc];
+        if ([visited containsObject:pointer]) continue;
+        [visited addObject:pointer];
+
+        NSString *name=NSStringFromClass(vc.class) ?: @"";
+        if ([name isEqualToString:@"T1TwitterSwift.XTabbedAppNavigationViewController"] ||
+            [name containsString:@"XTabbedAppNavigationViewController"]) {
+            if ([vc respondsToSelector:
+                    NSSelectorFromString(@"recalculateVisiblePanelsWithUpdatedPanelIDs:")]) {
+                return vc;
+            }
+        }
+
+        for (UIViewController *child in vc.childViewControllers ?: @[]) {
+            if (child) [queue addObject:child];
+        }
+        if (vc.presentedViewController) {
+            [queue addObject:vc.presentedViewController];
+        }
+    }
+
+    return nil;
+}
+
+static void XLGB62ActiveReconcile(NSString *reason) {
+    if (!XLGEnabled()) return;
+
+    UIViewController *controller=XLGB62FindActiveNavigationController();
+    if (!controller) {
+        XLGB6Log(@"ACTIVE_RECONCILE reason=%@ result=NO_CONTROLLER",
+                 reason ?: @"-");
+        return;
+    }
+
+    NSNumber *attemptValue=objc_getAssociatedObject(
+        controller,&kXLGB62ActiveReconcileAttemptsKey);
+    NSInteger attempts=[attemptValue integerValue];
+    if (attempts>=3) {
+        XLGB6Log(@"ACTIVE_RECONCILE reason=%@ result=SKIP_MAX_ATTEMPTS controller=%@ ptr=%p attempts=%ld",
+                 reason ?: @"-",
+                 NSStringFromClass(controller.class) ?: @"?",
+                 controller,
+                 (long)attempts);
+        return;
+    }
+
+    NSString *missing=nil;
+    NSArray *desired=XLGB61DesiredPanelIDs(&missing);
+    if (!desired.count) {
+        XLGB6Log(@"ACTIVE_RECONCILE reason=%@ result=NO_DESIRED_PANEL_IDS missing=%@",
+                 reason ?: @"-",
+                 missing ?: @"-");
+        return;
+    }
+
+    id appNavigation=XLGB6ObjectBySelector(controller,@"appNavigation");
+    id visibleBefore=nil;
+    SEL visibleSEL=NSSelectorFromString(@"visiblePanelIDsForAppNavigation:");
+    if (appNavigation && [controller respondsToSelector:visibleSEL]) {
+        @try {
+            visibleBefore=((id(*)(id,SEL,id))objc_msgSend)(
+                controller,visibleSEL,appNavigation);
+        } @catch (__unused NSException *exception) {
+            visibleBefore=nil;
+        }
+    }
+
+    XLGB6Log(@"ACTIVE_RECONCILE reason=%@ controller=%@ ptr=%p attempt=%ld appNavigation=%@ visibleBefore=%@ desired=%@",
+             reason ?: @"-",
+             NSStringFromClass(controller.class) ?: @"?",
+             controller,
+             (long)(attempts+1),
+             appNavigation ? NSStringFromClass([appNavigation class]) : @"nil",
+             XLGB61DescribePanelValue(visibleBefore),
+             desired);
+
+    SEL recalcSEL=NSSelectorFromString(
+        @"recalculateVisiblePanelsWithUpdatedPanelIDs:");
+
+    @try {
+        ((void(*)(id,SEL,id))objc_msgSend)(
+            controller,recalcSEL,desired);
+
+        objc_setAssociatedObject(
+            controller,
+            &kXLGB62ActiveReconcileAttemptsKey,
+            @(attempts+1),
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        XLGB6Log(@"ACTIVE_RECONCILE reason=%@ result=CALLED panelIDs=%@",
+                 reason ?: @"-",desired);
+    } @catch (NSException *exception) {
+        XLGB6Log(@"ACTIVE_RECONCILE reason=%@ result=EXCEPTION name=%@ reason=%@",
+                 reason ?: @"-",
+                 exception.name ?: @"-",
+                 exception.reason ?: @"-");
+        return;
+    }
+
+    XLGB6ScheduleSnapshot(
+        [NSString stringWithFormat:@"active-reconcile-%@",reason ?: @"-"],
+        0.10);
+}
+
+static void XLGB62ScheduleActiveReconcile(NSString *reason,
+                                          NSTimeInterval delay) {
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(delay*NSEC_PER_SEC)),
+        dispatch_get_main_queue(), ^{
+            XLGB62ActiveReconcile(reason);
+        });
+}
+
+static void XLGB62InstallActiveReconcileSchedule(void) {
+    if (gXLGB62ActiveReconcileScheduled) return;
+    gXLGB62ActiveReconcileScheduled=YES;
+
+    // Early attempts may legitimately find no controller. Once the real Swift
+    // navigation VC exists, allow up to three coordinated recalculations.
+    XLGB62ScheduleActiveReconcile(@"startup-0.45",0.45);
+    XLGB62ScheduleActiveReconcile(@"startup-0.90",0.90);
+    XLGB62ScheduleActiveReconcile(@"startup-1.60",1.60);
+    XLGB62ScheduleActiveReconcile(@"startup-3.00",3.00);
+}
+
+
 static void XLGB6InstallCorrectionHooks(void) {
     XLGB61InstallPanelPipelineHooks();
+    XLGB62InstallActiveReconcileSchedule();
 
     if (!gXLGB6VisibleSetterOriginals) {
         gXLGB6VisibleSetterOriginals=[NSMutableDictionary dictionary];
@@ -4640,7 +4788,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"Beta 6.1 Tab Probe";
+    self.title=@"Beta 6.2 Tab Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -4681,7 +4829,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         cell.detailTextLabel.text=@"Registra o estado atual do Dock.";
     } else if (indexPath.row==1) {
         cell.textLabel.text=@"Copiar relatório";
-        cell.detailTextLabel.text=@"XLiquidGlass193Beta61PanelIDFixProbe.log";
+        cell.detailTextLabel.text=@"XLiquidGlass193Beta62ActiveReconcileProbe.log";
     } else {
         cell.textLabel.text=@"Limpar relatório";
         cell.detailTextLabel.text=@"Remove o relatório anterior.";
@@ -4698,7 +4846,7 @@ static void XLGB6InstallCorrectionHooks(void) {
         XLGB6ProbeSnapshot(@"manual-NFB");
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.1 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.2 Tab Probe"
                                  message:@"Captura completa adicionada ao relatório."
                           preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:
@@ -4723,7 +4871,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
         UIAlertController *alert=
             [UIAlertController
-                alertControllerWithTitle:@"Beta 6.1 Tab Probe"
+                alertControllerWithTitle:@"Beta 6.2 Tab Probe"
                                  message:
                     [NSString stringWithFormat:
                         @"Relatório copiado (%lu caracteres).",
@@ -4744,7 +4892,7 @@ static void XLGB6InstallCorrectionHooks(void) {
 
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"Beta 6.1 Tab Probe"
+            alertControllerWithTitle:@"Beta 6.2 Tab Probe"
                              message:@"Relatório limpo."
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -4767,8 +4915,8 @@ static void XLGB6InjectNFBProbeEntry(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"Beta 6.1 Tab Probe",
-        @"subtitle": @"Correção por panelID + diagnóstico do Dock.",
+        @"title": @"Beta 6.2 Tab Probe",
+        @"subtitle": @"Active reconcile + diagnóstico do Dock.",
         @"icon": @"flask",
         @"action": @"showXLiquidGlassBeta6Probe"
     }];
@@ -7767,13 +7915,13 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.1 loaded: active panelID pipeline correction + probe + 1.9.2 stable feature set");
+        NSLog(@"[XLiquidGlass] 1.9.3 Beta 6.2 loaded: active Swift navigation reconcile + panelID probe + 1.9.2 stable feature set");
 
         NSString *beta6Log=XLGB6LogPath();
         if (beta6Log.length) {
             [NSFileManager.defaultManager removeItemAtPath:beta6Log error:nil];
         }
-        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.1 PanelID Correction + Probe ==========");
+        XLGB6Log(@"========== XLiquidGlass 1.9.3 Beta 6.2 Active Reconcile + Probe ==========");
         XLGB6Log(@"BOOT liquidGlass=%@ bh_tabs_visible=%@",
                  XLGEnabled() ? @"ON" : @"OFF",
                  [XLGB6DesiredPages() componentsJoinedByString:@","] ?: @"nil");
