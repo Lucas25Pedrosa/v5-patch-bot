@@ -1312,6 +1312,15 @@ static UIView *XLGFindLiquidSelectionChrome(UIView *root) {
 }
 
 
+static id XLGSafeValueForKey(id object, NSString *key) {
+    if (!object || !key.length) return nil;
+    @try {
+        return [object valueForKey:key];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
 static UIColor *XLGNativeInactiveTabColor(void) {
     Class tabViewClass=NSClassFromString(@"T1TabView");
     SEL itemColorSEL=NSSelectorFromString(@"itemColor");
@@ -1341,27 +1350,32 @@ static NSArray<UIView *> *XLGXNavigationTabItems(UIView *bar) {
 
 static BOOL XLGXNavigationItemLooksSelected(UIView *item,
                                             UIView *bar,
-                                            UIView *chrome) {
+                                            NSInteger fallbackIndex) {
     if (!item || !bar) return NO;
 
     if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) {
         return YES;
     }
 
-    if ([item isKindOfClass:UIControl.class]) {
-        UIControl *control=(UIControl *)item;
-        if (control.selected || control.highlighted) return YES;
+    id itemViews=XLGSafeValueForKey(bar,@"itemViews");
+    id selectedIndexValue=XLGSafeValueForKey(bar,@"selectedIndex");
+
+    if ([itemViews isKindOfClass:NSArray.class] &&
+        [selectedIndexValue respondsToSelector:@selector(integerValue)]) {
+        NSUInteger index=[(NSArray *)itemViews indexOfObjectIdenticalTo:item];
+        if (index != NSNotFound) {
+            return (NSInteger)index == [selectedIndexValue integerValue];
+        }
     }
 
-    if (chrome && !chrome.hidden && chrome.alpha>0.01) {
-        CGRect itemFrame=[item convertRect:item.bounds toView:bar];
-        CGRect chromeFrame=[chrome convertRect:chrome.bounds toView:bar];
-        CGRect intersection=CGRectIntersection(itemFrame,chromeFrame);
-        if (!CGRectIsNull(intersection) && !CGRectIsEmpty(intersection)) {
-            CGFloat itemArea=MAX(1.0,itemFrame.size.width*itemFrame.size.height);
-            CGFloat overlap=intersection.size.width*intersection.size.height;
-            if ((overlap/itemArea)>0.20) return YES;
-        }
+    if ([selectedIndexValue respondsToSelector:@selector(integerValue)] &&
+        fallbackIndex >= 0) {
+        return fallbackIndex == [selectedIndexValue integerValue];
+    }
+
+    if ([item isKindOfClass:UIControl.class]) {
+        UIControl *control=(UIControl *)item;
+        return control.selected || control.highlighted;
     }
 
     return NO;
@@ -1371,12 +1385,29 @@ static void XLGApplyActiveOnlyToXNavigationTabBar(UIView *bar,
                                                    UIColor *accent) {
     if (!bar || !accent) return;
 
-    UIView *chrome=XLGFindLiquidSelectionChrome(bar);
     UIColor *inactive=XLGNativeInactiveTabColor();
-    NSArray<UIView *> *items=XLGXNavigationTabItems(bar);
 
+    id nativeItemViews=XLGSafeValueForKey(bar,@"itemViews");
+    NSArray<UIView *> *items=nil;
+
+    if ([nativeItemViews isKindOfClass:NSArray.class]) {
+        NSMutableArray<UIView *> *valid=[NSMutableArray array];
+        for (id object in (NSArray *)nativeItemViews) {
+            if ([object isKindOfClass:UIView.class]) {
+                [valid addObject:(UIView *)object];
+            }
+        }
+        if (valid.count) items=[valid copy];
+    }
+
+    if (!items.count) {
+        items=XLGXNavigationTabItems(bar);
+    }
+
+    NSInteger fallbackIndex=0;
     for (UIView *item in items) {
-        BOOL selected=XLGXNavigationItemLooksSelected(item,bar,chrome);
+        BOOL selected=
+            XLGXNavigationItemLooksSelected(item,bar,fallbackIndex);
         UIColor *color=selected ? accent : inactive;
 
         XLGTintImageViews(item,color,NO);
@@ -1387,6 +1418,8 @@ static void XLGApplyActiveOnlyToXNavigationTabBar(UIView *bar,
                 ((UILabel *)subview).textColor=color;
             }
         }
+
+        fallbackIndex++;
     }
 }
 
