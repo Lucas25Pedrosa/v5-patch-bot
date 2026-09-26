@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
@@ -75,6 +76,13 @@ static IMP gOrigVisualEffectViewSetEffect = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
 static BOOL gXLGSearchEffectGuardInstalled = NO;
 static char kXLGSearchBlurLoggedKey;
+
+// 2.0 Beta 5: timeline edge blur only. These hooks are isolated from the
+// validated 1.9.2 renderer, badge pipeline, color selector and Search Blur.
+static IMP gOrigHomeTimelineViewDidLayoutSubviews = NULL;
+static IMP gOrigHomeTimelineViewDidAppear = NULL;
+static IMP gOrigTimelineScrollEdgeBackdropLayoutSubviews = NULL;
+static BOOL gXLGTimelineEdgeBlurFixInstalled = NO;
 
 static BOOL gDebugSettingsHooked = NO;
 static BOOL gSwiftLiquidGlassHooked = NO;
@@ -229,7 +237,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Reinicie o X após alterar esta opção para aplicar completamente a interface.";
+    return nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -6537,6 +6545,235 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
+#pragma mark - XLiquidGlass 2.0 Beta 5 timeline edge blur
+
+static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
+    if (!cls) return NO;
+    NSString *name=NSStringFromClass(cls);
+    return [name isEqualToString:
+                @"TwitterHomeFeatureImplementation.HomeTimelineContainerViewController"] ||
+           [name isEqualToString:@"THFHomeTimelineItemsViewController"];
+}
+
+static UIViewController *XLGHomeTimelineControllerForView(UIView *view) {
+    if (!view) return nil;
+
+    UIResponder *responder=view;
+    NSUInteger depth=0;
+    while (responder && depth<64) {
+        if ([responder isKindOfClass:UIViewController.class] &&
+            XLGIsHomeTimelineControllerClass(responder.class)) {
+            return (UIViewController *)responder;
+        }
+        responder=responder.nextResponder;
+        depth++;
+    }
+    return nil;
+}
+
+static UIViewController *XLGFindVisibleHomeTimelineController(
+    UIViewController *controller) {
+
+    if (!controller) return nil;
+
+    if (XLGIsHomeTimelineControllerClass(controller.class) &&
+        controller.isViewLoaded &&
+        controller.view.window) {
+        return controller;
+    }
+
+    if (controller.presentedViewController) {
+        UIViewController *found=
+            XLGFindVisibleHomeTimelineController(
+                controller.presentedViewController);
+        if (found) return found;
+    }
+
+    if ([controller isKindOfClass:UINavigationController.class]) {
+        UIViewController *found=
+            XLGFindVisibleHomeTimelineController(
+                ((UINavigationController *)controller).visibleViewController);
+        if (found) return found;
+    }
+
+    if ([controller isKindOfClass:UITabBarController.class]) {
+        UIViewController *found=
+            XLGFindVisibleHomeTimelineController(
+                ((UITabBarController *)controller).selectedViewController);
+        if (found) return found;
+    }
+
+    for (UIViewController *child in controller.childViewControllers ?: @[]) {
+        if (child.isViewLoaded && !child.view.window) continue;
+        UIViewController *found=
+            XLGFindVisibleHomeTimelineController(child);
+        if (found) return found;
+    }
+
+    return nil;
+}
+
+static UIViewController *XLGCurrentVisibleHomeTimelineController(void) {
+    for (UIWindow *window in XLGVisibleWindows()) {
+        UIViewController *found=
+            XLGFindVisibleHomeTimelineController(
+                window.rootViewController);
+        if (found) return found;
+    }
+    return nil;
+}
+
+static BOOL XLGViewBelongsToHomeTimeline(UIView *view) {
+    if (!view) return NO;
+    if (XLGHomeTimelineControllerForView(view)) return YES;
+
+    UIViewController *controller=
+        XLGCurrentVisibleHomeTimelineController();
+    return controller &&
+           controller.isViewLoaded &&
+           [view isDescendantOfView:controller.view];
+}
+
+static BOOL XLGTimelineEdgeEffectViewIsProtected(
+    UIVisualEffectView *effectView) {
+
+    if (!effectView) return NO;
+
+    UIView *treatment=
+        XLGAncestorNamed(
+            effectView,
+            @"XDesignSystem.ScrollEdgeTreatment");
+    if (!treatment) return NO;
+    if (!XLGViewBelongsToHomeTimeline(effectView)) return NO;
+
+    UIWindow *window=effectView.window;
+    if (!window) return YES;
+
+    CGRect frame=[effectView convertRect:effectView.bounds
+                                  toView:window];
+    CGFloat height=CGRectGetHeight(window.bounds);
+
+    BOOL top=
+        CGRectGetMaxY(frame)>0.0 &&
+        CGRectGetMinY(frame)<180.0;
+    BOOL bottom=
+        CGRectGetMaxY(frame)>height-140.0;
+
+    return top || bottom;
+}
+
+static BOOL XLGTimelineScrollEdgeBackdropIsProtected(UIView *view) {
+    if (!view) return NO;
+    if (![NSStringFromClass(view.class)
+            isEqualToString:
+                @"_TtCC5UIKit20ScrollEdgeEffectView12BackdropView"]) {
+        return NO;
+    }
+    if (!XLGViewBelongsToHomeTimeline(view)) return NO;
+
+    UIWindow *window=view.window;
+    if (!window) return YES;
+
+    CGRect frame=[view convertRect:view.bounds toView:window];
+    return CGRectGetMaxY(frame)>0.0 &&
+           CGRectGetMinY(frame)<180.0;
+}
+
+static NSUInteger XLGRemoveBlurFiltersFromLayer(CALayer *layer) {
+    if (!layer) return 0;
+
+    NSArray *filters=layer.filters;
+    if (![filters isKindOfClass:NSArray.class] || filters.count==0) {
+        return 0;
+    }
+
+    NSMutableArray *kept=[NSMutableArray arrayWithCapacity:filters.count];
+    NSUInteger removed=0;
+
+    for (id filter in filters) {
+        NSString *description=
+            [[filter description] lowercaseString] ?: @"";
+        if ([description containsString:@"gaussianblur"] ||
+            [description containsString:@"variableblur"]) {
+            removed++;
+        } else {
+            [kept addObject:filter];
+        }
+    }
+
+    if (removed>0) {
+        layer.filters=kept.count ? [kept copy] : nil;
+    }
+    return removed;
+}
+
+static void XLGApplyTimelineEdgeBlurRemoval(
+    UIViewController *controller,
+    NSString *reason) {
+
+    if (!controller || !controller.isViewLoaded) return;
+
+    UIView *root=controller.view;
+    if (!root || !root.window) return;
+
+    NSUInteger effectsRemoved=0;
+    for (UIView *candidate in
+         XLGSubviewsMatchingClassName(root,@"UIVisualEffectView")) {
+        if (![candidate isKindOfClass:UIVisualEffectView.class]) continue;
+
+        UIVisualEffectView *effectView=(UIVisualEffectView *)candidate;
+        if (!XLGTimelineEdgeEffectViewIsProtected(effectView)) continue;
+
+        if (effectView.effect) {
+            effectView.effect=nil;
+            effectsRemoved++;
+        }
+        effectView.backgroundColor=UIColor.clearColor;
+    }
+
+    NSUInteger layerFiltersRemoved=0;
+    for (UIView *backdrop in
+         XLGSubviewsMatchingClassName(
+             root,
+             @"_TtCC5UIKit20ScrollEdgeEffectView12BackdropView")) {
+        if (!XLGTimelineScrollEdgeBackdropIsProtected(backdrop)) continue;
+        layerFiltersRemoved+=
+            XLGRemoveBlurFiltersFromLayer(backdrop.layer);
+    }
+
+    if (effectsRemoved || layerFiltersRemoved) {
+        XLGDiagLog(
+            @"TIMELINE_EDGE_BLUR removedEffects=%lu removedLayerFilters=%lu controller=%@ reason=%@",
+            (unsigned long)effectsRemoved,
+            (unsigned long)layerFiltersRemoved,
+            NSStringFromClass(controller.class),
+            reason ?: @"-");
+    }
+}
+
+static void XLGScheduleTimelineEdgeBlurRemoval(
+    UIViewController *controller) {
+
+    if (!controller) return;
+
+    for (NSNumber *delayValue in @[@0.04,@0.12,@0.30]) {
+        NSTimeInterval delay=delayValue.doubleValue;
+        __weak UIViewController *weakController=controller;
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                UIViewController *strongController=weakController;
+                if (!strongController) return;
+                XLGApplyTimelineEdgeBlurRemoval(
+                    strongController,
+                    [NSString stringWithFormat:
+                        @"delayed-%.2f",delay]);
+            });
+    }
+}
+
 static BOOL XLGSearchEffectViewIsProtected(UIVisualEffectView *effectView) {
     if (!XLGEnabled() || !effectView) return NO;
 
@@ -6559,20 +6796,25 @@ static void XLGVisualEffectViewSetEffect(
     if (!gOrigVisualEffectViewSetEffect) return;
 
     if ([self isKindOfClass:UIVisualEffectView.class] &&
-        effect!=nil &&
-        XLGSearchEffectViewIsProtected(
-            (UIVisualEffectView *)self)) {
+        effect!=nil) {
 
-        // Persistent guard: later X updates may try to recreate/reapply the
-        // search header blur. Inside the validated search-container/top-region
-        // scope, forward nil to UIKit instead of the requested blur.
-        ((void(*)(id,SEL,id))
-            gOrigVisualEffectViewSetEffect)(
-                self,cmd,nil);
+        UIVisualEffectView *effectView=(UIVisualEffectView *)self;
+        BOOL searchProtected=
+            XLGSearchEffectViewIsProtected(effectView);
+        BOOL timelineEdgeProtected=
+            XLGTimelineEdgeEffectViewIsProtected(effectView);
 
-        ((UIVisualEffectView *)self).backgroundColor=
-            UIColor.clearColor;
-        return;
+        if (searchProtected || timelineEdgeProtected) {
+            // Search keeps the already-validated persistent guard. Beta 5
+            // adds only the two Home timeline ScrollEdgeTreatment effects
+            // captured by the probe; Tab Bar glass/pill are not in this scope.
+            ((void(*)(id,SEL,id))
+                gOrigVisualEffectViewSetEffect)(
+                    self,cmd,nil);
+
+            effectView.backgroundColor=UIColor.clearColor;
+            return;
+        }
     }
 
     ((void(*)(id,SEL,id))
@@ -6730,6 +6972,107 @@ static void XLGInstallSearchBlurFix(void) {
     gXLGSearchBlurFixInstalled=layoutHooked;
 }
 
+static void XLGHomeTimelineViewDidLayoutSubviews(id self, SEL cmd) {
+    if (gOrigHomeTimelineViewDidLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigHomeTimelineViewDidLayoutSubviews)(self,cmd);
+    }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+    XLGApplyTimelineEdgeBlurRemoval(
+        (UIViewController *)self,
+        @"home-layout");
+}
+
+static void XLGHomeTimelineViewDidAppear(
+    id self,
+    SEL cmd,
+    BOOL animated) {
+
+    if (gOrigHomeTimelineViewDidAppear) {
+        ((void(*)(id,SEL,BOOL))
+            gOrigHomeTimelineViewDidAppear)(
+                self,cmd,animated);
+    }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+    UIViewController *controller=(UIViewController *)self;
+
+    XLGApplyTimelineEdgeBlurRemoval(
+        controller,
+        @"home-didAppear");
+    XLGScheduleTimelineEdgeBlurRemoval(controller);
+}
+
+static void XLGTimelineScrollEdgeBackdropLayoutSubviews(
+    id self,
+    SEL cmd) {
+
+    if (gOrigTimelineScrollEdgeBackdropLayoutSubviews) {
+        ((void(*)(id,SEL))
+            gOrigTimelineScrollEdgeBackdropLayoutSubviews)(
+                self,cmd);
+    }
+
+    if (![self isKindOfClass:UIView.class]) return;
+    UIView *view=(UIView *)self;
+
+    if (XLGTimelineScrollEdgeBackdropIsProtected(view)) {
+        XLGRemoveBlurFiltersFromLayer(view.layer);
+    }
+}
+
+static void XLGInstallTimelineEdgeBlurFix(void) {
+    // Reuse the already-established UIVisualEffectView setEffect: hook rather
+    // than adding a second global hook.
+    XLGInstallPersistentSearchEffectGuard();
+
+    Class homeClass=NSClassFromString(
+        @"TwitterHomeFeatureImplementation.HomeTimelineContainerViewController");
+
+    if (homeClass && !gOrigHomeTimelineViewDidLayoutSubviews) {
+        XLGHookMethod(
+            homeClass,
+            @selector(viewDidLayoutSubviews),
+            NO,
+            (IMP)XLGHomeTimelineViewDidLayoutSubviews,
+            &gOrigHomeTimelineViewDidLayoutSubviews);
+    }
+
+    if (homeClass && !gOrigHomeTimelineViewDidAppear) {
+        XLGHookMethod(
+            homeClass,
+            @selector(viewDidAppear:),
+            NO,
+            (IMP)XLGHomeTimelineViewDidAppear,
+            &gOrigHomeTimelineViewDidAppear);
+    }
+
+    Class backdropClass=NSClassFromString(
+        @"_TtCC5UIKit20ScrollEdgeEffectView12BackdropView");
+    if (backdropClass &&
+        !gOrigTimelineScrollEdgeBackdropLayoutSubviews) {
+        XLGHookMethod(
+            backdropClass,
+            @selector(layoutSubviews),
+            NO,
+            (IMP)XLGTimelineScrollEdgeBackdropLayoutSubviews,
+            &gOrigTimelineScrollEdgeBackdropLayoutSubviews);
+    }
+
+    gXLGTimelineEdgeBlurFixInstalled=
+        gOrigHomeTimelineViewDidLayoutSubviews!=NULL;
+
+    UIViewController *current=
+        XLGCurrentVisibleHomeTimelineController();
+    if (current) {
+        XLGApplyTimelineEdgeBlurRemoval(
+            current,
+            @"install");
+        XLGScheduleTimelineEdgeBlurRemoval(current);
+    }
+}
+
 static BOOL gXLGGuideRouterHookInstalled = NO;
 
 static void XLGInstallGuideRouterHook(void) {
@@ -6837,6 +7180,7 @@ static void XLGInstallHooks(void) {
     XLGInstallXAppSearchRouter();
     XLGInstallXAppPremiumRouter();
     XLGInstallSearchBlurFix();
+    XLGInstallTimelineEdgeBlurFix();
     XLGInstallGuideRouterHook();
     XLGInstallCompositionSentToastBridge();
     XLGInstallToastBridge();
@@ -6977,6 +7321,37 @@ static void XLG2SetColorMode(id controller,
     if ([tableView numberOfRowsInSection:0]>baseRows) {
         [tableView reloadRowsAtIndexPaths:@[path]
                          withRowAnimation:UITableViewRowAnimationNone];
+    }
+
+    if (mode==XLG2TabBarColorModeNative &&
+        [controller isKindOfClass:UIViewController.class]) {
+
+        __weak UIViewController *weakController=
+            (UIViewController *)controller;
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(0.35*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                UIViewController *strongController=weakController;
+                if (!strongController || !strongController.view.window) return;
+
+                UIAlertController *alert=
+                    [UIAlertController
+                        alertControllerWithTitle:@"Reinicialização necessária"
+                                         message:@"Para aplicar completamente o modo Nativa, reinicie o X."
+                                  preferredStyle:UIAlertControllerStyleAlert];
+
+                [alert addAction:
+                    [UIAlertAction actionWithTitle:@"OK"
+                                             style:UIAlertActionStyleDefault
+                                           handler:nil]];
+
+                [strongController
+                    presentViewController:alert
+                                 animated:YES
+                               completion:nil];
+            });
     }
 }
 
