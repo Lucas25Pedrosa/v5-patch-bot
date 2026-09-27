@@ -1010,7 +1010,8 @@ static void SSPDumpDeclarationClass(NSString *label, NSString *className) {
                SSPSymbolForIMP(imp));
     }
 
-    for (Class cursor=root, depth=0;
+    NSUInteger depth=0;
+    for (Class cursor=root;
          cursor && depth<10;
          cursor=class_getSuperclass(cursor),depth++) {
 
