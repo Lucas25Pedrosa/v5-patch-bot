@@ -4,8 +4,9 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
+#import <dlfcn.h>
 
-static NSString *const kSSPLogFileName = @"XLiquidGlassSurfaceScrollProbe.log";
+static NSString *const kSSPLogFileName = @"XLiquidGlass21DeclarationDiffProbe.log";
 static const NSUInteger kSSPMaxLogBytes = 8 * 1024 * 1024;
 
 static BOOL gSSPScreenMonitorEnabled = NO;
@@ -918,6 +919,192 @@ static void SSPDumpVisibleNavigationCollapseEngines(UIWindow *window) {
     }
 }
 
+
+#pragma mark - 2.1 Declaration diff
+
+static BOOL SSPDeclarationNameInteresting(NSString *name) {
+    if (!name.length) return NO;
+
+    NSArray<NSString *> *needles=@[
+        @"collapse",
+        @"tabbar",
+        @"tab_bar",
+        @"navigation",
+        @"scroll",
+        @"pinned",
+        @"pin",
+        @"policy",
+        @"tfn_",
+        @"prefersnavigation"
+    ];
+
+    NSString *lower=name.lowercaseString;
+    for (NSString *needle in needles) {
+        if ([lower containsString:needle]) return YES;
+    }
+    return NO;
+}
+
+static NSString *SSPImageForClass(Class cls) {
+    if (!cls) return @"-";
+    const char *image=class_getImageName(cls);
+    return image ? [NSString stringWithUTF8String:image] : @"-";
+}
+
+static NSString *SSPSymbolForIMP(IMP imp) {
+    if (!imp) return @"-";
+
+    Dl_info info={0};
+    if (dladdr((const void *)imp,&info)==0) return @"-";
+
+    NSString *image=
+        info.dli_fname ? [NSString stringWithUTF8String:info.dli_fname] : @"-";
+    NSString *symbol=
+        info.dli_sname ? [NSString stringWithUTF8String:info.dli_sname] : @"-";
+
+    return [NSString stringWithFormat:@"%@ | %@",image,symbol];
+}
+
+static void SSPDumpDeclarationClass(NSString *label, NSString *className) {
+    Class root=NSClassFromString(className);
+
+    SSPLog(@"========== DECLARATION_CLASS_BEGIN label=%@ requested=%@ resolved=%@ ptr=%p image=%@ ==========",
+           label ?: @"-",
+           className ?: @"-",
+           root ? NSStringFromClass(root) : @"nil",
+           root,
+           SSPImageForClass(root));
+
+    if (!root) {
+        SSPLog(@"DECLARATION_CLASS_MISSING label=%@ requested=%@",
+               label ?: @"-",
+               className ?: @"-");
+        SSPLog(@"========== DECLARATION_CLASS_END label=%@ ==========",
+               label ?: @"-");
+        return;
+    }
+
+    NSArray<NSString *> *capabilities=@[
+        @"tfn_supportsTabBarCollapsing",
+        @"tfn_prefersTabBarPinned",
+        @"tfn_preferManualNavBarCollapse",
+        @"tfn_prefersNavigationBarExpandedWhenScrolledToBottom",
+        @"prefersNavigationBarExpandedWhenScrolledToBottom"
+    ];
+
+    for (NSString *selectorName in capabilities) {
+        SEL sel=NSSelectorFromString(selectorName);
+        Method method=class_getInstanceMethod(root,sel);
+        IMP imp=method ? method_getImplementation(method) : NULL;
+        const char *types=method ? method_getTypeEncoding(method) : NULL;
+
+        SSPLog(@"DECL_CAPABILITY label=%@ class=%@ selector=%@ responds=%d direct=%d imp=%p types=%s symbol=%@",
+               label ?: @"-",
+               NSStringFromClass(root),
+               selectorName,
+               [root instancesRespondToSelector:sel],
+               class_getInstanceMethod(root,sel) &&
+                   class_getInstanceMethod(class_getSuperclass(root),sel)!=method,
+               imp,
+               types ?: "-",
+               SSPSymbolForIMP(imp));
+    }
+
+    for (Class cursor=root, depth=0;
+         cursor && depth<10;
+         cursor=class_getSuperclass(cursor),depth++) {
+
+        SSPLog(@"DECL_CLASS_LEVEL label=%@ depth=%lu class=%@ super=%@ image=%@",
+               label ?: @"-",
+               (unsigned long)depth,
+               NSStringFromClass(cursor),
+               class_getSuperclass(cursor)
+                   ? NSStringFromClass(class_getSuperclass(cursor))
+                   : @"nil",
+               SSPImageForClass(cursor));
+
+        unsigned int protocolCount=0;
+        Protocol *__unsafe_unretained *protocols=
+            class_copyProtocolList(cursor,&protocolCount);
+
+        for (unsigned int i=0;i<protocolCount;i++) {
+            const char *pname=protocol_getName(protocols[i]);
+            SSPLog(@"DECL_PROTOCOL label=%@ depth=%lu class=%@ protocol=%s",
+                   label ?: @"-",
+                   (unsigned long)depth,
+                   NSStringFromClass(cursor),
+                   pname ?: "-");
+        }
+        free(protocols);
+
+        unsigned int methodCount=0;
+        Method *methods=class_copyMethodList(cursor,&methodCount);
+
+        for (unsigned int i=0;i<methodCount;i++) {
+            SEL sel=method_getName(methods[i]);
+            NSString *selectorName=NSStringFromSelector(sel);
+            if (!SSPDeclarationNameInteresting(selectorName)) continue;
+
+            IMP imp=method_getImplementation(methods[i]);
+            const char *types=method_getTypeEncoding(methods[i]);
+
+            SSPLog(@"DECL_METHOD label=%@ depth=%lu class=%@ selector=%@ imp=%p types=%s symbol=%@",
+                   label ?: @"-",
+                   (unsigned long)depth,
+                   NSStringFromClass(cursor),
+                   selectorName,
+                   imp,
+                   types ?: "-",
+                   SSPSymbolForIMP(imp));
+        }
+        free(methods);
+
+        unsigned int propertyCount=0;
+        objc_property_t *properties=class_copyPropertyList(cursor,&propertyCount);
+
+        for (unsigned int i=0;i<propertyCount;i++) {
+            const char *pname=property_getName(properties[i]);
+            NSString *name=pname ? [NSString stringWithUTF8String:pname] : @"";
+            if (!SSPDeclarationNameInteresting(name)) continue;
+
+            const char *attrs=property_getAttributes(properties[i]);
+            SSPLog(@"DECL_PROPERTY label=%@ depth=%lu class=%@ name=%@ attrs=%s",
+                   label ?: @"-",
+                   (unsigned long)depth,
+                   NSStringFromClass(cursor),
+                   name,
+                   attrs ?: "-");
+        }
+        free(properties);
+    }
+
+    SSPLog(@"========== DECLARATION_CLASS_END label=%@ ==========",
+           label ?: @"-");
+}
+
+static void SSPDumpDeclarationDiff(void) {
+    SSPLog(@"========== DECLARATION_DIFF_BEGIN ==========");
+
+    NSArray<NSArray<NSString *> *> *targets=@[
+        @[@"Notifications",
+          @"T1NotificationsViewController"],
+        @[@"Home",
+          @"TwitterHomeFeatureImplementation.HomeTimelineContainerViewController"],
+        @[@"Settings",
+          @"T1GenericSettingsViewController"],
+        @[@"Premium",
+          @"T1TwitterSwift.PremiumHubContainerViewController"],
+        @[@"Search",
+          @"TTSSearchContainerViewControllerV2"]
+    ];
+
+    for (NSArray<NSString *> *entry in targets) {
+        SSPDumpDeclarationClass(entry[0],entry[1]);
+    }
+
+    SSPLog(@"========== DECLARATION_DIFF_END ==========");
+}
+
 static void SSPDumpNativeCollapseContext(
     UIWindow *window,
     NSString *reason) {
@@ -1654,7 +1841,7 @@ static void SSPInstallRuntimeHooks(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title=@"2.1 Native Collapse Probe";
+    self.title=@"2.1 Declaration Diff Probe";
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -1679,9 +1866,9 @@ static void SSPInstallRuntimeHooks(void) {
     (void)tableView;
 
     if (section==0) {
-        return @"Arme um gesto na Home e faça um scroll que esconda a Tab Bar. Depois arme novamente e repita em uma tela onde ela não esconde. Compare COLLAPSE_STATE, NATIVE_COLLAPSE_CONTEXT e TABBAR_TRANSFORM_CALLSTACK.";
+        return @"Use Mapear declarações para comparar Notificações/Home com Configurações/Premium/Busca. O resultado fica no relatório e pode ser copiado aqui mesmo.";
     }
-    return @"O probe apenas observa. Registra estado interno do collapseEngine, capacidades tfn_* e a call stack do primeiro setTransform da Tab Bar. Não altera a Tab Bar.";
+    return @"Probe somente de leitura. Não altera capabilities, CollapseEngine nem a Tab Bar.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1722,13 +1909,13 @@ static void SSPInstallRuntimeHooks(void) {
             cell.detailTextLabel.text=
                 @"Registra blur/material quando a tela visível muda.";
         } else if (indexPath.row==2) {
-            cell.textLabel.text=@"Gravar próximo gesto de scroll";
+            cell.textLabel.text=@"Mapear declarações";
             cell.detailTextLabel.text=
-                @"Só começa ao detectar movimento real dentro de um UIScrollView.";
+                @"Compara protocolos, hierarquia, selectors e IMPs das telas-chave.";
         } else {
-            cell.textLabel.text=@"Snapshot agora";
+            cell.textLabel.text=@"Snapshot da tela atual";
             cell.detailTextLabel.text=
-                @"Mapeia blur/material da tela atualmente visível.";
+                @"Registra a tela visível e o contexto nativo de collapse.";
         }
     } else {
         if (indexPath.row==0) {
@@ -1751,7 +1938,7 @@ static void SSPInstallRuntimeHooks(void) {
 - (void)showInfo:(NSString *)message {
     UIAlertController *alert=
         [UIAlertController
-            alertControllerWithTitle:@"2.1 Native Collapse Probe"
+            alertControllerWithTitle:@"2.1 Declaration Diff Probe"
                              message:message
                       preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:
@@ -1794,20 +1981,17 @@ static void SSPInstallRuntimeHooks(void) {
         }
 
         if (indexPath.row==2) {
-            gSSPGestureArmed=YES;
-            gSSPGestureActive=NO;
-            gSSPGestureSerial++;
-
-            SSPLog(@"GESTURE_ARMED serialSeed=%lu",
-                   (unsigned long)gSSPGestureSerial);
-
-            [self reloadState];
+            SSPDumpDeclarationDiff();
             [self showInfo:
-                @"Gesto armado. Faça um scroll vertical. Primeiro capture a Home, onde o hide é nativo; depois arme novamente e capture uma tela sem hide."];
+                @"Mapeamento concluído. Agora toque em Copiar relatório e cole o conteúdo no chat."];
             return;
         }
 
+        UIWindow *window=SSPBestWindow();
         SSPSnapshotCurrentScreen(@"manual-NFB");
+        if (window) {
+            SSPDumpNativeCollapseContext(window,@"manual-NFB");
+        }
         return;
     }
 
@@ -1827,11 +2011,11 @@ static void SSPInstallRuntimeHooks(void) {
 
         SSPLog(@"========== NEW SESSION ==========");
         SSPLog(@"logPath=%@",SSPLogPath());
-        SSPLog(@"INSTRUCTION record-home-native-collapse-then-target-without-hide");
+        SSPLog(@"INSTRUCTION declaration-diff-notifications-home-settings-premium-search");
 
         [self reloadState];
         [self showInfo:
-            @"Nova sessão iniciada. Grave um gesto na Home e depois outro em uma tela onde a Tab Bar não esconde."];
+            @"Nova sessão iniciada. Toque em Mapear declarações e depois em Copiar relatório."];
         return;
     }
 
@@ -1893,8 +2077,8 @@ static void SSPInjectNFBSection(id controller) {
 
     NSMutableArray *updated=[sections mutableCopy];
     [updated addObject:@{
-        @"title": @"2.1 Native Collapse Probe",
-        @"subtitle": @"Descobre o collapseEngine nativo da Tab Bar.",
+        @"title": @"2.1 Declaration Diff Probe",
+        @"subtitle": @"Compara como as telas declaram suporte ao collapse nativo.",
         @"icon": @"waveform.path.ecg",
         @"action": @"showXLiquidGlassSurfaceScrollProbe"
     }];
@@ -2003,7 +2187,7 @@ static void XLiquidGlassSurfaceScrollProbeInit(void) {
             gSSPDumpedRuntimeClasses=[NSMutableSet set];
         }
 
-        SSPLog(@"========== XLiquidGlass 2.1 Native Collapse Probe 0.5.0 loaded ==========");
+        SSPLog(@"========== XLiquidGlass 2.1 Declaration Diff Probe 0.6.0 loaded ==========");
         SSPLog(@"logPath=%@",SSPLogPath());
 
         SSPInstallAll();
