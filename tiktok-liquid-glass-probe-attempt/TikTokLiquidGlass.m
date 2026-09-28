@@ -10,6 +10,7 @@ static NSMutableDictionary<NSString *, NSValue *> *gOriginals;
 static NSMutableSet<NSString *> *gHooked;
 static NSMutableSet<NSString *> *gLoggedCalls;
 static NSMutableSet<NSString *> *gDiscovered;
+static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
 
 static NSString *LogPath(void) {
     NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -295,6 +296,198 @@ static void InspectMethodList(Class owner, BOOL classMethod, NSString *reason) {
     free(methods);
 }
 
+
+#pragma mark - 0.3 targeted gates + native glass reveal
+
+static BOOL HookKnownBool(Class owner, SEL sel, BOOL classMethod, BOOL forced, NSString *reason) {
+    if (!owner || !sel) return NO;
+    Class methodOwner = classMethod ? object_getClass(owner) : owner;
+    Method m = classMethod ? class_getClassMethod(owner, sel) : class_getInstanceMethod(owner, sel);
+    if (!methodOwner || !m || !IsZeroArgBool(m)) return NO;
+
+    IMP replacement = forced ? (IMP)ForceYES : (IMP)ForceNO;
+    NSString *key = MethodKey(methodOwner, sel);
+    IMP current = method_getImplementation(m);
+    if (!current || current == replacement) return YES;
+
+    @synchronized(gOriginals) {
+        if (!gOriginals[key]) gOriginals[key] = [NSValue valueWithPointer:current];
+    }
+    method_setImplementation(m, replacement);
+    @synchronized(gHooked) {
+        [gHooked addObject:key];
+    }
+
+    TLGLog(@"EARLY_HOOK reason=%@ owner=%@ scope=%@ selector=%@ forced=%@ originalIMP=%p",
+           reason ?: @"-",
+           NSStringFromClass(owner),
+           classMethod ? @"class" : @"instance",
+           NSStringFromSelector(sel),
+           forced ? @"YES" : @"NO",
+           current);
+    return YES;
+}
+
+static void InstallImmediateGateHooks(void) {
+    HookKnownBool(NSClassFromString(@"TTKIOS26LiquidGlassSwitch"),
+                  NSSelectorFromString(@"isFixEnabled"), YES, YES, @"startup");
+    HookKnownBool(NSClassFromString(@"TTKABTest"),
+                  NSSelectorFromString(@"tux_liquid_glass_enabled"), YES, YES, @"startup");
+    HookKnownBool(NSClassFromString(@"TTKABTest"),
+                  NSSelectorFromString(@"ttTabbarLiquidGlassFix"), YES, YES, @"startup");
+    HookKnownBool(NSClassFromString(@"TUXSwiftBase.TUXAppInfoUtils"),
+                  NSSelectorFromString(@"supportLiquidGlass"), YES, YES, @"startup");
+    HookKnownBool(NSClassFromString(@"TTKBizUIComponentDependencyImpl"),
+                  NSSelectorFromString(@"isTabBarIOS26LiquidGlassFixEnabled"), NO, YES, @"startup");
+}
+
+static BOOL ShouldRevealTikTokTabBackgroundClass(Class cls) {
+    if (!cls) return NO;
+    NSString *name = NSStringFromClass(cls);
+    if ([name isEqualToString:@"TTKTabBarBlurView"]) return YES;
+    if ([name containsString:@"TikTokTabBarBasic"] &&
+        ([name containsString:@"TabBarBackgroundView"] ||
+         [name containsString:@"TabBarGradientView"])) return YES;
+    return NO;
+}
+
+static IMP OriginalViewIMP(id self, SEL sel) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *v = nil;
+        @synchronized(gViewOriginals) {
+            v = gViewOriginals[MethodKey(c, sel)];
+        }
+        if (v) return [v pointerValue];
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void ApplyRevealToView(UIView *view, NSString *reason) {
+    if (![view isKindOfClass:UIView.class]) return;
+    if (!ShouldRevealTikTokTabBackgroundClass(view.class)) return;
+
+    CGFloat oldAlpha = view.alpha;
+    UIColor *oldColor = view.backgroundColor;
+    view.alpha = 0.0;
+    view.backgroundColor = UIColor.clearColor;
+
+    NSString *onceKey = [NSString stringWithFormat:@"REVEAL|%p", view];
+    BOOL first = NO;
+    @synchronized(gDiscovered) {
+        if (![gDiscovered containsObject:onceKey]) {
+            [gDiscovered addObject:onceKey];
+            first = YES;
+        }
+    }
+    if (first) {
+        TLGLog(@"REVEAL_APPLIED reason=%@ class=%@ frame=%@ oldAlpha=%.2f oldBackground=%@",
+               reason ?: @"-",
+               NSStringFromClass(view.class),
+               NSStringFromCGRect(view.frame),
+               oldAlpha,
+               oldColor ?: (id)@"-");
+    }
+}
+
+static void RevealLayoutSubviews(id self, SEL _cmd) {
+    IMP original = OriginalViewIMP(self, _cmd);
+    if (original) ((void(*)(id,SEL))original)(self, _cmd);
+    if ([self isKindOfClass:UIView.class]) ApplyRevealToView((UIView *)self, @"layoutSubviews");
+}
+
+static BOOL HookRevealClass(Class cls, NSString *reason) {
+    if (!ShouldRevealTikTokTabBackgroundClass(cls)) return NO;
+    SEL sel = @selector(layoutSubviews);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return NO;
+
+    NSString *key = MethodKey(cls, sel);
+    @synchronized(gViewOriginals) {
+        if (gViewOriginals[key]) return YES;
+    }
+
+    IMP current = class_getMethodImplementation(cls, sel);
+    if (!current || current == (IMP)RevealLayoutSubviews) return YES;
+
+    const char *types = method_getTypeEncoding(m);
+    if (!types) return NO;
+    class_replaceMethod(cls, sel, (IMP)RevealLayoutSubviews, types);
+    @synchronized(gViewOriginals) {
+        gViewOriginals[key] = [NSValue valueWithPointer:current];
+    }
+
+    TLGLog(@"REVEAL_HOOK reason=%@ class=%@ selector=layoutSubviews originalIMP=%p",
+           reason ?: @"-", NSStringFromClass(cls), current);
+    return YES;
+}
+
+static void InstallImmediateRevealHooks(void) {
+    HookRevealClass(NSClassFromString(@"TTKTabBarBlurView"), @"startup");
+
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return;
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    count = objc_getClassList(classes, count);
+    for (int i = 0; i < count; i++) {
+        if (ShouldRevealTikTokTabBackgroundClass(classes[i])) {
+            HookRevealClass(classes[i], @"startup-scan");
+        }
+    }
+    free(classes);
+}
+
+static void RevealTree(UIView *view, NSUInteger depth) {
+    if (!view || depth > 40) return;
+    ApplyRevealToView(view, @"tree");
+    for (UIView *child in view.subviews) RevealTree(child, depth + 1);
+}
+
+static void ApplyRevealToAllWindows(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIWindow *window in ActiveWindows()) RevealTree(window, 0);
+    });
+}
+
+static void DumpClassShape(Class cls) {
+    if (!cls) return;
+    TLGLog(@"CLASS_SHAPE_BEGIN class=%@", NSStringFromClass(cls));
+
+    unsigned int ivarCount = 0;
+    Ivar *ivars = class_copyIvarList(cls, &ivarCount);
+    for (unsigned int i = 0; i < ivarCount && i < 120; i++) {
+        TLGLog(@"IVAR class=%@ name=%s type=%s offset=%td",
+               NSStringFromClass(cls),
+               ivar_getName(ivars[i]) ?: "-",
+               ivar_getTypeEncoding(ivars[i]) ?: "-",
+               ivar_getOffset(ivars[i]));
+    }
+    free(ivars);
+
+    unsigned int methodCount = 0;
+    Method *methods = class_copyMethodList(cls, &methodCount);
+    for (unsigned int i = 0; i < methodCount && i < 300; i++) {
+        NSString *name = NSStringFromSelector(method_getName(methods[i]));
+        NSString *lower = name.lowercaseString;
+        if ([lower containsString:@"tab"] ||
+            [lower containsString:@"fake"] ||
+            [lower containsString:@"glass"] ||
+            [lower containsString:@"blur"] ||
+            [lower containsString:@"background"] ||
+            [lower containsString:@"layout"]) {
+            TLGLog(@"CLASS_METHOD class=%@ selector=%@ types=%s imp=%p",
+                   NSStringFromClass(cls),
+                   name,
+                   method_getTypeEncoding(methods[i]) ?: "-",
+                   method_getImplementation(methods[i]));
+        }
+    }
+    free(methods);
+    TLGLog(@"CLASS_SHAPE_END class=%@", NSStringFromClass(cls));
+}
+
+
 static void ScanRuntime(NSString *reason) {
     int count = objc_getClassList(NULL, 0);
     if (count <= 0) return;
@@ -324,6 +517,7 @@ static void ScanRuntime(NSString *reason) {
 
         InspectMethodList(cls, NO, reason);
         InspectMethodList(cls, YES, reason);
+        if (ShouldRevealTikTokTabBackgroundClass(cls)) HookRevealClass(cls, reason);
     }
 
     free(classes);
@@ -391,7 +585,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.2 Probe+Attempt loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.3 Probe+Reveal Native Glass loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -428,8 +622,16 @@ static void TikTokLiquidGlassInit(void) {
         gHooked = [NSMutableSet set];
         gLoggedCalls = [NSMutableSet set];
         gDiscovered = [NSMutableSet set];
+        gViewOriginals = [NSMutableDictionary dictionary];
 
+        InstallImmediateGateHooks();
+        InstallImmediateRevealHooks();
         LogContext();
+        DumpClassShape(NSClassFromString(@"TTKIOS26LiquidGlassSwitch"));
+        DumpClassShape(NSClassFromString(@"TTKTabBarController"));
+        DumpClassShape(NSClassFromString(@"TTKFakeTabBar"));
+        DumpClassShape(NSClassFromString(@"TTKTabBar"));
+        DumpClassShape(NSClassFromString(@"TTKTabBarBlurView"));
         ScanRuntime(@"constructor");
 
         [[NSNotificationCenter defaultCenter]
@@ -439,6 +641,7 @@ static void TikTokLiquidGlassInit(void) {
                     usingBlock:^(__unused NSNotification *note) {
                         TLGLog(@"EVENT UIApplicationDidFinishLaunchingNotification");
                         ScanRuntime(@"didFinishLaunching");
+                        ApplyRevealToAllWindows();
                         SnapshotUI(@"didFinishLaunching");
                     }];
 
@@ -448,6 +651,7 @@ static void TikTokLiquidGlassInit(void) {
                            dispatch_get_main_queue(), ^{
                 NSString *reason = [NSString stringWithFormat:@"delay-%.0fs", delay];
                 ScanRuntime(reason);
+                ApplyRevealToAllWindows();
                 SnapshotUI(reason);
             });
         }
