@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <dispatch/dispatch.h>
 
 static NSString *const kLogName = @"TikTokLiquidGlassProbe.log";
@@ -11,6 +12,7 @@ static NSMutableSet<NSString *> *gHooked;
 static NSMutableSet<NSString *> *gLoggedCalls;
 static NSMutableSet<NSString *> *gDiscovered;
 static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
+static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
 static NSArray<UIWindow *> *ActiveWindows(void);
 
 static NSString *LogPath(void) {
@@ -398,6 +400,77 @@ static void RevealLayoutSubviews(id self, SEL _cmd) {
     if ([self isKindOfClass:UIView.class]) ApplyRevealToView((UIView *)self, @"layoutSubviews");
 }
 
+
+static IMP OriginalAlphaIMP(id self, SEL sel) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *v = nil;
+        @synchronized(gAlphaOriginals) {
+            v = gAlphaOriginals[MethodKey(c, sel)];
+        }
+        if (v) return [v pointerValue];
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void RevealSetAlpha(id self, SEL _cmd, CGFloat requestedAlpha) {
+    IMP original = OriginalAlphaIMP(self, _cmd);
+    if (original) ((void(*)(id,SEL,CGFloat))original)(self, _cmd, 0.0);
+
+    NSString *onceKey = [NSString stringWithFormat:@"ALPHA_BLOCK|%@", NSStringFromClass([self class])];
+    BOOL first = NO;
+    @synchronized(gDiscovered) {
+        if (![gDiscovered containsObject:onceKey]) {
+            [gDiscovered addObject:onceKey];
+            first = YES;
+        }
+    }
+    if (first) {
+        TLGLog(@"ALPHA_BLOCK class=%@ requested=%.2f forced=0.00 frame=%@",
+               NSStringFromClass([self class]),
+               requestedAlpha,
+               [self isKindOfClass:UIView.class] ? NSStringFromCGRect([(UIView *)self frame]) : @"-");
+    }
+}
+
+static BOOL HookRevealAlphaClass(Class cls, NSString *reason) {
+    if (!ShouldRevealTikTokTabBackgroundClass(cls)) return NO;
+
+    SEL sel = @selector(setAlpha:);
+    Method inherited = class_getInstanceMethod(cls, sel);
+    if (!inherited) return NO;
+
+    NSString *key = MethodKey(cls, sel);
+    @synchronized(gAlphaOriginals) {
+        if (gAlphaOriginals[key]) return YES;
+    }
+
+    IMP current = class_getMethodImplementation(cls, sel);
+    if (!current || current == (IMP)RevealSetAlpha) return YES;
+
+    const char *types = method_getTypeEncoding(inherited);
+    if (!types) return NO;
+
+    @synchronized(gAlphaOriginals) {
+        gAlphaOriginals[key] = [NSValue valueWithPointer:current];
+    }
+
+    BOOL added = class_addMethod(cls, sel, (IMP)RevealSetAlpha, types);
+    if (!added) {
+        Method direct = class_getInstanceMethod(cls, sel);
+        if (!direct) return NO;
+        method_setImplementation(direct, (IMP)RevealSetAlpha);
+    }
+
+    TLGLog(@"ALPHA_HOOK reason=%@ class=%@ originalIMP=%p mode=%@",
+           reason ?: @"-",
+           NSStringFromClass(cls),
+           current,
+           added ? @"add" : @"replace");
+    return YES;
+}
+
 static BOOL HookRevealClass(Class cls, NSString *reason) {
     if (!ShouldRevealTikTokTabBackgroundClass(cls)) return NO;
     SEL sel = @selector(layoutSubviews);
@@ -421,6 +494,7 @@ static BOOL HookRevealClass(Class cls, NSString *reason) {
 
     TLGLog(@"REVEAL_HOOK reason=%@ class=%@ selector=layoutSubviews originalIMP=%p",
            reason ?: @"-", NSStringFromClass(cls), current);
+    HookRevealAlphaClass(cls, reason);
     return YES;
 }
 
@@ -434,6 +508,7 @@ static void InstallImmediateRevealHooks(void) {
     for (int i = 0; i < count; i++) {
         if (ShouldRevealTikTokTabBackgroundClass(classes[i])) {
             HookRevealClass(classes[i], @"startup-scan");
+            HookRevealAlphaClass(classes[i], @"startup-scan");
         }
     }
     free(classes);
@@ -448,6 +523,70 @@ static void RevealTree(UIView *view, NSUInteger depth) {
 static void ApplyRevealToAllWindows(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         for (UIWindow *window in ActiveWindows()) RevealTree(window, 0);
+    });
+}
+
+
+static id SafeValueForKey(id object, NSString *key) {
+    if (!object || !key.length) return nil;
+    @try {
+        return [object valueForKey:key];
+    } @catch (__unused NSException *exception) {
+        return nil;
+    }
+}
+
+static NSString *DescribeViewObject(id object) {
+    if (!object) return @"-";
+    if (![object isKindOfClass:UIView.class]) {
+        return [NSString stringWithFormat:@"%@:%p", NSStringFromClass([object class]), object];
+    }
+
+    UIView *view = (UIView *)object;
+    return [NSString stringWithFormat:@"%@:%p frame=%@ alpha=%.2f hidden=%@ super=%@:%p",
+            NSStringFromClass(view.class),
+            view,
+            NSStringFromCGRect(view.frame),
+            view.alpha,
+            view.hidden ? @"YES" : @"NO",
+            view.superview ? NSStringFromClass(view.superview.class) : @"-",
+            view.superview];
+}
+
+static void ProbeTabBarControllerState(UIViewController *vc, NSString *reason, NSUInteger depth) {
+    if (!vc || depth > 20) return;
+
+    if ([vc isKindOfClass:NSClassFromString(@"TTKTabBarController")]) {
+        id mainTabBar = SafeValueForKey(vc, @"mainTabBar");
+        id fakeTabBar = SafeValueForKey(vc, @"fakeTabBar");
+        id visualTabBar = SafeValueForKey(vc, @"visualTabBar");
+        id tabButtons = SafeValueForKey(vc, @"tabButtons");
+        id realBar = SafeValueForKey(fakeTabBar, @"realBar");
+
+        TLGLog(@"TABBAR_STATE reason=%@ controller=%@:%p main=[%@] fake=[%@] visual=[%@] fake.realBar=[%@] buttonsClass=%@ buttonsCount=%ld",
+               reason ?: @"-",
+               NSStringFromClass(vc.class), vc,
+               DescribeViewObject(mainTabBar),
+               DescribeViewObject(fakeTabBar),
+               DescribeViewObject(visualTabBar),
+               DescribeViewObject(realBar),
+               tabButtons ? NSStringFromClass([tabButtons class]) : @"-",
+               (long)([tabButtons respondsToSelector:@selector(count)] ? [tabButtons count] : -1));
+    }
+
+    if (vc.presentedViewController) {
+        ProbeTabBarControllerState(vc.presentedViewController, reason, depth + 1);
+    }
+    for (UIViewController *child in vc.childViewControllers) {
+        ProbeTabBarControllerState(child, reason, depth + 1);
+    }
+}
+
+static void ProbeAllTabBars(NSString *reason) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIWindow *window in ActiveWindows()) {
+            ProbeTabBarControllerState(window.rootViewController, reason, 0);
+        }
     });
 }
 
@@ -586,7 +725,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.3 Probe+Reveal Native Glass loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.4 Persistent Reveal+Probe loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -624,6 +763,7 @@ static void TikTokLiquidGlassInit(void) {
         gLoggedCalls = [NSMutableSet set];
         gDiscovered = [NSMutableSet set];
         gViewOriginals = [NSMutableDictionary dictionary];
+        gAlphaOriginals = [NSMutableDictionary dictionary];
 
         InstallImmediateGateHooks();
         InstallImmediateRevealHooks();
@@ -643,6 +783,7 @@ static void TikTokLiquidGlassInit(void) {
                         TLGLog(@"EVENT UIApplicationDidFinishLaunchingNotification");
                         ScanRuntime(@"didFinishLaunching");
                         ApplyRevealToAllWindows();
+                        ProbeAllTabBars(@"didFinishLaunching");
                         SnapshotUI(@"didFinishLaunching");
                     }];
 
@@ -653,6 +794,7 @@ static void TikTokLiquidGlassInit(void) {
                 NSString *reason = [NSString stringWithFormat:@"delay-%.0fs", delay];
                 ScanRuntime(reason);
                 ApplyRevealToAllWindows();
+                ProbeAllTabBars(reason);
                 SnapshotUI(reason);
             });
         }
