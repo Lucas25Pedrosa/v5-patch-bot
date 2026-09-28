@@ -36,13 +36,13 @@ jobs:
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name TikTokLiquidGlass.dylib ! -path '*/TikTokLiquidGlass.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/TikTokLiquidGlass-0.2-ProbeAttempt-TikTok47-arm64.dylib
-          file artifacts/TikTokLiquidGlass-0.2-ProbeAttempt-TikTok47-arm64.dylib
-          shasum -a 256 artifacts/TikTokLiquidGlass-0.2-ProbeAttempt-TikTok47-arm64.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/TikTokLiquidGlass-0.3-RevealNativeGlass-TikTok47-arm64.dylib
+          file artifacts/TikTokLiquidGlass-0.3-RevealNativeGlass-TikTok47-arm64.dylib
+          shasum -a 256 artifacts/TikTokLiquidGlass-0.3-RevealNativeGlass-TikTok47-arm64.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload TikTokLiquidGlass
         uses: actions/upload-artifact@v4
         with:
-          name: TikTokLiquidGlass-0.2-ProbeAttempt-TikTok47-arm64
+          name: TikTokLiquidGlass-0.3-RevealNativeGlass-TikTok47-arm64
           path: tiktok-liquid-glass-probe-attempt/artifacts/
           if-no-files-found: error
