@@ -344,9 +344,19 @@ static void CollectViews(UIView *view, NSUInteger depth, NSMutableArray<NSString
     }
 }
 
+static NSArray<UIWindow *> *ActiveWindows(void) {
+    NSMutableArray<UIWindow *> *windows = [NSMutableArray array];
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
+        [windows addObjectsFromArray:windowScene.windows ?: @[]];
+    }
+    return windows;
+}
+
 static void SnapshotUI(NSString *reason) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSArray<UIWindow *> *windows = UIApplication.sharedApplication.windows ?: @[];
+        NSArray<UIWindow *> *windows = ActiveWindows();
         NSMutableArray<NSString *> *hits = [NSMutableArray array];
         NSUInteger visited = 0;
 
