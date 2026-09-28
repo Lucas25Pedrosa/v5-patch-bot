@@ -13,6 +13,9 @@ static NSMutableSet<NSString *> *gLoggedCalls;
 static NSMutableSet<NSString *> *gDiscovered;
 static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
+static NSString *gSessionMarker;
+static BOOL gCopyAlertShown = NO;
+static NSUInteger gCopyAlertRetryCount = 0;
 static NSArray<UIWindow *> *ActiveWindows(void);
 
 static NSString *LogPath(void) {
@@ -700,6 +703,120 @@ static NSArray<UIWindow *> *ActiveWindows(void) {
     return windows;
 }
 
+
+#pragma mark - Copy probe alert
+
+static NSString *ReadFullLog(void) {
+    NSError *error = nil;
+    NSString *text = [NSString stringWithContentsOfFile:LogPath()
+                                               encoding:NSUTF8StringEncoding
+                                                  error:&error];
+    if (!text.length) {
+        return error ? [NSString stringWithFormat:@"Falha ao ler o log: %@", error.localizedDescription ?: @"erro desconhecido"] : @"";
+    }
+    return text;
+}
+
+static NSString *ReadCurrentSessionLog(void) {
+    NSString *text = ReadFullLog();
+    if (!text.length || !gSessionMarker.length) return text ?: @"";
+
+    NSString *needle = [NSString stringWithFormat:@"SESSION_BEGIN id=%@", gSessionMarker];
+    NSRange markerRange = [text rangeOfString:needle options:NSBackwardsSearch];
+    if (markerRange.location == NSNotFound) return text;
+
+    NSRange lineRange = [text lineRangeForRange:NSMakeRange(markerRange.location, 1)];
+    if (lineRange.location >= text.length) return text;
+    return [text substringFromIndex:lineRange.location];
+}
+
+static UIViewController *TopViewController(UIViewController *vc) {
+    if (!vc) return nil;
+
+    UIViewController *presented = vc.presentedViewController;
+    if (presented && !presented.isBeingDismissed) {
+        return TopViewController(presented);
+    }
+
+    if ([vc isKindOfClass:UINavigationController.class]) {
+        UIViewController *visible = ((UINavigationController *)vc).visibleViewController;
+        return TopViewController(visible ?: vc);
+    }
+
+    if ([vc isKindOfClass:UITabBarController.class]) {
+        UIViewController *selected = ((UITabBarController *)vc).selectedViewController;
+        return TopViewController(selected ?: vc);
+    }
+
+    for (UIViewController *child in vc.childViewControllers.reverseObjectEnumerator) {
+        if (child.viewIfLoaded.window) return TopViewController(child);
+    }
+
+    return vc;
+}
+
+static UIViewController *BestPresenter(void) {
+    for (UIWindow *window in ActiveWindows()) {
+        if (!window.hidden && window.alpha > 0.01 && window.rootViewController) {
+            UIViewController *top = TopViewController(window.rootViewController);
+            if (top.viewIfLoaded.window) return top;
+        }
+    }
+    return nil;
+}
+
+static void PresentCopyAlert(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gCopyAlertShown) return;
+
+        UIViewController *presenter = BestPresenter();
+        if (!presenter || [presenter isKindOfClass:UIAlertController.class]) {
+            if (gCopyAlertRetryCount < 6) {
+                gCopyAlertRetryCount++;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    PresentCopyAlert();
+                });
+            }
+            return;
+        }
+
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:@"TikTokLiquidGlass Probe"
+                                                message:@"Coleta concluída. Escolha o que deseja copiar."
+                                         preferredStyle:UIAlertControllerStyleAlert];
+
+        [alert addAction:
+            [UIAlertAction actionWithTitle:@"Copiar esta sessão"
+                                     style:UIAlertActionStyleDefault
+                                   handler:^(__unused UIAlertAction *action) {
+                NSString *text = ReadCurrentSessionLog();
+                UIPasteboard.generalPasteboard.string = text ?: @"";
+                TLGLog(@"COPY_ACTION scope=currentSession chars=%lu",
+                       (unsigned long)text.length);
+            }]];
+
+        [alert addAction:
+            [UIAlertAction actionWithTitle:@"Copiar log completo"
+                                     style:UIAlertActionStyleDefault
+                                   handler:^(__unused UIAlertAction *action) {
+                NSString *text = ReadFullLog();
+                UIPasteboard.generalPasteboard.string = text ?: @"";
+                TLGLog(@"COPY_ACTION scope=fullLog chars=%lu",
+                       (unsigned long)text.length);
+            }]];
+
+        [alert addAction:
+            [UIAlertAction actionWithTitle:@"Fechar"
+                                     style:UIAlertActionStyleCancel
+                                   handler:nil]];
+
+        gCopyAlertShown = YES;
+        TLGLog(@"COPY_ALERT_PRESENT presenter=%@", NSStringFromClass(presenter.class));
+        [presenter presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 static void SnapshotUI(NSString *reason) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSArray<UIWindow *> *windows = ActiveWindows();
@@ -725,7 +842,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.4 Persistent Reveal+Probe loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.5 Persistent Reveal+Copy Probe loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -764,6 +881,8 @@ static void TikTokLiquidGlassInit(void) {
         gDiscovered = [NSMutableSet set];
         gViewOriginals = [NSMutableDictionary dictionary];
         gAlphaOriginals = [NSMutableDictionary dictionary];
+        gSessionMarker = NSUUID.UUID.UUIDString;
+        TLGLog(@"SESSION_BEGIN id=%@", gSessionMarker);
 
         InstallImmediateGateHooks();
         InstallImmediateRevealHooks();
@@ -798,5 +917,10 @@ static void TikTokLiquidGlassInit(void) {
                 SnapshotUI(reason);
             });
         }
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(9.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            PresentCopyAlert();
+        });
     }
 }
