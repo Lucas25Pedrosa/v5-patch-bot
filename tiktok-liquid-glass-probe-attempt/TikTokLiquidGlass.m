@@ -11,6 +11,7 @@ static NSMutableSet<NSString *> *gHooked;
 static NSMutableSet<NSString *> *gLoggedCalls;
 static NSMutableSet<NSString *> *gDiscovered;
 static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
+static NSArray<UIWindow *> *ActiveWindows(void);
 
 static NSString *LogPath(void) {
     NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
