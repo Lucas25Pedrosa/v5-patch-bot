@@ -91,11 +91,15 @@ static NSSet<NSString *> *ForceYESNames(void) {
     dispatch_once(&onceToken, ^{
         s = [NSSet setWithArray:@[
             @"supportLiquidGlass",
+            @"isFixEnabled",
+            @"tux_liquid_glass_enabled",
+            @"ttTabbarLiquidGlassFix",
             @"isLiquidGlassEnabled",
             @"liquidGlassEnabled",
             @"isLiquidGlassButtonEnabled",
             @"isLiquidGlassMenuEnabled",
             @"isLiquidGlassIntroPanelEnabled",
+            @"isIntroPanelLiquidGlassBackgroundGuardEnabled",
             @"isLiquidGlassToastEnabled",
             @"isLiquidGlassCenterToastEnabled",
             @"isLiquidGlassBottomToastEnabled",
@@ -109,13 +113,21 @@ static NSSet<NSString *> *ForceYESNames(void) {
             @"isTabBarIOS26LiquidGlassFixEnabled",
             @"feedStandardButtonEnableLiquidGlass",
             @"innerPushLiquidGlassEnable",
+            @"innerPushLiquidGlassEnableFlag",
             @"innerPushLiquidGlassInteractiveEnable",
+            @"innerPushLiquidGlassInteractiveEnableFlag",
             @"storyFixViewerListRelationButtonLiquidGlass",
             @"enableBigCardLiquidGlass",
             @"studioTextEditorAdaptLiquidGlass",
             @"studioMusicDetailBottomButtonLiquidGlass",
             @"ecPdpStoreV2EnableLiquidGlass",
             @"ugFeedCardLiquidGlassEnable",
+            @"p_enableLiquidGlass",
+            @"enableLiquidGlass",
+            @"isLiquidGlassEnabledForCapture",
+            @"isLiquidGlassEnabledForEdit",
+            @"should_survey_use_liquid_glass",
+            @"live_ec_prompt_card_liquid_glass",
             @"p_isBigCardLiquidGlassEnabled",
             @"p_shouldEnableStyle4OfficialLiquidGlass"
         ]];
@@ -379,7 +391,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.1 Probe+Attempt loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.2 Probe+Attempt loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
