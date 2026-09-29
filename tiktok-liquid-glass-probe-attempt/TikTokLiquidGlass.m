@@ -1501,46 +1501,19 @@ static CGFloat FeedVisualTargetHeight(UIViewController *vc) {
     return UIScreen.mainScreen.bounds.size.height;
 }
 
-static void DisableClippingUpToCell(UIView *view) {
-    UIView *cursor = view;
-    NSUInteger depth = 0;
-    while (cursor && depth++ < 10) {
-        cursor.clipsToBounds = NO;
-        if ([cursor isKindOfClass:UITableViewCell.class]) {
-            UITableViewCell *cell = (UITableViewCell *)cursor;
-            cell.contentView.clipsToBounds = NO;
-            break;
-        }
-        cursor = cursor.superview;
-    }
-}
-
-static void ExtendFeedCellControllerVisual(UIViewController *vc, CGFloat targetHeight, NSString *reason) {
+static void LogFeedCellControllerVisual(UIViewController *vc, CGFloat targetHeight, NSString *reason) {
     if (!vc || ![NSStringFromClass(vc.class) isEqualToString:@"AWEFeedCellViewController"]) return;
     UIView *view = vc.viewIfLoaded;
     if (!view) return;
 
-    CGRect old = view.frame;
-    if (CGRectGetWidth(old) < 300.0 || CGRectGetHeight(old) < 600.0) return;
-
-    CGFloat currentHeight = CGRectGetHeight(old);
-    if (targetHeight <= currentHeight + 1.0) return;
-
-    CGRect updated = old;
-    updated.size.height = targetHeight;
-
-    view.frame = updated;
-    view.clipsToBounds = NO;
-    DisableClippingUpToCell(view);
-
-    [view setNeedsLayout];
-    [view layoutIfNeeded];
-
-    TLGLog(@"PAGING_CELL_EXTEND reason=%@ controller=%@:%p old=%@ new=%@ target=%.1f",
+    TLGLog(@"PAGING_CELL_CONTROLLER reason=%@ controller=%@:%p frame=%@ bounds=%@ targetHeight=%.1f clips=%@ parent=%@",
            reason ?: @"-",
            NSStringFromClass(vc.class), vc,
-           NSStringFromCGRect(old), NSStringFromCGRect(view.frame),
-           targetHeight);
+           NSStringFromCGRect(view.frame),
+           NSStringFromCGRect(view.bounds),
+           targetHeight,
+           view.clipsToBounds ? @"YES" : @"NO",
+           vc.parentViewController ? NSStringFromClass(vc.parentViewController.class) : @"-");
 }
 
 static void ProbeAndAttemptFeedPaging(UIViewController *tableVC, NSString *reason) {
@@ -1555,7 +1528,7 @@ static void ProbeAndAttemptFeedPaging(UIViewController *tableVC, NSString *reaso
     CGFloat targetHeight = FeedVisualTargetHeight(tableVC);
     UITableView *table = FindPrimaryFeedTableView(root);
 
-    TLGLog(@"PAGING_STATE reason=%@ controller=%@:%p frame=%@ bounds=%@ targetHeight=%.1f children=%lu",
+    TLGLog(@"PAGING_STATE reason=%@ controller=%@:%p frame=%@ bounds=%@ targetHeight=%.1f children=%lu mode=probeOnly",
            reason ?: @"-",
            NSStringFromClass(tableVC.class), tableVC,
            NSStringFromCGRect(root.frame),
@@ -1567,18 +1540,9 @@ static void ProbeAndAttemptFeedPaging(UIViewController *tableVC, NSString *reaso
     LogFeedTable(table, reason);
     LogFeedScrollViews(root, reason);
 
-    if (table) {
-        // Preserve the existing paging geometry; only permit visual overdraw below each 769pt page.
-        table.clipsToBounds = NO;
-        for (UITableViewCell *cell in table.visibleCells) {
-            cell.clipsToBounds = NO;
-            cell.contentView.clipsToBounds = NO;
-        }
-    }
-
     for (UIViewController *child in tableVC.childViewControllers) {
         if ([NSStringFromClass(child.class) isEqualToString:@"AWEFeedCellViewController"]) {
-            ExtendFeedCellControllerVisual(child, targetHeight, reason);
+            LogFeedCellControllerVisual(child, targetHeight, reason);
         }
     }
 }
@@ -1606,9 +1570,6 @@ static void FeedPagingViewDidLayoutSubviews(id self, SEL _cmd) {
 
     if ([name isEqualToString:@"AWENewFeedTableViewController"]) {
         ProbeAndAttemptFeedPaging(vc, @"viewDidLayoutSubviews");
-    } else if ([name isEqualToString:@"AWEFeedCellViewController"]) {
-        CGFloat targetHeight = FeedVisualTargetHeight(vc);
-        ExtendFeedCellControllerVisual(vc, targetHeight, @"cell.viewDidLayoutSubviews");
     }
 }
 
@@ -1644,7 +1605,6 @@ static void InstallFeedPagingHookForClassName(NSString *className) {
 
 static void InstallFeedPagingHooks(void) {
     InstallFeedPagingHookForClassName(@"AWENewFeedTableViewController");
-    InstallFeedPagingHookForClassName(@"AWEFeedCellViewController");
 }
 
 static void ProbeAllFeedPaging(NSString *reason) {
@@ -1664,7 +1624,7 @@ static void ProbeAllFeedPaging(NSString *reason) {
             if ([name isEqualToString:@"AWENewFeedTableViewController"]) {
                 ProbeAndAttemptFeedPaging(vc, reason);
             } else if ([name isEqualToString:@"AWEFeedCellViewController"]) {
-                ExtendFeedCellControllerVisual(vc, FeedVisualTargetHeight(vc), reason);
+                LogFeedCellControllerVisual(vc, FeedVisualTargetHeight(vc), reason);
             }
 
             [stack addObjectsFromArray:vc.childViewControllers];
@@ -1831,7 +1791,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 1.0 Feed Paging Probe+Attempt loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 1.0.1 Safe Paging Probe loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
