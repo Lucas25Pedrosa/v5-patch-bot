@@ -2,6 +2,9 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <math.h>
+#import <stdint.h>
+#import <string.h>
 
 static NSString *const kStudyLogName = @"TikTokLiquidGlassHeightStudy.log";
 static dispatch_queue_t gLogQueue;
@@ -394,8 +397,16 @@ static void DumpRawNumericIvar(id obj, NSString *ivarName, NSString *reason) {
                  reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName, type, off, (double)v);
     } else if (type && strchr("qQiIlLsScCB", type[0])) {
         long long v = 0;
-        size_t n = MIN((size_t)8, (size_t)ivar_getOffset(iv) >= 0 ? (size_t)8 : (size_t)8);
-        memcpy(&v, p, n);
+        size_t n = 0;
+        switch (type[0]) {
+            case 'q': case 'Q': n = sizeof(long long); break;
+            case 'i': case 'I': n = sizeof(int); break;
+            case 'l': case 'L': n = sizeof(long); break;
+            case 's': case 'S': n = sizeof(short); break;
+            case 'c': case 'C': case 'B': n = sizeof(char); break;
+            default: n = 0; break;
+        }
+        if (n > 0) memcpy(&v, p, n);
         StudyLog(@"IVAR_VALUE reason=%@ object=%@:%p ivar=%@ type=%s offset=%td value=%lld",
                  reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName, type, off, v);
     } else {
