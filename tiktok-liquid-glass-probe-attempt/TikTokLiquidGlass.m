@@ -15,6 +15,7 @@ static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gBarAlphaOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gBarBackgroundOriginals;
+static NSMutableDictionary<NSString *, NSValue *> *gFeedLayoutOriginals;
 static NSString *gSessionMarker;
 static BOOL gCopyAlertShown = NO;
 static UIWindow *gProbeOverlayWindow;
@@ -995,6 +996,349 @@ static void ApplyRootBarClearAndOrder(void) {
     });
 }
 
+
+#pragma mark - 0.9 Home feed underlay probe + attempt
+
+static NSInteger SelectedIndexForController(id controller) {
+    if (!controller) return -1;
+    SEL sel = NSSelectorFromString(@"selectedIndex");
+    if ([controller respondsToSelector:sel]) {
+        return ((NSInteger(*)(id,SEL))objc_msgSend)(controller, sel);
+    }
+    id value = SafeValueForKey(controller, @"selectedIndex");
+    if ([value respondsToSelector:@selector(integerValue)]) return [value integerValue];
+    return -1;
+}
+
+static UIViewController *SelectedControllerForController(id controller) {
+    if (!controller) return nil;
+    SEL sel = NSSelectorFromString(@"selectedViewController");
+    if ([controller respondsToSelector:sel]) {
+        id value = ((id(*)(id,SEL))objc_msgSend)(controller, sel);
+        if ([value isKindOfClass:UIViewController.class]) return value;
+    }
+    id value = SafeValueForKey(controller, @"selectedViewController");
+    if ([value isKindOfClass:UIViewController.class]) return value;
+    return nil;
+}
+
+static BOOL NameLooksLikeHomeFeed(NSString *name) {
+    if (!name.length) return NO;
+    NSString *lower = name.lowercaseString;
+    return [lower containsString:@"home"] ||
+           [lower containsString:@"feed"] ||
+           [lower containsString:@"recommend"] ||
+           [lower containsString:@"aweme"] ||
+           [lower containsString:@"timeline"] ||
+           [lower containsString:@"fyp"] ||
+           [lower containsString:@"foryou"] ||
+           [lower containsString:@"for_you"];
+}
+
+static BOOL ControllerTreeLooksLikeHomeFeed(UIViewController *vc, NSUInteger depth) {
+    if (!vc || depth > 8) return NO;
+    if (NameLooksLikeHomeFeed(NSStringFromClass(vc.class))) return YES;
+    for (UIViewController *child in vc.childViewControllers) {
+        if (ControllerTreeLooksLikeHomeFeed(child, depth + 1)) return YES;
+    }
+    if (vc.presentedViewController &&
+        ControllerTreeLooksLikeHomeFeed(vc.presentedViewController, depth + 1)) return YES;
+    return NO;
+}
+
+static NSString *InsetsString(UIEdgeInsets insets) {
+    return [NSString stringWithFormat:@"{t=%.1f,l=%.1f,b=%.1f,r=%.1f}",
+            insets.top, insets.left, insets.bottom, insets.right];
+}
+
+static void LogControllerGeometry(UIViewController *vc, NSString *reason, NSUInteger depth) {
+    if (!vc || depth > 8) return;
+    UIView *view = vc.viewIfLoaded;
+    NSString *indent = [@"" stringByPaddingToLength:depth * 2 withString:@" " startingAtIndex:0];
+
+    if (view) {
+        CGRect windowFrame = view.window ? [view convertRect:view.bounds toView:view.window] : CGRectZero;
+        TLGLog(@"FEED_VC %@reason=%@ depth=%lu class=%@:%p parent=%@ frame=%@ windowFrame=%@ bounds=%@ safe=%@ additional=%@ clips=%@ bg=%@",
+               indent,
+               reason ?: @"-",
+               (unsigned long)depth,
+               NSStringFromClass(vc.class), vc,
+               vc.parentViewController ? NSStringFromClass(vc.parentViewController.class) : @"-",
+               NSStringFromCGRect(view.frame),
+               NSStringFromCGRect(windowFrame),
+               NSStringFromCGRect(view.bounds),
+               InsetsString(view.safeAreaInsets),
+               InsetsString(vc.additionalSafeAreaInsets),
+               view.clipsToBounds ? @"YES" : @"NO",
+               view.backgroundColor ?: (id)@"-");
+    } else {
+        TLGLog(@"FEED_VC %@reason=%@ depth=%lu class=%@:%p viewLoaded=NO",
+               indent, reason ?: @"-", (unsigned long)depth,
+               NSStringFromClass(vc.class), vc);
+    }
+
+    for (UIViewController *child in vc.childViewControllers) {
+        LogControllerGeometry(child, reason, depth + 1);
+    }
+}
+
+static void LogLayoutContainerSubviews(UIView *container, NSString *reason) {
+    if (!container) return;
+    TLGLog(@"FEED_CONTAINER reason=%@ class=%@:%p frame=%@ bounds=%@ subviews=%lu",
+           reason ?: @"-",
+           NSStringFromClass(container.class), container,
+           NSStringFromCGRect(container.frame),
+           NSStringFromCGRect(container.bounds),
+           (unsigned long)container.subviews.count);
+
+    NSUInteger index = 0;
+    for (UIView *child in container.subviews) {
+        TLGLog(@"FEED_CONTAINER_CHILD reason=%@ index=%lu class=%@:%p frame=%@ alpha=%.2f hidden=%@ bg=%@",
+               reason ?: @"-",
+               (unsigned long)index++,
+               NSStringFromClass(child.class), child,
+               NSStringFromCGRect(child.frame),
+               child.alpha,
+               child.hidden ? @"YES" : @"NO",
+               child.backgroundColor ?: (id)@"-");
+    }
+}
+
+static UIView *DirectLayoutContainerForTabController(UIViewController *controller) {
+    if (!controller.viewIfLoaded) return nil;
+    Class layoutClass = NSClassFromString(@"UILayoutContainerView");
+
+    UIView *candidate = nil;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:controller.viewIfLoaded];
+    NSUInteger scanned = 0;
+    while (stack.count && scanned < 1200) {
+        UIView *view = stack.lastObject;
+        [stack removeLastObject];
+        scanned++;
+
+        if ((layoutClass && [view isKindOfClass:layoutClass]) ||
+            [NSStringFromClass(view.class) isEqualToString:@"UILayoutContainerView"]) {
+            BOOL hasTTKTabBar = NO;
+            for (UIView *child in view.subviews) {
+                if ([NSStringFromClass(child.class) isEqualToString:@"TTKTabBar"]) {
+                    hasTTKTabBar = YES;
+                    break;
+                }
+            }
+            if (hasTTKTabBar) {
+                candidate = view;
+                break;
+            }
+        }
+
+        [stack addObjectsFromArray:view.subviews];
+    }
+    return candidate;
+}
+
+static void ExtendContentSiblingUnderTabBar(UIViewController *controller, NSString *reason) {
+    UIView *container = DirectLayoutContainerForTabController(controller);
+    if (!container) {
+        TLGLog(@"FEED_UNDERLAY reason=%@ result=noLayoutContainer", reason ?: @"-");
+        return;
+    }
+
+    UIView *tabBar = nil;
+    UIView *wrapper = nil;
+    for (UIView *child in container.subviews) {
+        NSString *name = NSStringFromClass(child.class);
+        if ([name isEqualToString:@"TTKTabBar"]) tabBar = child;
+        if ([name containsString:@"_UITabBarContainerWrapperView"]) wrapper = child;
+    }
+
+    if (!tabBar) {
+        TLGLog(@"FEED_UNDERLAY reason=%@ result=noTTKTabBar", reason ?: @"-");
+        return;
+    }
+
+    CGFloat barTop = CGRectGetMinY(tabBar.frame);
+    CGFloat targetHeight = CGRectGetHeight(container.bounds);
+    NSUInteger changed = 0;
+
+    for (UIView *child in container.subviews) {
+        if (child == tabBar || child == wrapper) continue;
+        CGRect f = child.frame;
+
+        BOOL fullWidth = fabs(CGRectGetWidth(f) - CGRectGetWidth(container.bounds)) < 3.0;
+        BOOL reachesBar = fabs(CGRectGetMaxY(f) - barTop) < 6.0 ||
+                          CGRectGetMaxY(f) <= barTop + 2.0;
+        BOOL startsNearTop = CGRectGetMinY(f) < 5.0;
+
+        if (fullWidth && reachesBar && startsNearTop && CGRectGetHeight(f) < targetHeight - 1.0) {
+            CGRect old = f;
+            f.size.height = targetHeight - f.origin.y;
+            child.frame = f;
+            child.clipsToBounds = NO;
+            changed++;
+            TLGLog(@"FEED_UNDERLAY_FRAME reason=%@ class=%@:%p old=%@ new=%@",
+                   reason ?: @"-",
+                   NSStringFromClass(child.class), child,
+                   NSStringFromCGRect(old), NSStringFromCGRect(f));
+        }
+    }
+
+    TLGLog(@"FEED_UNDERLAY reason=%@ barTop=%.1f containerH=%.1f changed=%lu",
+           reason ?: @"-", barTop, targetHeight, (unsigned long)changed);
+}
+
+static void ApplyHomeSafeAreaUnderlay(UIViewController *vc, CGFloat barHeight, NSString *reason, NSUInteger depth) {
+    if (!vc || depth > 8) return;
+
+    UIView *view = vc.viewIfLoaded;
+    if (view) {
+        vc.edgesForExtendedLayout |= UIRectEdgeBottom;
+        vc.extendedLayoutIncludesOpaqueBars = YES;
+
+        UIEdgeInsets add = vc.additionalSafeAreaInsets;
+        CGFloat wantedBottom = -barHeight;
+        if (fabs(add.bottom - wantedBottom) > 0.5) {
+            UIEdgeInsets old = add;
+            add.bottom = wantedBottom;
+            vc.additionalSafeAreaInsets = add;
+            TLGLog(@"FEED_SAFEAREA reason=%@ class=%@:%p old=%@ new=%@",
+                   reason ?: @"-",
+                   NSStringFromClass(vc.class), vc,
+                   InsetsString(old), InsetsString(add));
+        }
+        view.clipsToBounds = NO;
+    }
+
+    for (UIViewController *child in vc.childViewControllers) {
+        ApplyHomeSafeAreaUnderlay(child, barHeight, reason, depth + 1);
+    }
+}
+
+static void ProbeAndAttemptFeedUnderlayForController(UIViewController *controller, NSString *reason) {
+    if (!controller) return;
+
+    NSInteger selectedIndex = SelectedIndexForController(controller);
+    UIViewController *selected = SelectedControllerForController(controller);
+    if (!selected) {
+        for (UIViewController *child in controller.childViewControllers) {
+            if (child.viewIfLoaded.window) {
+                selected = child;
+                break;
+            }
+        }
+    }
+
+    BOOL looksHome = (selectedIndex == 0) ||
+                     ControllerTreeLooksLikeHomeFeed(selected ?: controller, 0);
+
+    UIView *visualTabBar = nil;
+    @try {
+        id value = [controller valueForKey:@"visualTabBar"];
+        if ([value isKindOfClass:UIView.class]) visualTabBar = value;
+    } @catch (__unused NSException *exception) {}
+
+    CGFloat barHeight = visualTabBar ? CGRectGetHeight(visualTabBar.bounds) : 83.0;
+
+    TLGLog(@"FEED_STATE reason=%@ controller=%@:%p selectedIndex=%ld selected=%@:%p looksHome=%@ barHeight=%.1f",
+           reason ?: @"-",
+           NSStringFromClass(controller.class), controller,
+           (long)selectedIndex,
+           selected ? NSStringFromClass(selected.class) : @"-",
+           selected,
+           looksHome ? @"YES" : @"NO",
+           barHeight);
+
+    LogControllerGeometry(selected ?: controller, reason, 0);
+
+    UIView *container = DirectLayoutContainerForTabController(controller);
+    LogLayoutContainerSubviews(container, reason);
+
+    if (!looksHome) {
+        TLGLog(@"FEED_ATTEMPT reason=%@ skipped=notHome", reason ?: @"-");
+        return;
+    }
+
+    ApplyHomeSafeAreaUnderlay(selected ?: controller, barHeight, reason, 0);
+    ExtendContentSiblingUnderTabBar(controller, reason);
+}
+
+static IMP OriginalFeedLayoutIMP(id self, SEL sel) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *v = nil;
+        @synchronized(gFeedLayoutOriginals) {
+            v = gFeedLayoutOriginals[MethodKey(c, sel)];
+        }
+        if (v) return [v pointerValue];
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void FeedUnderlayViewDidLayoutSubviews(id self, SEL _cmd) {
+    IMP original = OriginalFeedLayoutIMP(self, _cmd);
+    if (original) ((void(*)(id,SEL))original)(self, _cmd);
+
+    if ([self isKindOfClass:UIViewController.class]) {
+        ProbeAndAttemptFeedUnderlayForController((UIViewController *)self, @"viewDidLayoutSubviews");
+    }
+}
+
+static void InstallFeedUnderlayLayoutHook(void) {
+    Class cls = NSClassFromString(@"TTKTabBarController");
+    if (!cls) {
+        TLGLog(@"FEED_LAYOUT_HOOK result=noClass");
+        return;
+    }
+
+    SEL sel = @selector(viewDidLayoutSubviews);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) {
+        TLGLog(@"FEED_LAYOUT_HOOK result=noMethod");
+        return;
+    }
+
+    NSString *key = MethodKey(cls, sel);
+    IMP current = class_getMethodImplementation(cls, sel);
+    if (!current || current == (IMP)FeedUnderlayViewDidLayoutSubviews) return;
+
+    @synchronized(gFeedLayoutOriginals) {
+        gFeedLayoutOriginals[key] = [NSValue valueWithPointer:current];
+    }
+
+    const char *types = method_getTypeEncoding(m);
+    BOOL added = class_addMethod(cls, sel, (IMP)FeedUnderlayViewDidLayoutSubviews, types);
+    if (!added) method_setImplementation(m, (IMP)FeedUnderlayViewDidLayoutSubviews);
+
+    TLGLog(@"FEED_LAYOUT_HOOK class=%@ originalIMP=%p mode=%@",
+           NSStringFromClass(cls), current, added ? @"add" : @"replace");
+}
+
+static void ProbeAllFeedUnderlay(NSString *reason) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        Class target = NSClassFromString(@"TTKTabBarController");
+        if (!target) return;
+
+        NSMutableArray<UIViewController *> *stack = [NSMutableArray array];
+        for (UIWindow *window in ActiveWindows()) {
+            if (window.rootViewController) [stack addObject:window.rootViewController];
+        }
+
+        NSUInteger scanned = 0;
+        while (stack.count && scanned < 400) {
+            UIViewController *vc = stack.lastObject;
+            [stack removeLastObject];
+            scanned++;
+
+            if ([vc isKindOfClass:target]) {
+                ProbeAndAttemptFeedUnderlayForController(vc, reason);
+            }
+
+            [stack addObjectsFromArray:vc.childViewControllers];
+            if (vc.presentedViewController) [stack addObject:vc.presentedViewController];
+        }
+    });
+}
+
 #pragma mark - Copy probe alert
 
 static NSString *ReadFullLog(void) {
@@ -1153,7 +1497,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.8 Clear Root+Reorder+Overlay Copy Probe loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.9 Feed Underlay Probe+Attempt loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -1194,6 +1538,7 @@ static void TikTokLiquidGlassInit(void) {
         gAlphaOriginals = [NSMutableDictionary dictionary];
         gBarAlphaOriginals = [NSMutableDictionary dictionary];
         gBarBackgroundOriginals = [NSMutableDictionary dictionary];
+        gFeedLayoutOriginals = [NSMutableDictionary dictionary];
         gSessionMarker = NSUUID.UUID.UUIDString;
         TLGLog(@"SESSION_BEGIN id=%@", gSessionMarker);
 
@@ -1201,6 +1546,7 @@ static void TikTokLiquidGlassInit(void) {
         InstallImmediateRevealHooks();
         InstallKeepBarVisibleHooks();
         InstallBarRootBackgroundHooks();
+        InstallFeedUnderlayLayoutHook();
         LogContext();
         DumpClassShape(NSClassFromString(@"TTKIOS26LiquidGlassSwitch"));
         DumpClassShape(NSClassFromString(@"TTKTabBarController"));
@@ -1219,6 +1565,7 @@ static void TikTokLiquidGlassInit(void) {
                         ApplyRevealToAllWindows();
                         ApplyKeepBarsVisibleToAllWindows();
                         ApplyRootBarClearAndOrder();
+                        ProbeAllFeedUnderlay(@"didFinishLaunching");
                         ProbeAllTabBars(@"didFinishLaunching");
                         LogAllTargetViewChains();
                         SnapshotUI(@"didFinishLaunching");
@@ -1233,6 +1580,7 @@ static void TikTokLiquidGlassInit(void) {
                 ApplyRevealToAllWindows();
                 ApplyKeepBarsVisibleToAllWindows();
                 ApplyRootBarClearAndOrder();
+                ProbeAllFeedUnderlay(reason);
                 ProbeAllTabBars(reason);
                 LogAllTargetViewChains();
                 SnapshotUI(reason);
