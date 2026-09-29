@@ -5,8 +5,10 @@
 #import <math.h>
 #import <stdint.h>
 #import <string.h>
+#import <dlfcn.h>
+#import <mach-o/dyld.h>
 
-static NSString *const kStudyLogName = @"TikTokLiquidGlassHeightStudy.log";
+static NSString *const kStudyLogName = @"TikTokLiquidGlassHeightOriginStudy.log";
 static dispatch_queue_t gLogQueue;
 static NSMutableSet<NSString *> *gDumpedClasses;
 
@@ -568,9 +570,212 @@ static void DumpFocusedHeightStudy(UIWindow *w, NSString *reason) {
 }
 
 
+
+static intptr_t SlideForImagePath(const char *path, const struct mach_header **headerOut, uint32_t *indexOut) {
+    if (headerOut) *headerOut = NULL;
+    if (indexOut) *indexOut = UINT32_MAX;
+    if (!path) return 0;
+
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name) continue;
+        if (strcmp(name, path) == 0) {
+            if (headerOut) *headerOut = _dyld_get_image_header(i);
+            if (indexOut) *indexOut = i;
+            return _dyld_get_image_vmaddr_slide(i);
+        }
+    }
+
+    const char *last = strrchr(path, '/');
+    const char *base = last ? last + 1 : path;
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name) continue;
+        const char *nl = strrchr(name, '/');
+        const char *nb = nl ? nl + 1 : name;
+        if (strcmp(nb, base) == 0) {
+            if (headerOut) *headerOut = _dyld_get_image_header(i);
+            if (indexOut) *indexOut = i;
+            return _dyld_get_image_vmaddr_slide(i);
+        }
+    }
+    return 0;
+}
+
+static void LogIMPOrigin(Class cls, SEL sel, BOOL classMethod, NSString *label, NSString *reason) {
+    if (!cls || !sel) {
+        StudyLog(@"IMP_ORIGIN reason=%@ label=%@ available=NO classOrSelectorMissing=YES",
+                 reason ?: @"-", label ?: @"-");
+        return;
+    }
+
+    Method m = classMethod ? class_getClassMethod(cls, sel) : class_getInstanceMethod(cls, sel);
+    if (!m) {
+        StudyLog(@"IMP_ORIGIN reason=%@ label=%@ class=%@ scope=%@ selector=%@ available=NO",
+                 reason ?: @"-", label ?: @"-", NSStringFromClass(cls),
+                 classMethod ? @"class" : @"instance", NSStringFromSelector(sel));
+        return;
+    }
+
+    IMP imp = method_getImplementation(m);
+    Dl_info info = {0};
+    int ok = dladdr((const void *)imp, &info);
+
+    const struct mach_header *header = NULL;
+    uint32_t imageIndex = UINT32_MAX;
+    intptr_t slide = ok ? SlideForImagePath(info.dli_fname, &header, &imageIndex) : 0;
+
+    uintptr_t impAddr = (uintptr_t)imp;
+    uintptr_t imageBase = ok ? (uintptr_t)info.dli_fbase : 0;
+    uintptr_t imageOffset = imageBase ? (impAddr - imageBase) : 0;
+    uintptr_t unslid = slide ? (uintptr_t)((intptr_t)impAddr - slide) : impAddr;
+    uintptr_t headerAddr = (uintptr_t)header;
+
+    StudyLog(@"IMP_ORIGIN reason=%@ label=%@ class=%@ scope=%@ selector=%@ types=%s imp=0x%llx dladdr=%@ image=%s symbol=%s symbolAddr=%p imageBase=0x%llx imageOffset=0x%llx imageIndex=%@ header=0x%llx slide=0x%llx unslid=0x%llx",
+             reason ?: @"-",
+             label ?: @"-",
+             NSStringFromClass(cls),
+             classMethod ? @"class" : @"instance",
+             NSStringFromSelector(sel),
+             method_getTypeEncoding(m) ?: "-",
+             (unsigned long long)impAddr,
+             ok ? @"YES" : @"NO",
+             (ok && info.dli_fname) ? info.dli_fname : "-",
+             (ok && info.dli_sname) ? info.dli_sname : "-",
+             (ok && info.dli_saddr) ? info.dli_saddr : NULL,
+             (unsigned long long)imageBase,
+             (unsigned long long)imageOffset,
+             imageIndex == UINT32_MAX ? @"-" : [NSString stringWithFormat:@"%u", imageIndex],
+             (unsigned long long)headerAddr,
+             (unsigned long long)slide,
+             (unsigned long long)unslid);
+}
+
+static void LogMethodOriginsForClass(Class cls, NSArray<NSString *> *selectorNames, NSString *reason) {
+    if (!cls) return;
+    for (NSString *name in selectorNames) {
+        SEL sel = NSSelectorFromString(name);
+        LogIMPOrigin(cls, sel, NO,
+                     [NSString stringWithFormat:@"%@.%@", NSStringFromClass(cls), name],
+                     reason);
+        Method cm = class_getClassMethod(cls, sel);
+        if (cm) {
+            LogIMPOrigin(cls, sel, YES,
+                         [NSString stringWithFormat:@"+[%@ %@]", NSStringFromClass(cls), name],
+                         reason);
+        }
+    }
+}
+
+static Class FindRuntimeClassContainingAll(NSArray<NSString *> *tokens) {
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return Nil;
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    count = objc_getClassList(classes, count);
+    Class found = Nil;
+    for (int i = 0; i < count; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        BOOL matches = YES;
+        for (NSString *token in tokens) {
+            if (![name containsString:token]) { matches = NO; break; }
+        }
+        if (matches) { found = classes[i]; break; }
+    }
+    free(classes);
+    return found;
+}
+
+static void DumpHeightOriginMap(NSString *reason) {
+    StudyLog(@"ORIGIN_MAP_BEGIN reason=%@", reason ?: @"-");
+
+    Class feedVC = NSClassFromString(@"AWENewFeedTableViewController");
+    LogMethodOriginsForClass(feedVC, @[
+        @"cellHeight",
+        @"viewDidLoad",
+        @"viewWillLayoutSubviews",
+        @"viewDidLayoutSubviews"
+    ], reason);
+
+    Class service = NSClassFromString(@"TTKFeedTableViewService");
+    LogMethodOriginsForClass(service, @[
+        @"cellHeight",
+        @"lastStableCellHeight",
+        @"setLastStableCellHeight:",
+        @"tableView:heightForRowAtIndexPath:",
+        @"tableView:cellForRowAtIndexPath:",
+        @"tableView:willDisplayCell:forRowAtIndexPath:",
+        @"scrollViewDidScroll:",
+        @"scrollViewWillEndDragging:withVelocity:targetContentOffset:"
+    ], reason);
+
+    Class tabController = NSClassFromString(@"TTKTabBarController");
+    LogMethodOriginsForClass(tabController, @[
+        @"heightForTabBar",
+        @"tabBarHeight",
+        @"tabBarContentSize",
+        @"viewWillLayoutSubviews",
+        @"viewDidLayoutSubviews"
+    ], reason);
+
+    Class config = NSClassFromString(@"TikTokTabBarImpl.TTKTabBarConfigration");
+    if (!config) config = FindRuntimeClassContainingAll(@[@"TTKTabBar", @"Config"]);
+    if (config) {
+        StudyLog(@"ORIGIN_CONFIG_CLASS reason=%@ class=%@", reason ?: @"-", NSStringFromClass(config));
+        DumpClassShape(config, @"originConfig");
+        LogMethodOriginsForClass(config, @[
+            @"tabBarHeight",
+            @"setTabBarHeight:",
+            @"contentHeight",
+            @"barHeight"
+        ], reason);
+    } else {
+        StudyLog(@"ORIGIN_CONFIG_CLASS reason=%@ class=NOT_FOUND", reason ?: @"-");
+    }
+
+    Class mask = NSClassFromString(@"TTKFeedDescBottomMaskView");
+    LogMethodOriginsForClass(mask, @[
+        @"layoutSubviews",
+        @"setFrame:",
+        @"setBounds:",
+        @"intrinsicContentSize"
+    ], reason);
+
+    Class tableClass = NSClassFromString(@"AWENewFeedTableView");
+    LogMethodOriginsForClass(tableClass, @[
+        @"layoutSubviews",
+        @"setFrame:",
+        @"setBounds:",
+        @"setContentSize:"
+    ], reason);
+
+    StudyLog(@"ORIGIN_MAP_END reason=%@", reason ?: @"-");
+}
+
+static void DumpLoadedImagesOnce(void) {
+    uint32_t count = _dyld_image_count();
+    StudyLog(@"DYLD_IMAGES_BEGIN count=%u", count);
+    for (uint32_t i = 0; i < count; i++) {
+        const char *name = _dyld_get_image_name(i);
+        if (!name) continue;
+        NSString *n = [NSString stringWithUTF8String:name];
+        if ([n containsString:@"MusicallyCore"] ||
+            [n containsString:@"/TikTok"] ||
+            [n containsString:@"TikTokTabBar"] ||
+            [n containsString:@"TUX"]) {
+            const struct mach_header *h = _dyld_get_image_header(i);
+            intptr_t slide = _dyld_get_image_vmaddr_slide(i);
+            StudyLog(@"DYLD_IMAGE index=%u path=%s header=%p slide=0x%llx",
+                     i, name, h, (unsigned long long)slide);
+        }
+    }
+    StudyLog(@"DYLD_IMAGES_END");
+}
+
+
 static void DumpAppContext(void) {
     NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-    StudyLog(@"========== TikTokLiquidGlass 1.2 Read-Only Height/Mask Probe loaded ==========");
+    StudyLog(@"========== TikTokLiquidGlass 1.3 Read-Only Height Origin Probe loaded ==========");
     StudyLog(@"logPath=%@", StudyLogPath());
     StudyLog(@"bundle=%@ version=%@ build=%@ executable=%@",
              NSBundle.mainBundle.bundleIdentifier ?: @"-",
@@ -590,6 +795,7 @@ static void Snapshot(NSString *reason) {
         StudyLog(@"SNAPSHOT_BEGIN reason=%@ windows=%lu", reason ?: @"-", (unsigned long)windows.count);
 
         DumpKnownClasses(reason);
+        DumpHeightOriginMap(reason);
 
         for (UIWindow *w in windows) {
             if (w.rootViewController) DumpVCTree(w.rootViewController, 0, reason);
@@ -612,6 +818,8 @@ static void TikTokLiquidGlassStudyInit(void) {
         DumpAppContext();
         DumpKnownClasses(@"constructor");
         DumpRuntimeCandidatesOnce();
+        DumpLoadedImagesOnce();
+        DumpHeightOriginMap(@"constructor");
 
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                           object:nil
