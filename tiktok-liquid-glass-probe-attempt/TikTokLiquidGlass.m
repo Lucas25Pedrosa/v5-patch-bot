@@ -15,7 +15,8 @@ static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
 static NSString *gSessionMarker;
 static BOOL gCopyAlertShown = NO;
-static NSUInteger gCopyAlertRetryCount = 0;
+static UIWindow *gProbeOverlayWindow;
+static __weak UIWindow *gPreviousKeyWindow;
 static NSArray<UIWindow *> *ActiveWindows(void);
 
 static NSString *LogPath(void) {
@@ -730,56 +731,61 @@ static NSString *ReadCurrentSessionLog(void) {
     return [text substringFromIndex:lineRange.location];
 }
 
-static UIViewController *TopViewController(UIViewController *vc) {
-    if (!vc) return nil;
-
-    UIViewController *presented = vc.presentedViewController;
-    if (presented && !presented.isBeingDismissed) {
-        return TopViewController(presented);
-    }
-
-    if ([vc isKindOfClass:UINavigationController.class]) {
-        UIViewController *visible = ((UINavigationController *)vc).visibleViewController;
-        return TopViewController(visible ?: vc);
-    }
-
-    if ([vc isKindOfClass:UITabBarController.class]) {
-        UIViewController *selected = ((UITabBarController *)vc).selectedViewController;
-        return TopViewController(selected ?: vc);
-    }
-
-    for (UIViewController *child in vc.childViewControllers.reverseObjectEnumerator) {
-        if (child.viewIfLoaded.window) return TopViewController(child);
-    }
-
-    return vc;
-}
-
-static UIViewController *BestPresenter(void) {
-    for (UIWindow *window in ActiveWindows()) {
-        if (!window.hidden && window.alpha > 0.01 && window.rootViewController) {
-            UIViewController *top = TopViewController(window.rootViewController);
-            if (top.viewIfLoaded.window) return top;
+static UIWindowScene *ForegroundWindowScene(void) {
+    UIWindowScene *fallback = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
+        if (!fallback) fallback = windowScene;
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            return windowScene;
         }
     }
-    return nil;
+    return fallback;
+}
+
+static void TearDownProbeOverlay(void) {
+    UIWindow *window = gProbeOverlayWindow;
+    gProbeOverlayWindow = nil;
+
+    if (window) {
+        window.hidden = YES;
+        window.rootViewController = nil;
+    }
+
+    UIWindow *previous = gPreviousKeyWindow;
+    gPreviousKeyWindow = nil;
+    if (previous && !previous.hidden) {
+        [previous makeKeyWindow];
+    }
 }
 
 static void PresentCopyAlert(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (gCopyAlertShown) return;
+        if (gCopyAlertShown || gProbeOverlayWindow) return;
 
-        UIViewController *presenter = BestPresenter();
-        if (!presenter || [presenter isKindOfClass:UIAlertController.class]) {
-            if (gCopyAlertRetryCount < 6) {
-                gCopyAlertRetryCount++;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), ^{
-                    PresentCopyAlert();
-                });
-            }
+        UIWindowScene *scene = ForegroundWindowScene();
+        if (!scene) {
+            TLGLog(@"COPY_OVERLAY_FAILED reason=noWindowScene");
             return;
         }
+
+        for (UIWindow *candidate in scene.windows) {
+            if (candidate.isKeyWindow) {
+                gPreviousKeyWindow = candidate;
+                break;
+            }
+        }
+
+        UIViewController *root = [UIViewController new];
+        root.view.backgroundColor = UIColor.clearColor;
+
+        UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
+        window.frame = scene.coordinateSpace.bounds;
+        window.backgroundColor = UIColor.clearColor;
+        window.windowLevel = UIWindowLevelAlert + 100.0;
+        window.rootViewController = root;
+        gProbeOverlayWindow = window;
 
         UIAlertController *alert =
             [UIAlertController alertControllerWithTitle:@"TikTokLiquidGlass Probe"
@@ -794,6 +800,7 @@ static void PresentCopyAlert(void) {
                 UIPasteboard.generalPasteboard.string = text ?: @"";
                 TLGLog(@"COPY_ACTION scope=currentSession chars=%lu",
                        (unsigned long)text.length);
+                TearDownProbeOverlay();
             }]];
 
         [alert addAction:
@@ -804,16 +811,30 @@ static void PresentCopyAlert(void) {
                 UIPasteboard.generalPasteboard.string = text ?: @"";
                 TLGLog(@"COPY_ACTION scope=fullLog chars=%lu",
                        (unsigned long)text.length);
+                TearDownProbeOverlay();
             }]];
 
         [alert addAction:
             [UIAlertAction actionWithTitle:@"Fechar"
                                      style:UIAlertActionStyleCancel
-                                   handler:nil]];
+                                   handler:^(__unused UIAlertAction *action) {
+                TLGLog(@"COPY_ACTION scope=close");
+                TearDownProbeOverlay();
+            }]];
 
         gCopyAlertShown = YES;
-        TLGLog(@"COPY_ALERT_PRESENT presenter=%@", NSStringFromClass(presenter.class));
-        [presenter presentViewController:alert animated:YES completion:nil];
+        window.hidden = NO;
+        [window makeKeyAndVisible];
+
+        TLGLog(@"COPY_OVERLAY_SHOW scene=%@ level=%.0f",
+               scene.session.persistentIdentifier ?: @"-",
+               window.windowLevel);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [root presentViewController:alert animated:YES completion:^{
+                TLGLog(@"COPY_ALERT_PRESENT overlay=YES");
+            }];
+        });
     });
 }
 
@@ -842,7 +863,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.5 Persistent Reveal+Copy Probe loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.6 Persistent Reveal+Overlay Copy Probe loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
