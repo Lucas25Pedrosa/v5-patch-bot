@@ -14,6 +14,7 @@ static NSMutableSet<NSString *> *gDiscovered;
 static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gBarAlphaOriginals;
+static NSMutableDictionary<NSString *, NSValue *> *gBarBackgroundOriginals;
 static NSString *gSessionMarker;
 static BOOL gCopyAlertShown = NO;
 static UIWindow *gProbeOverlayWindow;
@@ -862,6 +863,138 @@ static void LogAllTargetViewChains(void) {
     });
 }
 
+
+#pragma mark - 0.8 clear root backgrounds + preserve native glass order
+
+static IMP OriginalBarBackgroundIMP(id self, SEL sel) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *v = nil;
+        @synchronized(gBarBackgroundOriginals) {
+            v = gBarBackgroundOriginals[MethodKey(c, sel)];
+        }
+        if (v) return [v pointerValue];
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void KeepBarRootClearSetBackgroundColor(id self, SEL _cmd, UIColor *requestedColor) {
+    IMP original = OriginalBarBackgroundIMP(self, _cmd);
+    if (original) ((void(*)(id,SEL,id))original)(self, _cmd, UIColor.clearColor);
+
+    NSString *onceKey = [NSString stringWithFormat:@"BAR_BG_CLEAR|%@", NSStringFromClass([self class])];
+    BOOL first = NO;
+    @synchronized(gDiscovered) {
+        if (![gDiscovered containsObject:onceKey]) {
+            [gDiscovered addObject:onceKey];
+            first = YES;
+        }
+    }
+    if (first) {
+        TLGLog(@"BAR_BG_CLEAR class=%@ requested=%@ forced=clear",
+               NSStringFromClass([self class]),
+               requestedColor ?: (id)@"-");
+    }
+}
+
+static BOOL HookBarRootBackgroundClass(Class cls, NSString *reason) {
+    if (!ShouldKeepBarVisibleClass(cls)) return NO;
+
+    SEL sel = @selector(setBackgroundColor:);
+    Method inherited = class_getInstanceMethod(cls, sel);
+    if (!inherited) return NO;
+
+    NSString *key = MethodKey(cls, sel);
+    @synchronized(gBarBackgroundOriginals) {
+        if (gBarBackgroundOriginals[key]) return YES;
+    }
+
+    IMP current = class_getMethodImplementation(cls, sel);
+    if (!current || current == (IMP)KeepBarRootClearSetBackgroundColor) return YES;
+
+    const char *types = method_getTypeEncoding(inherited);
+    if (!types) return NO;
+
+    @synchronized(gBarBackgroundOriginals) {
+        gBarBackgroundOriginals[key] = [NSValue valueWithPointer:current];
+    }
+
+    BOOL added = class_addMethod(cls, sel, (IMP)KeepBarRootClearSetBackgroundColor, types);
+    if (!added) {
+        Method direct = class_getInstanceMethod(cls, sel);
+        if (!direct) return NO;
+        method_setImplementation(direct, (IMP)KeepBarRootClearSetBackgroundColor);
+    }
+
+    TLGLog(@"BAR_BG_HOOK reason=%@ class=%@ originalIMP=%p mode=%@",
+           reason ?: @"-",
+           NSStringFromClass(cls),
+           current,
+           added ? @"add" : @"replace");
+    return YES;
+}
+
+static void InstallBarRootBackgroundHooks(void) {
+    HookBarRootBackgroundClass(NSClassFromString(@"TTKTabBar"), @"startup");
+    HookBarRootBackgroundClass(NSClassFromString(@"TTKFakeTabBar"), @"startup");
+}
+
+static void ClearRootBarBackgroundsInTree(UIView *view, NSUInteger depth) {
+    if (!view || depth > 40) return;
+
+    if (ShouldKeepBarVisibleClass(view.class)) {
+        if (view.backgroundColor && !CGColorEqualToColor(view.backgroundColor.CGColor, UIColor.clearColor.CGColor)) {
+            TLGLog(@"BAR_ROOT_CLEAR class=%@ oldBackground=%@ frame=%@",
+                   NSStringFromClass(view.class),
+                   view.backgroundColor,
+                   NSStringFromCGRect(view.frame));
+        }
+        view.opaque = NO;
+        view.backgroundColor = UIColor.clearColor;
+    }
+
+    for (UIView *child in view.subviews) {
+        ClearRootBarBackgroundsInTree(child, depth + 1);
+    }
+}
+
+static void ReorderFakeBarBelowCustomBarInView(UIView *view, NSUInteger depth) {
+    if (!view || depth > 40) return;
+
+    UIView *fake = nil;
+    UIView *custom = nil;
+    for (UIView *child in view.subviews) {
+        NSString *name = NSStringFromClass(child.class);
+        if ([name isEqualToString:@"TTKFakeTabBar"]) fake = child;
+        else if ([name isEqualToString:@"TTKTabBar"]) custom = child;
+    }
+
+    if (fake && custom && fake.superview == custom.superview) {
+        NSArray *siblings = view.subviews;
+        NSUInteger fakeIndex = [siblings indexOfObjectIdenticalTo:fake];
+        NSUInteger customIndex = [siblings indexOfObjectIdenticalTo:custom];
+        if (fakeIndex != NSNotFound && customIndex != NSNotFound && fakeIndex > customIndex) {
+            [view insertSubview:fake belowSubview:custom];
+            TLGLog(@"BAR_REORDER parent=%@ fakeBelowCustom=YES",
+                   NSStringFromClass(view.class));
+        }
+    }
+
+    for (UIView *child in view.subviews) {
+        ReorderFakeBarBelowCustomBarInView(child, depth + 1);
+    }
+}
+
+static void ApplyRootBarClearAndOrder(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIWindow *window in ActiveWindows()) {
+            ClearRootBarBackgroundsInTree(window, 0);
+            ReorderFakeBarBelowCustomBarInView(window, 0);
+        }
+    });
+}
+
 #pragma mark - Copy probe alert
 
 static NSString *ReadFullLog(void) {
@@ -1020,7 +1153,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.7 Keep Bars Visible+Overlay Copy Probe loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.8 Clear Root+Reorder+Overlay Copy Probe loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -1060,12 +1193,14 @@ static void TikTokLiquidGlassInit(void) {
         gViewOriginals = [NSMutableDictionary dictionary];
         gAlphaOriginals = [NSMutableDictionary dictionary];
         gBarAlphaOriginals = [NSMutableDictionary dictionary];
+        gBarBackgroundOriginals = [NSMutableDictionary dictionary];
         gSessionMarker = NSUUID.UUID.UUIDString;
         TLGLog(@"SESSION_BEGIN id=%@", gSessionMarker);
 
         InstallImmediateGateHooks();
         InstallImmediateRevealHooks();
         InstallKeepBarVisibleHooks();
+        InstallBarRootBackgroundHooks();
         LogContext();
         DumpClassShape(NSClassFromString(@"TTKIOS26LiquidGlassSwitch"));
         DumpClassShape(NSClassFromString(@"TTKTabBarController"));
@@ -1083,6 +1218,7 @@ static void TikTokLiquidGlassInit(void) {
                         ScanRuntime(@"didFinishLaunching");
                         ApplyRevealToAllWindows();
                         ApplyKeepBarsVisibleToAllWindows();
+                        ApplyRootBarClearAndOrder();
                         ProbeAllTabBars(@"didFinishLaunching");
                         LogAllTargetViewChains();
                         SnapshotUI(@"didFinishLaunching");
@@ -1096,6 +1232,7 @@ static void TikTokLiquidGlassInit(void) {
                 ScanRuntime(reason);
                 ApplyRevealToAllWindows();
                 ApplyKeepBarsVisibleToAllWindows();
+                ApplyRootBarClearAndOrder();
                 ProbeAllTabBars(reason);
                 LogAllTargetViewChains();
                 SnapshotUI(reason);
