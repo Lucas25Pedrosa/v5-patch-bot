@@ -16,6 +16,7 @@ static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gBarAlphaOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gBarBackgroundOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gFeedLayoutOriginals;
+static NSMutableDictionary<NSString *, NSValue *> *gFeedPagingOriginals;
 static NSString *gSessionMarker;
 static BOOL gCopyAlertShown = NO;
 static UIWindow *gProbeOverlayWindow;
@@ -1339,6 +1340,339 @@ static void ProbeAllFeedUnderlay(NSString *reason) {
     });
 }
 
+
+#pragma mark - 1.0 Feed paging probe + visual overdraw attempt
+
+static BOOL PagingSelectorInteresting(NSString *name) {
+    if (!name.length) return NO;
+    NSString *lower = name.lowercaseString;
+    return [lower containsString:@"height"] ||
+           [lower containsString:@"row"] ||
+           [lower containsString:@"cell"] ||
+           [lower containsString:@"page"] ||
+           [lower containsString:@"paging"] ||
+           [lower containsString:@"inset"] ||
+           [lower containsString:@"layout"] ||
+           [lower containsString:@"scroll"];
+}
+
+static void DumpPagingClassShape(Class cls, NSString *reason) {
+    if (!cls) return;
+    NSString *onceKey = [NSString stringWithFormat:@"PAGING_SHAPE|%p", cls];
+    @synchronized(gDiscovered) {
+        if ([gDiscovered containsObject:onceKey]) return;
+        [gDiscovered addObject:onceKey];
+    }
+
+    TLGLog(@"PAGING_CLASS_BEGIN reason=%@ class=%@", reason ?: @"-", NSStringFromClass(cls));
+
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        SEL sel = method_getName(methods[i]);
+        NSString *name = NSStringFromSelector(sel);
+        if (!PagingSelectorInteresting(name)) continue;
+        TLGLog(@"PAGING_METHOD class=%@ scope=instance selector=%@ types=%s imp=%p",
+               NSStringFromClass(cls), name,
+               method_getTypeEncoding(methods[i]) ?: "-",
+               method_getImplementation(methods[i]));
+    }
+    free(methods);
+
+    Class meta = object_getClass(cls);
+    count = 0;
+    methods = class_copyMethodList(meta, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        SEL sel = method_getName(methods[i]);
+        NSString *name = NSStringFromSelector(sel);
+        if (!PagingSelectorInteresting(name)) continue;
+        TLGLog(@"PAGING_METHOD class=%@ scope=class selector=%@ types=%s imp=%p",
+               NSStringFromClass(cls), name,
+               method_getTypeEncoding(methods[i]) ?: "-",
+               method_getImplementation(methods[i]));
+    }
+    free(methods);
+
+    TLGLog(@"PAGING_CLASS_END class=%@", NSStringFromClass(cls));
+}
+
+static UITableView *FindPrimaryFeedTableView(UIView *root) {
+    if (!root) return nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSUInteger index = 0;
+    UITableView *best = nil;
+    CGFloat bestArea = 0.0;
+
+    while (index < queue.count && index < 1500) {
+        UIView *view = queue[index++];
+        if ([view isKindOfClass:UITableView.class]) {
+            CGFloat area = CGRectGetWidth(view.bounds) * CGRectGetHeight(view.bounds);
+            if (area > bestArea) {
+                best = (UITableView *)view;
+                bestArea = area;
+            }
+        }
+        [queue addObjectsFromArray:view.subviews];
+    }
+    return best;
+}
+
+static void LogFeedScrollViews(UIView *root, NSString *reason) {
+    if (!root) return;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSUInteger index = 0;
+    NSUInteger logged = 0;
+
+    while (index < queue.count && index < 1500 && logged < 24) {
+        UIView *view = queue[index++];
+        if ([view isKindOfClass:UIScrollView.class]) {
+            UIScrollView *scroll = (UIScrollView *)view;
+            TLGLog(@"PAGING_SCROLL reason=%@ class=%@:%p frame=%@ bounds=%@ contentSize=%@ inset=%@ adjusted=%@ paging=%@ clips=%@ delegate=%@",
+                   reason ?: @"-",
+                   NSStringFromClass(scroll.class), scroll,
+                   NSStringFromCGRect(scroll.frame),
+                   NSStringFromCGRect(scroll.bounds),
+                   NSStringFromCGSize(scroll.contentSize),
+                   InsetsString(scroll.contentInset),
+                   InsetsString(scroll.adjustedContentInset),
+                   scroll.pagingEnabled ? @"YES" : @"NO",
+                   scroll.clipsToBounds ? @"YES" : @"NO",
+                   scroll.delegate ? NSStringFromClass([scroll.delegate class]) : @"-");
+            logged++;
+        }
+        [queue addObjectsFromArray:view.subviews];
+    }
+}
+
+static void LogFeedTable(UITableView *table, NSString *reason) {
+    if (!table) {
+        TLGLog(@"PAGING_TABLE reason=%@ result=notFound", reason ?: @"-");
+        return;
+    }
+
+    id delegate = table.delegate;
+    id dataSource = table.dataSource;
+    BOOL hasDelegateHeight = delegate &&
+        [delegate respondsToSelector:@selector(tableView:heightForRowAtIndexPath:)];
+
+    TLGLog(@"PAGING_TABLE reason=%@ class=%@:%p frame=%@ bounds=%@ rowHeight=%.1f estimated=%.1f contentSize=%@ inset=%@ adjusted=%@ paging=%@ clips=%@ delegate=%@ dataSource=%@ delegateHeight=%@ visible=%lu",
+           reason ?: @"-",
+           NSStringFromClass(table.class), table,
+           NSStringFromCGRect(table.frame),
+           NSStringFromCGRect(table.bounds),
+           table.rowHeight,
+           table.estimatedRowHeight,
+           NSStringFromCGSize(table.contentSize),
+           InsetsString(table.contentInset),
+           InsetsString(table.adjustedContentInset),
+           table.pagingEnabled ? @"YES" : @"NO",
+           table.clipsToBounds ? @"YES" : @"NO",
+           delegate ? NSStringFromClass([delegate class]) : @"-",
+           dataSource ? NSStringFromClass([dataSource class]) : @"-",
+           hasDelegateHeight ? @"YES" : @"NO",
+           (unsigned long)table.visibleCells.count);
+
+    for (UITableViewCell *cell in table.visibleCells) {
+        NSIndexPath *path = [table indexPathForCell:cell];
+        TLGLog(@"PAGING_CELL reason=%@ index=%@ class=%@:%p frame=%@ bounds=%@ contentFrame=%@ clips=%@ contentClips=%@",
+               reason ?: @"-",
+               path ?: (id)@"-",
+               NSStringFromClass(cell.class), cell,
+               NSStringFromCGRect(cell.frame),
+               NSStringFromCGRect(cell.bounds),
+               NSStringFromCGRect(cell.contentView.frame),
+               cell.clipsToBounds ? @"YES" : @"NO",
+               cell.contentView.clipsToBounds ? @"YES" : @"NO");
+    }
+
+    if (delegate) DumpPagingClassShape([delegate class], @"tableDelegate");
+    if (dataSource && dataSource != delegate) DumpPagingClassShape([dataSource class], @"tableDataSource");
+}
+
+static CGFloat FeedVisualTargetHeight(UIViewController *vc) {
+    UIWindow *window = vc.viewIfLoaded.window;
+    if (window && CGRectGetHeight(window.bounds) > 0.0) return CGRectGetHeight(window.bounds);
+
+    UIViewController *cursor = vc;
+    while (cursor.parentViewController) cursor = cursor.parentViewController;
+    if (cursor.viewIfLoaded && CGRectGetHeight(cursor.view.bounds) > 0.0)
+        return CGRectGetHeight(cursor.view.bounds);
+
+    return UIScreen.mainScreen.bounds.size.height;
+}
+
+static void DisableClippingUpToCell(UIView *view) {
+    UIView *cursor = view;
+    NSUInteger depth = 0;
+    while (cursor && depth++ < 10) {
+        cursor.clipsToBounds = NO;
+        if ([cursor isKindOfClass:UITableViewCell.class]) {
+            UITableViewCell *cell = (UITableViewCell *)cursor;
+            cell.contentView.clipsToBounds = NO;
+            break;
+        }
+        cursor = cursor.superview;
+    }
+}
+
+static void ExtendFeedCellControllerVisual(UIViewController *vc, CGFloat targetHeight, NSString *reason) {
+    if (!vc || ![NSStringFromClass(vc.class) isEqualToString:@"AWEFeedCellViewController"]) return;
+    UIView *view = vc.viewIfLoaded;
+    if (!view) return;
+
+    CGRect old = view.frame;
+    if (CGRectGetWidth(old) < 300.0 || CGRectGetHeight(old) < 600.0) return;
+
+    CGFloat currentHeight = CGRectGetHeight(old);
+    if (targetHeight <= currentHeight + 1.0) return;
+
+    CGRect updated = old;
+    updated.size.height = targetHeight;
+
+    view.frame = updated;
+    view.clipsToBounds = NO;
+    DisableClippingUpToCell(view);
+
+    [view setNeedsLayout];
+    [view layoutIfNeeded];
+
+    TLGLog(@"PAGING_CELL_EXTEND reason=%@ controller=%@:%p old=%@ new=%@ target=%.1f",
+           reason ?: @"-",
+           NSStringFromClass(vc.class), vc,
+           NSStringFromCGRect(old), NSStringFromCGRect(view.frame),
+           targetHeight);
+}
+
+static void ProbeAndAttemptFeedPaging(UIViewController *tableVC, NSString *reason) {
+    if (!tableVC || ![NSStringFromClass(tableVC.class) isEqualToString:@"AWENewFeedTableViewController"]) return;
+    UIView *root = tableVC.viewIfLoaded;
+    if (!root) {
+        TLGLog(@"PAGING_STATE reason=%@ controller=%@:%p viewLoaded=NO",
+               reason ?: @"-", NSStringFromClass(tableVC.class), tableVC);
+        return;
+    }
+
+    CGFloat targetHeight = FeedVisualTargetHeight(tableVC);
+    UITableView *table = FindPrimaryFeedTableView(root);
+
+    TLGLog(@"PAGING_STATE reason=%@ controller=%@:%p frame=%@ bounds=%@ targetHeight=%.1f children=%lu",
+           reason ?: @"-",
+           NSStringFromClass(tableVC.class), tableVC,
+           NSStringFromCGRect(root.frame),
+           NSStringFromCGRect(root.bounds),
+           targetHeight,
+           (unsigned long)tableVC.childViewControllers.count);
+
+    DumpPagingClassShape(tableVC.class, reason);
+    LogFeedTable(table, reason);
+    LogFeedScrollViews(root, reason);
+
+    if (table) {
+        // Preserve the existing paging geometry; only permit visual overdraw below each 769pt page.
+        table.clipsToBounds = NO;
+        for (UITableViewCell *cell in table.visibleCells) {
+            cell.clipsToBounds = NO;
+            cell.contentView.clipsToBounds = NO;
+        }
+    }
+
+    for (UIViewController *child in tableVC.childViewControllers) {
+        if ([NSStringFromClass(child.class) isEqualToString:@"AWEFeedCellViewController"]) {
+            ExtendFeedCellControllerVisual(child, targetHeight, reason);
+        }
+    }
+}
+
+static IMP OriginalFeedPagingLayoutIMP(id self, SEL sel) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *v = nil;
+        @synchronized(gFeedPagingOriginals) {
+            v = gFeedPagingOriginals[MethodKey(c, sel)];
+        }
+        if (v) return [v pointerValue];
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void FeedPagingViewDidLayoutSubviews(id self, SEL _cmd) {
+    IMP original = OriginalFeedPagingLayoutIMP(self, _cmd);
+    if (original) ((void(*)(id,SEL))original)(self, _cmd);
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+    UIViewController *vc = (UIViewController *)self;
+    NSString *name = NSStringFromClass(vc.class);
+
+    if ([name isEqualToString:@"AWENewFeedTableViewController"]) {
+        ProbeAndAttemptFeedPaging(vc, @"viewDidLayoutSubviews");
+    } else if ([name isEqualToString:@"AWEFeedCellViewController"]) {
+        CGFloat targetHeight = FeedVisualTargetHeight(vc);
+        ExtendFeedCellControllerVisual(vc, targetHeight, @"cell.viewDidLayoutSubviews");
+    }
+}
+
+static void InstallFeedPagingHookForClassName(NSString *className) {
+    Class cls = NSClassFromString(className);
+    if (!cls) {
+        TLGLog(@"PAGING_LAYOUT_HOOK class=%@ result=noClass", className);
+        return;
+    }
+
+    SEL sel = @selector(viewDidLayoutSubviews);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) {
+        TLGLog(@"PAGING_LAYOUT_HOOK class=%@ result=noMethod", className);
+        return;
+    }
+
+    NSString *key = MethodKey(cls, sel);
+    IMP current = class_getMethodImplementation(cls, sel);
+    if (!current || current == (IMP)FeedPagingViewDidLayoutSubviews) return;
+
+    @synchronized(gFeedPagingOriginals) {
+        gFeedPagingOriginals[key] = [NSValue valueWithPointer:current];
+    }
+
+    const char *types = method_getTypeEncoding(m);
+    BOOL added = class_addMethod(cls, sel, (IMP)FeedPagingViewDidLayoutSubviews, types);
+    if (!added) method_setImplementation(m, (IMP)FeedPagingViewDidLayoutSubviews);
+
+    TLGLog(@"PAGING_LAYOUT_HOOK class=%@ originalIMP=%p mode=%@",
+           className, current, added ? @"add" : @"replace");
+}
+
+static void InstallFeedPagingHooks(void) {
+    InstallFeedPagingHookForClassName(@"AWENewFeedTableViewController");
+    InstallFeedPagingHookForClassName(@"AWEFeedCellViewController");
+}
+
+static void ProbeAllFeedPaging(NSString *reason) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMutableArray<UIViewController *> *stack = [NSMutableArray array];
+        for (UIWindow *window in ActiveWindows()) {
+            if (window.rootViewController) [stack addObject:window.rootViewController];
+        }
+
+        NSUInteger scanned = 0;
+        while (stack.count && scanned < 700) {
+            UIViewController *vc = stack.lastObject;
+            [stack removeLastObject];
+            scanned++;
+
+            NSString *name = NSStringFromClass(vc.class);
+            if ([name isEqualToString:@"AWENewFeedTableViewController"]) {
+                ProbeAndAttemptFeedPaging(vc, reason);
+            } else if ([name isEqualToString:@"AWEFeedCellViewController"]) {
+                ExtendFeedCellControllerVisual(vc, FeedVisualTargetHeight(vc), reason);
+            }
+
+            [stack addObjectsFromArray:vc.childViewControllers];
+            if (vc.presentedViewController) [stack addObject:vc.presentedViewController];
+        }
+    });
+}
+
 #pragma mark - Copy probe alert
 
 static NSString *ReadFullLog(void) {
@@ -1497,7 +1831,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.9 Feed Underlay Probe+Attempt loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 1.0 Feed Paging Probe+Attempt loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -1539,6 +1873,7 @@ static void TikTokLiquidGlassInit(void) {
         gBarAlphaOriginals = [NSMutableDictionary dictionary];
         gBarBackgroundOriginals = [NSMutableDictionary dictionary];
         gFeedLayoutOriginals = [NSMutableDictionary dictionary];
+        gFeedPagingOriginals = [NSMutableDictionary dictionary];
         gSessionMarker = NSUUID.UUID.UUIDString;
         TLGLog(@"SESSION_BEGIN id=%@", gSessionMarker);
 
@@ -1547,6 +1882,7 @@ static void TikTokLiquidGlassInit(void) {
         InstallKeepBarVisibleHooks();
         InstallBarRootBackgroundHooks();
         InstallFeedUnderlayLayoutHook();
+        InstallFeedPagingHooks();
         LogContext();
         DumpClassShape(NSClassFromString(@"TTKIOS26LiquidGlassSwitch"));
         DumpClassShape(NSClassFromString(@"TTKTabBarController"));
@@ -1566,6 +1902,7 @@ static void TikTokLiquidGlassInit(void) {
                         ApplyKeepBarsVisibleToAllWindows();
                         ApplyRootBarClearAndOrder();
                         ProbeAllFeedUnderlay(@"didFinishLaunching");
+                        ProbeAllFeedPaging(@"didFinishLaunching");
                         ProbeAllTabBars(@"didFinishLaunching");
                         LogAllTargetViewChains();
                         SnapshotUI(@"didFinishLaunching");
@@ -1581,6 +1918,7 @@ static void TikTokLiquidGlassInit(void) {
                 ApplyKeepBarsVisibleToAllWindows();
                 ApplyRootBarClearAndOrder();
                 ProbeAllFeedUnderlay(reason);
+                ProbeAllFeedPaging(reason);
                 ProbeAllTabBars(reason);
                 LogAllTargetViewChains();
                 SnapshotUI(reason);
