@@ -13,6 +13,7 @@ static NSMutableSet<NSString *> *gLoggedCalls;
 static NSMutableSet<NSString *> *gDiscovered;
 static NSMutableDictionary<NSString *, NSValue *> *gViewOriginals;
 static NSMutableDictionary<NSString *, NSValue *> *gAlphaOriginals;
+static NSMutableDictionary<NSString *, NSValue *> *gBarAlphaOriginals;
 static NSString *gSessionMarker;
 static BOOL gCopyAlertShown = NO;
 static UIWindow *gProbeOverlayWindow;
@@ -705,6 +706,162 @@ static NSArray<UIWindow *> *ActiveWindows(void) {
 }
 
 
+
+#pragma mark - 0.7 keep functional tab bars visible
+
+static BOOL ShouldKeepBarVisibleClass(Class cls) {
+    if (!cls) return NO;
+    NSString *name = NSStringFromClass(cls);
+    return [name isEqualToString:@"TTKTabBar"] ||
+           [name isEqualToString:@"TTKFakeTabBar"];
+}
+
+static IMP OriginalBarAlphaIMP(id self, SEL sel) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *v = nil;
+        @synchronized(gBarAlphaOriginals) {
+            v = gBarAlphaOriginals[MethodKey(c, sel)];
+        }
+        if (v) return [v pointerValue];
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void KeepBarVisibleSetAlpha(id self, SEL _cmd, CGFloat requestedAlpha) {
+    IMP original = OriginalBarAlphaIMP(self, _cmd);
+    if (original) ((void(*)(id,SEL,CGFloat))original)(self, _cmd, 1.0);
+
+    NSString *onceKey = [NSString stringWithFormat:@"BAR_ALPHA_BLOCK|%@", NSStringFromClass([self class])];
+    BOOL first = NO;
+    @synchronized(gDiscovered) {
+        if (![gDiscovered containsObject:onceKey]) {
+            [gDiscovered addObject:onceKey];
+            first = YES;
+        }
+    }
+    if (first || requestedAlpha < 0.99) {
+        TLGLog(@"BAR_ALPHA_BLOCK class=%@ requested=%.2f forced=1.00 frame=%@",
+               NSStringFromClass([self class]),
+               requestedAlpha,
+               [self isKindOfClass:UIView.class] ? NSStringFromCGRect([(UIView *)self frame]) : @"-");
+    }
+}
+
+static BOOL HookKeepBarVisibleClass(Class cls, NSString *reason) {
+    if (!ShouldKeepBarVisibleClass(cls)) return NO;
+
+    SEL sel = @selector(setAlpha:);
+    Method inherited = class_getInstanceMethod(cls, sel);
+    if (!inherited) return NO;
+
+    NSString *key = MethodKey(cls, sel);
+    @synchronized(gBarAlphaOriginals) {
+        if (gBarAlphaOriginals[key]) return YES;
+    }
+
+    IMP current = class_getMethodImplementation(cls, sel);
+    if (!current || current == (IMP)KeepBarVisibleSetAlpha) return YES;
+
+    const char *types = method_getTypeEncoding(inherited);
+    if (!types) return NO;
+
+    @synchronized(gBarAlphaOriginals) {
+        gBarAlphaOriginals[key] = [NSValue valueWithPointer:current];
+    }
+
+    BOOL added = class_addMethod(cls, sel, (IMP)KeepBarVisibleSetAlpha, types);
+    if (!added) {
+        Method direct = class_getInstanceMethod(cls, sel);
+        if (!direct) return NO;
+        method_setImplementation(direct, (IMP)KeepBarVisibleSetAlpha);
+    }
+
+    TLGLog(@"BAR_ALPHA_HOOK reason=%@ class=%@ originalIMP=%p mode=%@",
+           reason ?: @"-",
+           NSStringFromClass(cls),
+           current,
+           added ? @"add" : @"replace");
+    return YES;
+}
+
+static void InstallKeepBarVisibleHooks(void) {
+    HookKeepBarVisibleClass(NSClassFromString(@"TTKTabBar"), @"startup");
+    HookKeepBarVisibleClass(NSClassFromString(@"TTKFakeTabBar"), @"startup");
+}
+
+static void KeepBarsVisibleInTree(UIView *view, NSUInteger depth) {
+    if (!view || depth > 40) return;
+    if (ShouldKeepBarVisibleClass(view.class)) {
+        if (view.alpha < 0.99) {
+            TLGLog(@"BAR_ALPHA_TREE class=%@ oldAlpha=%.2f frame=%@",
+                   NSStringFromClass(view.class),
+                   view.alpha,
+                   NSStringFromCGRect(view.frame));
+        }
+        view.alpha = 1.0;
+    }
+    for (UIView *child in view.subviews) KeepBarsVisibleInTree(child, depth + 1);
+}
+
+static void ApplyKeepBarsVisibleToAllWindows(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIWindow *window in ActiveWindows()) KeepBarsVisibleInTree(window, 0);
+    });
+}
+
+static NSString *ViewParentChain(UIView *view) {
+    if (!view) return @"-";
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    UIView *cursor = view;
+    NSUInteger depth = 0;
+    while (cursor && depth < 10) {
+        [parts addObject:[NSString stringWithFormat:@"%@:%p(a=%.2f)",
+                          NSStringFromClass(cursor.class),
+                          cursor,
+                          cursor.alpha]];
+        cursor = cursor.superview;
+        depth++;
+    }
+    return [parts componentsJoinedByString:@" <- "];
+}
+
+static BOOL IsChainTargetView(UIView *view) {
+    if (!view) return NO;
+    NSString *name = NSStringFromClass(view.class);
+    return [name isEqualToString:@"TTKFakeTabBar"] ||
+           [name isEqualToString:@"TTKTabBar"] ||
+           [name containsString:@"_UITabBarItemPlatterView"] ||
+           [name containsString:@"ClearGlassView"] ||
+           [name isEqualToString:@"TTKTabBarButton"] ||
+           [name isEqualToString:@"AWETabBarPlusButton"];
+}
+
+static void LogTargetViewChains(UIView *view, NSMutableSet<NSString *> *seen, NSUInteger depth) {
+    if (!view || depth > 40) return;
+    if (IsChainTargetView(view)) {
+        NSString *name = NSStringFromClass(view.class);
+        NSString *key = [NSString stringWithFormat:@"%@|%p", name, view];
+        if (![seen containsObject:key]) {
+            [seen addObject:key];
+            TLGLog(@"UI_CHAIN %@", ViewParentChain(view));
+        }
+    }
+    for (UIView *child in view.subviews) {
+        LogTargetViewChains(child, seen, depth + 1);
+    }
+}
+
+static void LogAllTargetViewChains(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMutableSet<NSString *> *seen = [NSMutableSet set];
+        for (UIWindow *window in ActiveWindows()) {
+            LogTargetViewChains(window, seen, 0);
+        }
+    });
+}
+
 #pragma mark - Copy probe alert
 
 static NSString *ReadFullLog(void) {
@@ -863,7 +1020,7 @@ static void LogContext(void) {
     NSBundle *bundle = NSBundle.mainBundle;
     NSDictionary *info = bundle.infoDictionary ?: @{};
 
-    TLGLog(@"========== TikTokLiquidGlass 0.6 Persistent Reveal+Overlay Copy Probe loaded ==========");
+    TLGLog(@"========== TikTokLiquidGlass 0.7 Keep Bars Visible+Overlay Copy Probe loaded ==========");
     TLGLog(@"logPath=%@", LogPath());
     TLGLog(@"bundle=%@ version=%@ build=%@ executable=%@",
            bundle.bundleIdentifier ?: @"-",
@@ -902,11 +1059,13 @@ static void TikTokLiquidGlassInit(void) {
         gDiscovered = [NSMutableSet set];
         gViewOriginals = [NSMutableDictionary dictionary];
         gAlphaOriginals = [NSMutableDictionary dictionary];
+        gBarAlphaOriginals = [NSMutableDictionary dictionary];
         gSessionMarker = NSUUID.UUID.UUIDString;
         TLGLog(@"SESSION_BEGIN id=%@", gSessionMarker);
 
         InstallImmediateGateHooks();
         InstallImmediateRevealHooks();
+        InstallKeepBarVisibleHooks();
         LogContext();
         DumpClassShape(NSClassFromString(@"TTKIOS26LiquidGlassSwitch"));
         DumpClassShape(NSClassFromString(@"TTKTabBarController"));
@@ -923,7 +1082,9 @@ static void TikTokLiquidGlassInit(void) {
                         TLGLog(@"EVENT UIApplicationDidFinishLaunchingNotification");
                         ScanRuntime(@"didFinishLaunching");
                         ApplyRevealToAllWindows();
+                        ApplyKeepBarsVisibleToAllWindows();
                         ProbeAllTabBars(@"didFinishLaunching");
+                        LogAllTargetViewChains();
                         SnapshotUI(@"didFinishLaunching");
                     }];
 
@@ -934,7 +1095,9 @@ static void TikTokLiquidGlassInit(void) {
                 NSString *reason = [NSString stringWithFormat:@"delay-%.0fs", delay];
                 ScanRuntime(reason);
                 ApplyRevealToAllWindows();
+                ApplyKeepBarsVisibleToAllWindows();
                 ProbeAllTabBars(reason);
+                LogAllTargetViewChains();
                 SnapshotUI(reason);
             });
         }
