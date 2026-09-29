@@ -3,7 +3,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString *const kStudyLogName = @"TikTokLiquidGlassStudy.log";
+static NSString *const kStudyLogName = @"TikTokLiquidGlassHeightStudy.log";
 static dispatch_queue_t gLogQueue;
 static NSMutableSet<NSString *> *gDumpedClasses;
 
@@ -61,7 +61,8 @@ static BOOL InterestingMethodName(NSString *name) {
     NSArray<NSString *> *keys = @[
         @"liquid", @"glass", @"tab", @"bar", @"height", @"row", @"cell",
         @"page", @"paging", @"layout", @"inset", @"safe", @"scroll",
-        @"frame", @"feed", @"container", @"background", @"blur", @"gradient"
+        @"frame", @"feed", @"container", @"background", @"blur", @"gradient",
+        @"mask", @"stable", @"fullscreen", @"fullScreen", @"immersive", @"visible"
     ];
     for (NSString *k in keys) if ([s containsString:k]) return YES;
     return NO;
@@ -133,7 +134,11 @@ static void DumpKnownClasses(NSString *reason) {
         @"AWEFeedSlidingViewController",
         @"AWENewFeedTableViewController",
         @"AWEFeedCellViewController",
-        @"AWERootNavigationController"
+        @"AWERootNavigationController",
+        @"TTKFeedTableViewService",
+        @"TTKFeedDescBottomMaskView",
+        @"AWENewFeedTableView",
+        @"AWEFeedViewCell"
     ];
     for (NSString *n in names) {
         Class cls = NSClassFromString(n);
@@ -305,9 +310,256 @@ static void DumpTabRelationship(UIWindow *w, NSString *reason) {
     }
 }
 
+
+static id FindVCByClassName(UIViewController *vc, NSString *target) {
+    if (!vc || !target.length) return nil;
+    if ([NSStringFromClass(vc.class) isEqualToString:target]) return vc;
+    for (UIViewController *child in vc.childViewControllers) {
+        id found = FindVCByClassName(child, target);
+        if (found) return found;
+    }
+    if (vc.presentedViewController) {
+        id found = FindVCByClassName(vc.presentedViewController, target);
+        if (found) return found;
+    }
+    return nil;
+}
+
+static UIView *FindViewByClassSubstring(UIView *root, NSString *needle) {
+    if (!root || !needle.length) return nil;
+    if ([NSStringFromClass(root.class) containsString:needle]) return root;
+    for (UIView *child in root.subviews) {
+        UIView *found = FindViewByClassSubstring(child, needle);
+        if (found) return found;
+    }
+    return nil;
+}
+
+static void ReadNumericNoArg(id obj, NSString *selectorName, NSString *label, NSString *reason) {
+    if (!obj || !selectorName.length) return;
+    SEL sel = NSSelectorFromString(selectorName);
+    Method m = class_getInstanceMethod([obj class], sel);
+    if (!m || ![obj respondsToSelector:sel]) {
+        StudyLog(@"HEIGHT_GETTER reason=%@ label=%@ object=%@:%p selector=%@ available=NO",
+                 reason ?: @"-", label ?: @"-", NSStringFromClass([obj class]), obj, selectorName);
+        return;
+    }
+
+    char ret[64] = {0};
+    method_getReturnType(m, ret, sizeof(ret));
+    @try {
+        if (ret[0] == 'd') {
+            double v = ((double(*)(id,SEL))objc_msgSend)(obj, sel);
+            StudyLog(@"HEIGHT_GETTER reason=%@ label=%@ object=%@:%p selector=%@ type=%s value=%.6f",
+                     reason ?: @"-", label ?: @"-", NSStringFromClass([obj class]), obj, selectorName, ret, v);
+        } else if (ret[0] == 'f') {
+            float v = ((float(*)(id,SEL))objc_msgSend)(obj, sel);
+            StudyLog(@"HEIGHT_GETTER reason=%@ label=%@ object=%@:%p selector=%@ type=%s value=%.6f",
+                     reason ?: @"-", label ?: @"-", NSStringFromClass([obj class]), obj, selectorName, ret, (double)v);
+        } else if (strchr("qQiIlLsScCB", ret[0])) {
+            long long v = ((long long(*)(id,SEL))objc_msgSend)(obj, sel);
+            StudyLog(@"HEIGHT_GETTER reason=%@ label=%@ object=%@:%p selector=%@ type=%s value=%lld",
+                     reason ?: @"-", label ?: @"-", NSStringFromClass([obj class]), obj, selectorName, ret, v);
+        } else {
+            StudyLog(@"HEIGHT_GETTER reason=%@ label=%@ object=%@:%p selector=%@ type=%s skipped=unsupportedReturnType",
+                     reason ?: @"-", label ?: @"-", NSStringFromClass([obj class]), obj, selectorName, ret);
+        }
+    } @catch (NSException *e) {
+        StudyLog(@"HEIGHT_GETTER_EXCEPTION reason=%@ label=%@ selector=%@ exception=%@",
+                 reason ?: @"-", label ?: @"-", selectorName, e);
+    }
+}
+
+static void DumpRawNumericIvar(id obj, NSString *ivarName, NSString *reason) {
+    if (!obj || !ivarName.length) return;
+    Ivar iv = class_getInstanceVariable([obj class], ivarName.UTF8String);
+    if (!iv) {
+        StudyLog(@"IVAR_VALUE reason=%@ object=%@:%p ivar=%@ available=NO",
+                 reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName);
+        return;
+    }
+
+    const char *type = ivar_getTypeEncoding(iv);
+    ptrdiff_t off = ivar_getOffset(iv);
+    const uint8_t *base = (const uint8_t *)(__bridge const void *)obj;
+    const void *p = base + off;
+
+    if (type && type[0] == 'd') {
+        double v = 0; memcpy(&v, p, sizeof(v));
+        StudyLog(@"IVAR_VALUE reason=%@ object=%@:%p ivar=%@ type=%s offset=%td value=%.6f",
+                 reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName, type, off, v);
+    } else if (type && type[0] == 'f') {
+        float v = 0; memcpy(&v, p, sizeof(v));
+        StudyLog(@"IVAR_VALUE reason=%@ object=%@:%p ivar=%@ type=%s offset=%td value=%.6f",
+                 reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName, type, off, (double)v);
+    } else if (type && strchr("qQiIlLsScCB", type[0])) {
+        long long v = 0;
+        size_t n = MIN((size_t)8, (size_t)ivar_getOffset(iv) >= 0 ? (size_t)8 : (size_t)8);
+        memcpy(&v, p, n);
+        StudyLog(@"IVAR_VALUE reason=%@ object=%@:%p ivar=%@ type=%s offset=%td value=%lld",
+                 reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName, type, off, v);
+    } else {
+        StudyLog(@"IVAR_VALUE reason=%@ object=%@:%p ivar=%@ type=%s offset=%td skipped=nonNumeric",
+                 reason ?: @"-", NSStringFromClass([obj class]), obj, ivarName, type ?: "-", off);
+    }
+}
+
+static NSString *ConstraintItemName(id item) {
+    if (!item) return @"-";
+    if ([item isKindOfClass:UIView.class]) return [NSString stringWithFormat:@"%@:%p", NSStringFromClass([item class]), item];
+    if ([item isKindOfClass:UILayoutGuide.class]) {
+        UILayoutGuide *g = item;
+        return [NSString stringWithFormat:@"%@:%p(owner=%@:%p)", NSStringFromClass([g class]), g,
+                g.owningView ? NSStringFromClass(g.owningView.class) : @"-", g.owningView];
+    }
+    return [NSString stringWithFormat:@"%@:%p", NSStringFromClass([item class]), item];
+}
+
+static BOOL ConstraintTouchesView(NSLayoutConstraint *c, UIView *v) {
+    if (!c || !v) return NO;
+    if (c.firstItem == v || c.secondItem == v) return YES;
+    if ([c.firstItem isKindOfClass:UILayoutGuide.class] && ((UILayoutGuide *)c.firstItem).owningView == v) return YES;
+    if ([c.secondItem isKindOfClass:UILayoutGuide.class] && ((UILayoutGuide *)c.secondItem).owningView == v) return YES;
+    return NO;
+}
+
+static void DumpConstraintsForView(UIView *v, NSString *label, NSString *reason) {
+    if (!v) return;
+    UIWindow *w = v.window;
+    CGRect wf = w ? FrameInWindow(v, w) : CGRectZero;
+    StudyLog(@"GEOMETRY reason=%@ label=%@ class=%@:%p frame=%@ windowFrame=%@ bounds=%@ safe=%@ safeLayoutFrame=%@ intrinsic=%@ translatesMask=%@",
+             reason ?: @"-", label ?: @"-", NSStringFromClass(v.class), v,
+             RectS(v.frame), RectS(wf), RectS(v.bounds), InsetsS(v.safeAreaInsets),
+             RectS(v.safeAreaLayoutGuide.layoutFrame), SizeS(v.intrinsicContentSize),
+             v.translatesAutoresizingMaskIntoConstraints ? @"YES" : @"NO");
+
+    NSMutableArray<UIView *> *chain = [NSMutableArray array];
+    UIView *cur = v;
+    for (NSUInteger d = 0; cur && d < 5; d++, cur = cur.superview) [chain addObject:cur];
+
+    NSUInteger emitted = 0;
+    for (UIView *owner in chain) {
+        for (NSLayoutConstraint *c in owner.constraints) {
+            if (!ConstraintTouchesView(c, v) && owner != v) continue;
+            StudyLog(@"CONSTRAINT reason=%@ label=%@ owner=%@:%p active=%@ priority=%.1f first=%@ attr1=%ld relation=%ld second=%@ attr2=%ld multiplier=%.4f constant=%.4f id=%@",
+                     reason ?: @"-", label ?: @"-", NSStringFromClass(owner.class), owner,
+                     c.active ? @"YES" : @"NO", c.priority,
+                     ConstraintItemName(c.firstItem), (long)c.firstAttribute, (long)c.relation,
+                     ConstraintItemName(c.secondItem), (long)c.secondAttribute,
+                     c.multiplier, c.constant, c.identifier ?: @"-");
+            if (++emitted >= 120) return;
+        }
+    }
+}
+
+static void DumpRuntimeCandidatesOnce(void) {
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return;
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    count = objc_getClassList(classes, count);
+    NSUInteger hits = 0;
+    NSArray<NSString *> *tokens = @[@"FeedTable", @"FeedHeight", @"BottomMask", @"Immersive",
+                                     @"FullScreen", @"Fullscreen", @"TabBar", @"LiquidGlass"];
+    for (int i = 0; i < count && hits < 100; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        BOOL match = NO;
+        for (NSString *t in tokens) {
+            if ([name containsString:t]) { match = YES; break; }
+        }
+        if (!match) continue;
+        StudyLog(@"RUNTIME_CANDIDATE class=%@", name);
+        DumpClassShape(classes[i], @"runtimeCandidate");
+        hits++;
+    }
+    free(classes);
+    StudyLog(@"RUNTIME_CANDIDATE_SUMMARY hits=%lu", (unsigned long)hits);
+}
+
+static void DumpFocusedHeightStudy(UIWindow *w, NSString *reason) {
+    if (!w) return;
+
+    UIViewController *root = w.rootViewController;
+    UIViewController *tabVC = FindVCByClassName(root, @"TTKTabBarController");
+    UIViewController *feedVC = FindVCByClassName(root, @"AWENewFeedTableViewController");
+
+    if (tabVC) ReadNumericNoArg(tabVC, @"tabBarHeight", @"TTKTabBarController.tabBarHeight", reason);
+    if (feedVC) ReadNumericNoArg(feedVC, @"cellHeight", @"AWENewFeedTableViewController.cellHeight", reason);
+
+    UIView *tableView = FindViewByClassSubstring(w, @"AWENewFeedTableView");
+    if (![tableView isKindOfClass:UITableView.class]) {
+        StudyLog(@"HEIGHT_FOCUS reason=%@ table=NOT_FOUND", reason ?: @"-");
+        return;
+    }
+
+    UITableView *table = (UITableView *)tableView;
+    id service = table.delegate;
+    StudyLog(@"HEIGHT_FOCUS reason=%@ table=%@:%p delegate=%@:%p dataSource=%@:%p frame=%@ contentSize=%@ rowHeight=%.3f estimated=%.3f",
+             reason ?: @"-", NSStringFromClass(table.class), table,
+             service ? NSStringFromClass([service class]) : @"-", service,
+             table.dataSource ? NSStringFromClass([table.dataSource class]) : @"-", table.dataSource,
+             RectS(table.frame), SizeS(table.contentSize), table.rowHeight, table.estimatedRowHeight);
+
+    if (service) {
+        ReadNumericNoArg(service, @"cellHeight", @"TTKFeedTableViewService.cellHeight", reason);
+        ReadNumericNoArg(service, @"lastStableCellHeight", @"TTKFeedTableViewService.lastStableCellHeight", reason);
+        DumpRawNumericIvar(service, @"_lastStableCellHeight", reason);
+
+        SEL hsel = NSSelectorFromString(@"tableView:heightForRowAtIndexPath:");
+        Method hm = class_getInstanceMethod([service class], hsel);
+        if (hm && [service respondsToSelector:hsel]) {
+            char ret[32] = {0};
+            method_getReturnType(hm, ret, sizeof(ret));
+            NSArray<NSIndexPath *> *visible = table.indexPathsForVisibleRows ?: @[];
+            for (NSIndexPath *ip in visible) {
+                @try {
+                    double h = 0;
+                    if (ret[0] == 'd') {
+                        h = ((double(*)(id,SEL,id,id))objc_msgSend)(service, hsel, table, ip);
+                    } else if (ret[0] == 'f') {
+                        h = (double)((float(*)(id,SEL,id,id))objc_msgSend)(service, hsel, table, ip);
+                    } else {
+                        StudyLog(@"ROW_HEIGHT reason=%@ index=%@ type=%s skipped=unsupportedReturnType",
+                                 reason ?: @"-", ip, ret);
+                        continue;
+                    }
+                    StudyLog(@"ROW_HEIGHT reason=%@ index=%@ type=%s value=%.6f",
+                             reason ?: @"-", ip, ret, h);
+                } @catch (NSException *e) {
+                    StudyLog(@"ROW_HEIGHT_EXCEPTION reason=%@ index=%@ exception=%@",
+                             reason ?: @"-", ip, e);
+                }
+            }
+        }
+    }
+
+    DumpConstraintsForView(table, @"AWENewFeedTableView", reason);
+
+    UIView *mask = FindViewByClassSubstring(w, @"TTKFeedDescBottomMaskView");
+    if (mask) {
+        DumpConstraintsForView(mask, @"TTKFeedDescBottomMaskView", reason);
+        DumpClassShape(mask.class, @"bottomMaskInstance");
+    } else {
+        StudyLog(@"HEIGHT_FOCUS reason=%@ bottomMask=NOT_FOUND", reason ?: @"-");
+    }
+
+    UIView *bar = FindViewByClassSubstring(w, @"TTKTabBar");
+    if (bar) DumpConstraintsForView(bar, @"TTKTabBar", reason);
+
+    UIView *wrapper = FindViewByClassSubstring(w, @"_UITabBarContainerWrapperView");
+    if (wrapper) DumpConstraintsForView(wrapper, @"UIKitTabBarWrapper", reason);
+
+    CGFloat windowH = CGRectGetHeight(w.bounds);
+    CGFloat tableH = CGRectGetHeight(table.frame);
+    CGFloat barH = bar ? CGRectGetHeight(bar.frame) : 0;
+    StudyLog(@"HEIGHT_EQUATION reason=%@ windowH=%.3f tableH=%.3f delta=%.3f tabBarH=%.3f deltaEqualsBar=%@",
+             reason ?: @"-", windowH, tableH, windowH-tableH, barH,
+             fabs((windowH-tableH)-barH) < 0.5 ? @"YES" : @"NO");
+}
+
+
 static void DumpAppContext(void) {
     NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-    StudyLog(@"========== TikTokLiquidGlass 1.1 Read-Only Study Probe loaded ==========");
+    StudyLog(@"========== TikTokLiquidGlass 1.2 Read-Only Height/Mask Probe loaded ==========");
     StudyLog(@"logPath=%@", StudyLogPath());
     StudyLog(@"bundle=%@ version=%@ build=%@ executable=%@",
              NSBundle.mainBundle.bundleIdentifier ?: @"-",
@@ -332,6 +584,7 @@ static void Snapshot(NSString *reason) {
             if (w.rootViewController) DumpVCTree(w.rootViewController, 0, reason);
             DumpWindowViews(w, reason);
             DumpTabRelationship(w, reason);
+            DumpFocusedHeightStudy(w, reason);
         }
 
         StudyLog(@"SNAPSHOT_END reason=%@", reason ?: @"-");
@@ -347,6 +600,7 @@ static void TikTokLiquidGlassStudyInit(void) {
         [[NSFileManager defaultManager] removeItemAtPath:StudyLogPath() error:nil];
         DumpAppContext();
         DumpKnownClasses(@"constructor");
+        DumpRuntimeCandidatesOnce();
 
         [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidFinishLaunchingNotification
                                                           object:nil
