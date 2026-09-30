@@ -1,0 +1,56 @@
+name: Build Google News Liquid Glass Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - google-news-liquid-glass-probe-0.1
+    paths:
+      - "google-news-liquidglass-probe/**"
+      - ".github/workflows/google-news-liquidglass-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: google-news-liquidglass-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name GoogleNewsLiquidGlassProbe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/GoogleNewsLiquidGlassProbe.dylib
+          shasum -a 256 artifacts/GoogleNewsLiquidGlassProbe.dylib > artifacts/SHA256SUMS.txt
+          file artifacts/GoogleNewsLiquidGlassProbe.dylib
+          strings -a artifacts/GoogleNewsLiquidGlassProbe.dylib | grep -F "GoogleNews Liquid Glass Probe 0.1 loaded"
+          strings -a artifacts/GoogleNewsLiquidGlassProbe.dylib | grep -F "M3CLiquidGlass"
+          strings -a artifacts/GoogleNewsLiquidGlassProbe.dylib | grep -F "ASWPhenotypeFlagsImpl"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoogleNewsLiquidGlassProbe-0.1-arm64
+          path: google-news-liquidglass-probe/artifacts/
+          if-no-files-found: error
+          retention-days: 7
