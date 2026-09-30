@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.9.2
+#pragma mark - XLiquidGlass 1.0
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -80,7 +80,15 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gDummyFeatureHooked = NO;
 static BOOL gNFBSettingsHooked = NO;
+static BOOL gNFBCreditsHooked = NO;
 static BOOL gAppearanceSettingsHooked = NO;
+
+static IMP gOrigNFBNumberOfSections = NULL;
+static IMP gOrigNFBNumberOfRows = NULL;
+static IMP gOrigNFBViewForHeader = NULL;
+static IMP gOrigNFBHeightForHeader = NULL;
+static IMP gOrigNFBCellForRow = NULL;
+static IMP gOrigNFBDidSelectRow = NULL;
 
 static IMP gOrigToastBridgeToasterInit = NULL;
 static IMP gOrigToastBridgeRegisterVC = NULL;
@@ -95,6 +103,11 @@ static char kXLGToastBridgePushedKey;
 static char kXLGToastBridgeScheduledKey;
 static char kXLGToastBridgeStatusHasToastKey;
 static char kXLGToastBridgeCompositionHandledKey;
+
+static BOOL XLGIsSupportedOS(void) {
+    NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
+    return version.majorVersion >= 26;
+}
 
 static BOOL XLGEnabled(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
@@ -196,6 +209,193 @@ static void XLGSyncCompatibilityGate(void) {
     }
 }
 
+static NSString *XLGLanguageCode(void) {
+    NSString *language = NSLocale.preferredLanguages.firstObject ?: @"en";
+    NSString *lower = language.lowercaseString;
+
+    if ([lower hasPrefix:@"zh-hant"] ||
+        [lower hasPrefix:@"zh-tw"] ||
+        [lower hasPrefix:@"zh-hk"] ||
+        [lower hasPrefix:@"zh-mo"]) {
+        return @"zh-Hant";
+    }
+    if ([lower hasPrefix:@"zh"]) return @"zh-Hans";
+
+    NSArray<NSString *> *supported =
+        @[@"ar", @"de", @"en", @"es", @"fr", @"hr", @"id", @"ja", @"ko",
+          @"pl", @"pt", @"ru", @"sv", @"tr", @"uk"];
+    for (NSString *code in supported) {
+        if ([lower hasPrefix:code]) return code;
+    }
+    return @"en";
+}
+
+static NSString *XLGLoc(NSString *key) {
+    static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *tables;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tables = @{
+            @"en": @{
+                @"enable_title": @"Enable Liquid Glass",
+                @"enable_detail": @"Uses the native redesign built into X.",
+                @"labels_title": @"Show Tab Bar labels",
+                @"labels_detail": @"Shows native labels when available.",
+                @"restart_footer": @"Restart X after changing this option to fully apply the interface.",
+                @"restart_alert": @"Restart X to fully apply the change.",
+                @"ok": @"OK"
+            },
+            @"pt": @{
+                @"enable_title": @"Ativar Liquid Glass",
+                @"enable_detail": @"Usa o redesign nativo presente no X.",
+                @"labels_title": @"Mostrar rótulos da Tab Bar",
+                @"labels_detail": @"Exibe rótulos nativos quando disponíveis.",
+                @"restart_footer": @"Reinicie o X após alterar esta opção para aplicar completamente a interface.",
+                @"restart_alert": @"Reinicie o X para aplicar completamente a alteração.",
+                @"ok": @"OK"
+            },
+            @"es": @{
+                @"enable_title": @"Activar Liquid Glass",
+                @"enable_detail": @"Usa el rediseño nativo integrado en X.",
+                @"labels_title": @"Mostrar etiquetas de la barra de pestañas",
+                @"labels_detail": @"Muestra las etiquetas nativas cuando están disponibles.",
+                @"restart_footer": @"Reinicia X después de cambiar esta opción para aplicar completamente la interfaz.",
+                @"restart_alert": @"Reinicia X para aplicar completamente el cambio.",
+                @"ok": @"Aceptar"
+            },
+            @"fr": @{
+                @"enable_title": @"Activer Liquid Glass",
+                @"enable_detail": @"Utilise la nouvelle interface native intégrée à X.",
+                @"labels_title": @"Afficher les libellés de la barre d’onglets",
+                @"labels_detail": @"Affiche les libellés natifs lorsqu’ils sont disponibles.",
+                @"restart_footer": @"Redémarrez X après avoir modifié cette option pour appliquer complètement l’interface.",
+                @"restart_alert": @"Redémarrez X pour appliquer complètement la modification.",
+                @"ok": @"OK"
+            },
+            @"de": @{
+                @"enable_title": @"Liquid Glass aktivieren",
+                @"enable_detail": @"Verwendet das in X integrierte native Redesign.",
+                @"labels_title": @"Tab-Bar-Beschriftungen anzeigen",
+                @"labels_detail": @"Zeigt native Beschriftungen an, wenn verfügbar.",
+                @"restart_footer": @"Starte X nach dem Ändern dieser Option neu, damit die Oberfläche vollständig angewendet wird.",
+                @"restart_alert": @"Starte X neu, um die Änderung vollständig anzuwenden.",
+                @"ok": @"OK"
+            },
+            @"ar": @{
+                @"enable_title": @"تفعيل Liquid Glass",
+                @"enable_detail": @"يستخدم التصميم الأصلي الجديد المدمج في X.",
+                @"labels_title": @"إظهار تسميات شريط علامات التبويب",
+                @"labels_detail": @"يعرض التسميات الأصلية عند توفرها.",
+                @"restart_footer": @"أعد تشغيل X بعد تغيير هذا الخيار لتطبيق الواجهة بالكامل.",
+                @"restart_alert": @"أعد تشغيل X لتطبيق التغيير بالكامل.",
+                @"ok": @"موافق"
+            },
+            @"hr": @{
+                @"enable_title": @"Omogući Liquid Glass",
+                @"enable_detail": @"Koristi izvorni redizajn ugrađen u X.",
+                @"labels_title": @"Prikaži oznake trake kartica",
+                @"labels_detail": @"Prikazuje izvorne oznake kada su dostupne.",
+                @"restart_footer": @"Ponovno pokrenite X nakon promjene ove opcije kako bi se sučelje u potpunosti primijenilo.",
+                @"restart_alert": @"Ponovno pokrenite X kako biste u potpunosti primijenili promjenu.",
+                @"ok": @"U redu"
+            },
+            @"id": @{
+                @"enable_title": @"Aktifkan Liquid Glass",
+                @"enable_detail": @"Menggunakan desain ulang native yang tersedia di X.",
+                @"labels_title": @"Tampilkan label Tab Bar",
+                @"labels_detail": @"Menampilkan label native jika tersedia.",
+                @"restart_footer": @"Mulai ulang X setelah mengubah opsi ini agar antarmuka diterapkan sepenuhnya.",
+                @"restart_alert": @"Mulai ulang X untuk menerapkan perubahan sepenuhnya.",
+                @"ok": @"OK"
+            },
+            @"ja": @{
+                @"enable_title": @"Liquid Glassを有効にする",
+                @"enable_detail": @"Xに組み込まれているネイティブの新デザインを使用します。",
+                @"labels_title": @"タブバーのラベルを表示",
+                @"labels_detail": @"利用可能な場合はネイティブのラベルを表示します。",
+                @"restart_footer": @"このオプションを変更した後、インターフェースを完全に適用するにはXを再起動してください。",
+                @"restart_alert": @"変更を完全に適用するにはXを再起動してください。",
+                @"ok": @"OK"
+            },
+            @"ko": @{
+                @"enable_title": @"Liquid Glass 활성화",
+                @"enable_detail": @"X에 내장된 네이티브 리디자인을 사용합니다.",
+                @"labels_title": @"탭 바 레이블 표시",
+                @"labels_detail": @"사용 가능한 경우 네이티브 레이블을 표시합니다.",
+                @"restart_footer": @"이 옵션을 변경한 후 인터페이스를 완전히 적용하려면 X를 다시 시작하세요.",
+                @"restart_alert": @"변경 사항을 완전히 적용하려면 X를 다시 시작하세요.",
+                @"ok": @"확인"
+            },
+            @"pl": @{
+                @"enable_title": @"Włącz Liquid Glass",
+                @"enable_detail": @"Używa natywnego przeprojektowanego interfejsu wbudowanego w X.",
+                @"labels_title": @"Pokaż etykiety paska kart",
+                @"labels_detail": @"Wyświetla natywne etykiety, gdy są dostępne.",
+                @"restart_footer": @"Uruchom ponownie X po zmianie tej opcji, aby w pełni zastosować interfejs.",
+                @"restart_alert": @"Uruchom ponownie X, aby w pełni zastosować zmianę.",
+                @"ok": @"OK"
+            },
+            @"ru": @{
+                @"enable_title": @"Включить Liquid Glass",
+                @"enable_detail": @"Использует встроенный в X нативный обновлённый интерфейс.",
+                @"labels_title": @"Показывать подписи панели вкладок",
+                @"labels_detail": @"Показывает нативные подписи, когда они доступны.",
+                @"restart_footer": @"Перезапустите X после изменения этой настройки, чтобы интерфейс применился полностью.",
+                @"restart_alert": @"Перезапустите X, чтобы полностью применить изменение.",
+                @"ok": @"OK"
+            },
+            @"sv": @{
+                @"enable_title": @"Aktivera Liquid Glass",
+                @"enable_detail": @"Använder den inbyggda nya designen i X.",
+                @"labels_title": @"Visa etiketter i flikfältet",
+                @"labels_detail": @"Visar inbyggda etiketter när de är tillgängliga.",
+                @"restart_footer": @"Starta om X efter att du ändrat det här alternativet för att tillämpa gränssnittet fullt ut.",
+                @"restart_alert": @"Starta om X för att tillämpa ändringen fullt ut.",
+                @"ok": @"OK"
+            },
+            @"tr": @{
+                @"enable_title": @"Liquid Glass'ı etkinleştir",
+                @"enable_detail": @"X'e yerleşik olan doğal yeni tasarımı kullanır.",
+                @"labels_title": @"Sekme çubuğu etiketlerini göster",
+                @"labels_detail": @"Kullanılabilir olduğunda yerel etiketleri gösterir.",
+                @"restart_footer": @"Arayüzün tamamen uygulanması için bu seçeneği değiştirdikten sonra X'i yeniden başlatın.",
+                @"restart_alert": @"Değişikliği tamamen uygulamak için X'i yeniden başlatın.",
+                @"ok": @"Tamam"
+            },
+            @"uk": @{
+                @"enable_title": @"Увімкнути Liquid Glass",
+                @"enable_detail": @"Використовує вбудований у X нативний оновлений інтерфейс.",
+                @"labels_title": @"Показувати підписи панелі вкладок",
+                @"labels_detail": @"Показує нативні підписи, коли вони доступні.",
+                @"restart_footer": @"Перезапустіть X після зміни цього параметра, щоб інтерфейс застосувався повністю.",
+                @"restart_alert": @"Перезапустіть X, щоб повністю застосувати зміну.",
+                @"ok": @"Гаразд"
+            },
+            @"zh-Hant": @{
+                @"enable_title": @"啟用 Liquid Glass",
+                @"enable_detail": @"使用 X 內建的原生重新設計介面。",
+                @"labels_title": @"顯示分頁列標籤",
+                @"labels_detail": @"在可用時顯示原生標籤。",
+                @"restart_footer": @"變更此選項後請重新啟動 X，以完整套用介面。",
+                @"restart_alert": @"請重新啟動 X，以完整套用變更。",
+                @"ok": @"好"
+            },
+            @"zh-Hans": @{
+                @"enable_title": @"启用 Liquid Glass",
+                @"enable_detail": @"使用 X 内置的原生重新设计界面。",
+                @"labels_title": @"显示标签栏标签",
+                @"labels_detail": @"在可用时显示原生标签。",
+                @"restart_footer": @"更改此选项后请重新启动 X，以完整应用界面。",
+                @"restart_alert": @"请重新启动 X，以完整应用更改。",
+                @"ok": @"好"
+            }
+        };
+    });
+
+    NSDictionary *english = tables[@"en"];
+    NSDictionary *table = tables[XLGLanguageCode()] ?: english;
+    return table[key] ?: english[key] ?: key;
+}
+
 @interface XLiquidGlassSettingsViewController : UITableViewController
 @end
 
@@ -226,7 +426,7 @@ static void XLGSyncCompatibilityGate(void) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return @"Reinicie o X após alterar esta opção para aplicar completamente a interface.";
+    return XLGLoc(@"restart_footer");
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -247,15 +447,15 @@ static void XLGSyncCompatibilityGate(void) {
     UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
 
     if (indexPath.row == 0) {
-        cell.textLabel.text = @"Ativar Liquid Glass";
-        cell.detailTextLabel.text = @"Usa o redesign nativo presente no X.";
+        cell.textLabel.text = XLGLoc(@"enable_title");
+        cell.detailTextLabel.text = XLGLoc(@"enable_detail");
         toggle.on = XLGEnabled();
         [toggle addTarget:self
                    action:@selector(xlgToggleChanged:)
          forControlEvents:UIControlEventValueChanged];
     } else {
-        cell.textLabel.text = @"Mostrar rótulos da Tab Bar";
-        cell.detailTextLabel.text = @"Exibe rótulos nativos quando disponíveis.";
+        cell.textLabel.text = XLGLoc(@"labels_title");
+        cell.detailTextLabel.text = XLGLoc(@"labels_detail");
         toggle.on = XLGTabLabelsEnabled();
         [toggle addTarget:self
                    action:@selector(xlgTabLabelsToggleChanged:)
@@ -272,10 +472,10 @@ static void XLGSyncCompatibilityGate(void) {
 
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:@"Liquid Glass"
-                                            message:@"Reinicie o X para aplicar completamente a alteração."
+                                            message:XLGLoc(@"restart_alert")
                                      preferredStyle:UIAlertControllerStyleAlert];
 
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+    [alert addAction:[UIAlertAction actionWithTitle:XLGLoc(@"ok")
                                              style:UIAlertActionStyleDefault
                                            handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -420,6 +620,185 @@ static void XLGAppearanceViewWillAppear(id self, SEL _cmd, BOOL animated) {
     XLGReloadControllerTable(self);
 }
 
+static NSInteger XLGNFBOriginalSectionCount(id controller, UITableView *tableView) {
+    if (!gOrigNFBNumberOfSections) return 6;
+    return ((NSInteger (*)(id, SEL, UITableView *))gOrigNFBNumberOfSections)(
+        controller, @selector(numberOfSectionsInTableView:), tableView);
+}
+
+static NSInteger XLGNFBLiquidSection(id controller, UITableView *tableView) {
+    return MAX((NSInteger)0, XLGNFBOriginalSectionCount(controller, tableView) - 1);
+}
+
+static NSInteger XLGNFBIPASourceSection(id controller, UITableView *tableView) {
+    return XLGNFBLiquidSection(controller, tableView) + 1;
+}
+
+static NSInteger XLGNFBMapSectionToOriginal(id controller,
+                                            UITableView *tableView,
+                                            NSInteger section) {
+    NSInteger ipaSection = XLGNFBIPASourceSection(controller, tableView);
+    if (section > ipaSection) return section - 2;
+    return section;
+}
+
+static NSArray *XLGLiquidGlassCreditRows(void) {
+    return @[@{
+        @"title": @"Lucas25Pedrosa",
+        @"username": @"Lucas25Pedrosa",
+        @"avatarURL": @"https://github.com/Lucas25Pedrosa.png"
+    }];
+}
+
+static NSArray *XLGIPASourceCreditRows(void) {
+    return @[@{
+        @"title": @"IPA Vault",
+        @"username": @"ipavault",
+        @"avatarURL": @"https://github.com/927tx.png"
+    }];
+}
+
+static void XLGOpenExternalURL(NSString *urlString) {
+    NSURL *url = [NSURL URLWithString:urlString ?: @""];
+    if (!url) return;
+    UIApplication *application = UIApplication.sharedApplication;
+    if (![application canOpenURL:url]) return;
+    [application openURL:url options:@{} completionHandler:nil];
+}
+
+static NSInteger XLGNFBNumberOfSections(id self, SEL _cmd, UITableView *tableView) {
+    (void)_cmd;
+    NSInteger original = XLGNFBOriginalSectionCount(self, tableView);
+    return original > 0 ? original + 2 : 8;
+}
+
+static NSInteger XLGNFBNumberOfRows(id self,
+                                    SEL _cmd,
+                                    UITableView *tableView,
+                                    NSInteger section) {
+    NSInteger liquidSection = XLGNFBLiquidSection(self, tableView);
+    NSInteger ipaSection = XLGNFBIPASourceSection(self, tableView);
+    if (section == liquidSection || section == ipaSection) return 1;
+
+    NSInteger mapped = XLGNFBMapSectionToOriginal(self, tableView, section);
+    if (!gOrigNFBNumberOfRows) return 0;
+    return ((NSInteger (*)(id, SEL, UITableView *, NSInteger))gOrigNFBNumberOfRows)(
+        self, _cmd, tableView, mapped);
+}
+
+static UIView *XLGNFBViewForHeader(id self,
+                                   SEL _cmd,
+                                   UITableView *tableView,
+                                   NSInteger section) {
+    NSInteger liquidSection = XLGNFBLiquidSection(self, tableView);
+    NSInteger ipaSection = XLGNFBIPASourceSection(self, tableView);
+
+    if (section == liquidSection || section == ipaSection) {
+        NSString *title = section == liquidSection ? @"LiquidGlass" : @"IPA Source";
+        SEL headerSEL = NSSelectorFromString(@"headerViewWithTitle:");
+        if ([self respondsToSelector:headerSEL]) {
+            return ((id (*)(id, SEL, id))objc_msgSend)(self, headerSEL, title);
+        }
+        return nil;
+    }
+
+    NSInteger mapped = XLGNFBMapSectionToOriginal(self, tableView, section);
+    if (!gOrigNFBViewForHeader) return nil;
+    return ((id (*)(id, SEL, UITableView *, NSInteger))gOrigNFBViewForHeader)(
+        self, _cmd, tableView, mapped);
+}
+
+static CGFloat XLGNFBHeightForHeader(id self,
+                                     SEL _cmd,
+                                     UITableView *tableView,
+                                     NSInteger section) {
+    NSInteger liquidSection = XLGNFBLiquidSection(self, tableView);
+    NSInteger ipaSection = XLGNFBIPASourceSection(self, tableView);
+    if (section == liquidSection || section == ipaSection) {
+        return UITableViewAutomaticDimension;
+    }
+
+    NSInteger mapped = XLGNFBMapSectionToOriginal(self, tableView, section);
+    if (!gOrigNFBHeightForHeader) return 0;
+    return ((CGFloat (*)(id, SEL, UITableView *, NSInteger))gOrigNFBHeightForHeader)(
+        self, _cmd, tableView, mapped);
+}
+
+static UITableViewCell *XLGNFBCellForRow(id self,
+                                         SEL _cmd,
+                                         UITableView *tableView,
+                                         NSIndexPath *indexPath) {
+    NSInteger liquidSection = XLGNFBLiquidSection(self, tableView);
+    NSInteger ipaSection = XLGNFBIPASourceSection(self, tableView);
+
+    if (indexPath.section == liquidSection || indexPath.section == ipaSection) {
+        NSArray *rows =
+            indexPath.section == liquidSection
+                ? XLGLiquidGlassCreditRows()
+                : XLGIPASourceCreditRows();
+
+        SEL cellSEL =
+            NSSelectorFromString(@"developerCellForTableView:atIndexPath:fromArray:");
+        if ([self respondsToSelector:cellSEL]) {
+            NSIndexPath *creditIndex =
+                [NSIndexPath indexPathForRow:0 inSection:indexPath.section];
+            return ((id (*)(id, SEL, id, id, id))objc_msgSend)(
+                self, cellSEL, tableView, creditIndex, rows);
+        }
+
+        UITableViewCell *cell =
+            [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
+                                   reuseIdentifier:nil];
+        NSDictionary *credit = rows.firstObject;
+        cell.textLabel.text = credit[@"title"];
+        cell.detailTextLabel.text =
+            [NSString stringWithFormat:@"@%@", credit[@"username"]];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        return cell;
+    }
+
+    NSInteger mapped = XLGNFBMapSectionToOriginal(self, tableView, indexPath.section);
+    NSIndexPath *mappedPath =
+        mapped == indexPath.section
+            ? indexPath
+            : [NSIndexPath indexPathForRow:indexPath.row inSection:mapped];
+
+    if (!gOrigNFBCellForRow) return nil;
+    return ((id (*)(id, SEL, UITableView *, NSIndexPath *))gOrigNFBCellForRow)(
+        self, _cmd, tableView, mappedPath);
+}
+
+static void XLGNFBDidSelectRow(id self,
+                               SEL _cmd,
+                               UITableView *tableView,
+                               NSIndexPath *indexPath) {
+    NSInteger liquidSection = XLGNFBLiquidSection(self, tableView);
+    NSInteger ipaSection = XLGNFBIPASourceSection(self, tableView);
+
+    if (indexPath.section == liquidSection) {
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        XLGOpenExternalURL(@"https://github.com/Lucas25Pedrosa");
+        return;
+    }
+
+    if (indexPath.section == ipaSection) {
+        [tableView deselectRowAtIndexPath:indexPath animated:YES];
+        XLGOpenExternalURL(@"https://t.me/ipavault");
+        return;
+    }
+
+    NSInteger mapped = XLGNFBMapSectionToOriginal(self, tableView, indexPath.section);
+    NSIndexPath *mappedPath =
+        mapped == indexPath.section
+            ? indexPath
+            : [NSIndexPath indexPathForRow:indexPath.row inSection:mapped];
+
+    if (gOrigNFBDidSelectRow) {
+        ((void (*)(id, SEL, UITableView *, NSIndexPath *))gOrigNFBDidSelectRow)(
+            self, _cmd, tableView, mappedPath);
+    }
+}
+
 static void XLGInstallNFBSettingsIntegration(void) {
     Class rootClass=NSClassFromString(@"ModernSettingsViewController");
     if (rootClass && !gNFBSettingsHooked) {
@@ -438,6 +817,54 @@ static void XLGInstallNFBSettingsIntegration(void) {
                           &gOrigNFBViewWillAppear);
 
         gNFBSettingsHooked=setupHooked || appearHooked;
+    }
+
+    if (rootClass && !gNFBCreditsHooked) {
+        BOOL sectionsHooked =
+            XLGHookMethod(rootClass,
+                          @selector(numberOfSectionsInTableView:),
+                          NO,
+                          (IMP)XLGNFBNumberOfSections,
+                          &gOrigNFBNumberOfSections);
+
+        BOOL rowsHooked =
+            XLGHookMethod(rootClass,
+                          @selector(tableView:numberOfRowsInSection:),
+                          NO,
+                          (IMP)XLGNFBNumberOfRows,
+                          &gOrigNFBNumberOfRows);
+
+        BOOL headerHooked =
+            XLGHookMethod(rootClass,
+                          @selector(tableView:viewForHeaderInSection:),
+                          NO,
+                          (IMP)XLGNFBViewForHeader,
+                          &gOrigNFBViewForHeader);
+
+        BOOL headerHeightHooked =
+            XLGHookMethod(rootClass,
+                          @selector(tableView:heightForHeaderInSection:),
+                          NO,
+                          (IMP)XLGNFBHeightForHeader,
+                          &gOrigNFBHeightForHeader);
+
+        BOOL cellHooked =
+            XLGHookMethod(rootClass,
+                          @selector(tableView:cellForRowAtIndexPath:),
+                          NO,
+                          (IMP)XLGNFBCellForRow,
+                          &gOrigNFBCellForRow);
+
+        BOOL selectHooked =
+            XLGHookMethod(rootClass,
+                          @selector(tableView:didSelectRowAtIndexPath:),
+                          NO,
+                          (IMP)XLGNFBDidSelectRow,
+                          &gOrigNFBDidSelectRow);
+
+        gNFBCreditsHooked =
+            sectionsHooked && rowsHooked && headerHooked &&
+            headerHeightHooked && cellHooked && selectHooked;
     }
 
     Class appearanceClass=NSClassFromString(@"AppearanceSettingsViewController");
@@ -619,7 +1046,7 @@ static UINavigationController *XLGNavigationControllerForPresenter(
 }
 
 
-#pragma mark - XLiquidGlass 1.9.2 native toast bridge
+#pragma mark - XLiquidGlass 1.0 native toast bridge
 
 static void XLGToastBridgeLog(NSString *format, ...) {
     // Stable build: keep call sites for low-risk diagnostics but do not
@@ -4173,7 +4600,7 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         rawXChat == 0 &&
         rawTotal == 0;
 
-    // 1.9.1 Beta 2: mirror the native T1TabView badge signal during the
+    // Native badge timing fix: mirror the T1TabView badge signal during the
     // short interval before AccountBadgesDidChange catches up. The native
     // classic tab receives the same visible count immediately, even while
     // Liquid Glass is rendering XNavigation.TabBarItemView.
@@ -4277,7 +4704,7 @@ static BOOL XLGNormalizeBadgeMapForKnownNtabMisroute(
         return YES;
     }
 
-    // 1.9.1 Beta 4: the timing probe proved that the authoritative
+    // Native badge authority fix: the authoritative
     // TFNTwitterAccount callback can be followed 10-20 ms later by two broken
     // aggregate maps: first ntab->dm, then all zero. During that tiny window,
     // prefer the exact positive notification-only remote tuple even if the
@@ -6532,6 +6959,8 @@ static void XLGInstallGuideRouterHook(void) {
 }
 
 static void XLGInstallHooks(void) {
+    if (!XLGIsSupportedOS()) return;
+
     Class cls = Nil;
 
     if (!gDebugSettingsHooked) {
@@ -6604,9 +7033,8 @@ static void XLGInstallHooks(void) {
     }
 
     XLGSyncCompatibilityGate();
-    // Beta 21: do not install our extra UIScreenEdgePanGestureRecognizer.
-    // X 12.28.1 already owns a UIPanGestureRecognizer on T1Window; Beta 20
-    // proved both were recognizing the same left-edge swipe simultaneously.
+    // Keep the X-owned sidebar gesture as the single gesture source.
+    // Installing a second edge recognizer can cause simultaneous recognition.
     XLGInstallGlobalTabBarFixes();
     XLGInstallNFBSettingsIntegration();
     XLGInstallOwnNotificationRouter();
@@ -6631,7 +7059,16 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 1.9.2 stable loaded: native sent-post/reply toast bridge + 1.9.1 feature set");
+        NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
+        if (!XLGIsSupportedOS()) {
+            NSLog(@"[XLiquidGlass] 1.0 Beta 1 inactive on iOS %ld.%ld.%ld; iOS 26+ required",
+                  (long)version.majorVersion,
+                  (long)version.minorVersion,
+                  (long)version.patchVersion);
+            return;
+        }
+
+        NSLog(@"[XLiquidGlass] 1.0 Beta 1 loaded: iOS 26+ + NFB localization + credits integration");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
