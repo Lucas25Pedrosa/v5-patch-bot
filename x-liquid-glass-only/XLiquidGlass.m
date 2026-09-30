@@ -7061,14 +7061,14 @@ static void XLiquidGlassInit(void) {
     @autoreleasepool {
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         if (!XLGIsSupportedOS()) {
-            NSLog(@"[XLiquidGlass] 1.0 Beta 1 inactive on iOS %ld.%ld.%ld; iOS 26+ required",
+            NSLog(@"[XLiquidGlass] 1.0 stable inactive on iOS %ld.%ld.%ld; iOS 26+ required",
                   (long)version.majorVersion,
                   (long)version.minorVersion,
                   (long)version.patchVersion);
             return;
         }
 
-        NSLog(@"[XLiquidGlass] 1.0 Beta 1 loaded: iOS 26+ + NFB localization + credits integration");
+        NSLog(@"[XLiquidGlass] 1.0 stable loaded: iOS 26+ + NFB localization + credits integration");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
