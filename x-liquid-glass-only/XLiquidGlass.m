@@ -6529,6 +6529,63 @@ static NSUInteger XLGRemoveSearchBlurViews(
     return removed;
 }
 
+static BOOL XLGColorIsVisibleBackground(
+    UIColor *color,
+    UITraitCollection *traits) {
+
+    if (!color) return NO;
+
+    UIColor *resolved=color;
+    if (@available(iOS 13.0,*)) {
+        resolved=[color resolvedColorWithTraitCollection:
+                    traits ?: UITraitCollection.currentTraitCollection];
+    }
+
+    CGColorRef cgColor=resolved.CGColor;
+    if (!cgColor) return NO;
+    return CGColorGetAlpha(cgColor)>0.01;
+}
+
+static UIColor *XLGSearchBackingColorForBlur(
+    UIView *candidate,
+    UIView *root) {
+
+    // Prefer the real X results surface so Light / Dim / Lights Out keep
+    // their own native color rather than forcing black/white ourselves.
+    UIView *cursor=candidate.superview;
+    while (cursor) {
+        NSString *className=NSStringFromClass(cursor.class) ?: @"";
+        BOOL resultsSurface=
+            [cursor isKindOfClass:UITableView.class] ||
+            [cursor isKindOfClass:UICollectionView.class] ||
+            [className isEqualToString:@"TFNTableView"];
+
+        if (resultsSurface &&
+            XLGColorIsVisibleBackground(
+                cursor.backgroundColor,
+                candidate.traitCollection)) {
+            return cursor.backgroundColor;
+        }
+        cursor=cursor.superview;
+    }
+
+    if (XLGColorIsVisibleBackground(
+            root.backgroundColor,
+            candidate.traitCollection)) {
+        return root.backgroundColor;
+    }
+
+    UIWindow *window=candidate.window ?: root.window;
+    if (window &&
+        XLGColorIsVisibleBackground(
+            window.backgroundColor,
+            candidate.traitCollection)) {
+        return window.backgroundColor;
+    }
+
+    return UIColor.systemBackgroundColor;
+}
+
 static NSUInteger XLGNeutralizeSearchXDSBlurViews(
     UIView *root,
     NSString *reason) {
@@ -6562,13 +6619,17 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
 
         if (!topBand) continue;
 
-        // X 12.31 moved Search's visible top edge treatment into XDSBlur.
-        // The legacy UIVisualEffectView child is already nilled by the
-        // persistent Search guard, so neutralize only this oversized
-        // top XDSBlur container. Keep the bottom 82pt edge untouched.
-        candidate.hidden=YES;
-        candidate.alpha=0.0;
-        candidate.backgroundColor=UIColor.clearColor;
+        // Beta 1 proved this is the X 12.31 Search regression source, but
+        // hiding XDSBlur also removed its backing surface. Beta 2 keeps the
+        // container alive, removes only the visual effect, and fills it with
+        // the native results-surface color. The bottom 82pt edge stays intact.
+        UIColor *backingColor=
+            XLGSearchBackingColorForBlur(candidate,root);
+
+        candidate.hidden=NO;
+        candidate.alpha=1.0;
+        candidate.backgroundColor=
+            backingColor ?: UIColor.systemBackgroundColor;
 
         for (UIView *subview in
              XLGSubviewsMatchingClassName(
@@ -6586,9 +6647,10 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
         neutralized++;
 
         XLGDiagLog(
-            @"SEARCH_XDSBLUR neutralized=%p frame=%@ treatment=%p reason=%@",
+            @"SEARCH_XDSBLUR solidified=%p frame=%@ color=%@ treatment=%p reason=%@",
             candidate,
             NSStringFromCGRect(frame),
+            candidate.backgroundColor,
             treatment,
             reason ?: @"-");
     }
@@ -6614,7 +6676,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.1 Beta 1 Search XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.1 Beta 2 Search XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7449,7 +7511,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.1 Beta 1 loaded: X 12.31 Search XDSBlur regression fix + 2.0 Stable feature set");
+        NSLog(@"[XLiquidGlass] 2.0.1 Beta 2 loaded: X 12.31 Search XDSBlur solid-background fix + 2.0 Stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
