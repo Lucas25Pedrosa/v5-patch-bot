@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Blur Probe 12.31
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-blur-probe-1231/**"
+      - ".github/workflows/x-liquid-glass-blur-probe-1231.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-blur-probe-1231
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Blur Probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassBlurProbe.dylib ! -path '*/XLiquidGlassBlurProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassBlurProbe.dylib
+          file artifacts/XLiquidGlassBlurProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassBlurProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload Blur Probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassBlurProbe-0.1.0-X12.31-arm64
+          path: x-liquid-glass-blur-probe-1231/artifacts/
+          if-no-files-found: error
