@@ -54,9 +54,10 @@ jobs:
           mkdir -p build-output/xlg-blur-probe-1231
           cp x-liquid-glass-blur-probe-1231/artifacts/XLiquidGlassBlurProbe.dylib build-output/xlg-blur-probe-1231/XLiquidGlassBlurProbe.dylib
           cp x-liquid-glass-blur-probe-1231/artifacts/SHA256SUMS.txt build-output/xlg-blur-probe-1231/SHA256SUMS.txt
+          printf '%s\n' "$GITHUB_RUN_ID" > build-output/xlg-blur-probe-1231/RUN_ID.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add build-output/xlg-blur-probe-1231/XLiquidGlassBlurProbe.dylib build-output/xlg-blur-probe-1231/SHA256SUMS.txt
+          git add build-output/xlg-blur-probe-1231/XLiquidGlassBlurProbe.dylib build-output/xlg-blur-probe-1231/SHA256SUMS.txt build-output/xlg-blur-probe-1231/RUN_ID.txt
           if ! git diff --cached --quiet; then
             git commit -m "Build XLiquidGlassBlurProbe 0.1.0 for X 12.31"
             git push
