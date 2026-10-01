@@ -6529,6 +6529,73 @@ static NSUInteger XLGRemoveSearchBlurViews(
     return removed;
 }
 
+static NSUInteger XLGNeutralizeSearchXDSBlurViews(
+    UIView *root,
+    NSString *reason) {
+
+    if (!XLGEnabled() || !root || !root.window) return 0;
+
+    NSUInteger neutralized=0;
+
+    for (UIView *candidate in
+         XLGSubviewsMatchingClassName(root, @"XDSBlur")) {
+
+        if (!candidate.window) continue;
+
+        UIView *treatment=
+            XLGAncestorNamed(
+                candidate,
+                @"XDesignSystem.ScrollEdgeTreatment");
+        if (!treatment) continue;
+
+        CGRect frame=
+            [candidate convertRect:candidate.bounds
+                            toView:root];
+
+        if (!CGRectIntersectsRect(frame, root.bounds)) continue;
+
+        CGFloat height=CGRectGetHeight(frame);
+        BOOL topBand=
+            CGRectGetMaxY(frame)>0.0 &&
+            CGRectGetMinY(frame)<360.0 &&
+            height>=120.0;
+
+        if (!topBand) continue;
+
+        // X 12.31 moved Search's visible top edge treatment into XDSBlur.
+        // The legacy UIVisualEffectView child is already nilled by the
+        // persistent Search guard, so neutralize only this oversized
+        // top XDSBlur container. Keep the bottom 82pt edge untouched.
+        candidate.hidden=YES;
+        candidate.alpha=0.0;
+        candidate.backgroundColor=UIColor.clearColor;
+
+        for (UIView *subview in
+             XLGSubviewsMatchingClassName(
+                 candidate,
+                 @"UIVisualEffectView")) {
+
+            if (![subview isKindOfClass:UIVisualEffectView.class]) continue;
+            UIVisualEffectView *effectView=(UIVisualEffectView *)subview;
+            if (effectView.effect) {
+                effectView.effect=nil;
+            }
+            effectView.backgroundColor=UIColor.clearColor;
+        }
+
+        neutralized++;
+
+        XLGDiagLog(
+            @"SEARCH_XDSBLUR neutralized=%p frame=%@ treatment=%p reason=%@",
+            candidate,
+            NSStringFromCGRect(frame),
+            treatment,
+            reason ?: @"-");
+    }
+
+    return neutralized;
+}
+
 static UIViewController *XLGSearchControllerForView(UIView *view) {
     UIResponder *responder=view;
     NSUInteger depth=0;
@@ -6547,7 +6614,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0 Beta 5 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.1 Beta 1 Search XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -6927,7 +6994,12 @@ static void XLGApplySearchBlurRemoval(
     NSUInteger removed=
         XLGRemoveSearchBlurViews(root,root,0);
 
-    if (removed>0 &&
+    NSUInteger xdsNeutralized=
+        XLGNeutralizeSearchXDSBlurViews(
+            root,
+            reason);
+
+    if ((removed>0 || xdsNeutralized>0) &&
         gXLGNavigationProbeActive &&
         ![objc_getAssociatedObject(
             controller,&kXLGSearchBlurLoggedKey) boolValue]) {
@@ -6939,8 +7011,9 @@ static void XLGApplySearchBlurRemoval(
             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
         XLGNavigationProbeLog(
-            @"SEARCH_BLUR removed=%lu controller=%@ ptr=%p reason=%@",
+            @"SEARCH_BLUR removed=%lu xdsNeutralized=%lu controller=%@ ptr=%p reason=%@",
             (unsigned long)removed,
+            (unsigned long)xdsNeutralized,
             NSStringFromClass(controller.class),
             controller,
             reason ?: @"-");
@@ -7089,6 +7162,18 @@ static void XLGApplyScrollEdgeTreatmentBlurRemoval(
     if (![NSStringFromClass(treatment.class)
             isEqualToString:@"XDesignSystem.ScrollEdgeTreatment"]) {
         return;
+    }
+
+    // X 12.31 Search: the visible top blur now lives in the XDSBlur
+    // container itself. Reapply the targeted Search-only neutralization
+    // whenever ScrollEdgeTreatment lays out, because the results pager can
+    // recreate/reposition these views after the Search container's layout.
+    UIViewController *searchController=
+        XLGSearchControllerForView(treatment);
+    if (searchController && searchController.isViewLoaded) {
+        XLGNeutralizeSearchXDSBlurViews(
+            searchController.view,
+            reason);
     }
 
     NSUInteger effectsRemoved=0;
@@ -7364,7 +7449,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0 stable loaded: persistent Search and ScrollEdge blur fixes + validated feature set");
+        NSLog(@"[XLiquidGlass] 2.0.1 Beta 1 loaded: X 12.31 Search XDSBlur regression fix + 2.0 Stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
