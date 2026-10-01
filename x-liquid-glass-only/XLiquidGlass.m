@@ -8,6 +8,8 @@
 
 #pragma mark - XLiquidGlass 1.9.2
 
+// XLiquidGlass 2.0.1 Stable: validated on X 12.31 build 25.
+
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
 static BOOL XLGApplyStartupHoldIfNeeded(
