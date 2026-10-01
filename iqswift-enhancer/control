@@ -1,0 +1,9 @@
+Package: com.lucas.iqswiftenhancer
+Name: iQSwift Enhancer
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Oculta o iQLogo do iQTele no Swiftgram e abre IQTSettingsViewController por long press na linha Swiftgram/Support.
+Maintainer: Lucas
+Author: Lucas
+Section: Tweaks
+Depends: firmware (>= 14.0)
