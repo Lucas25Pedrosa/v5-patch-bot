@@ -1,0 +1,64 @@
+name: Build iQSwift Enhancer
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqswift-enhancer/**"
+      - ".github/workflows/iqswift-enhancer.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqswift-enhancer
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQSwiftEnhancer.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQSwiftEnhancer.dylib
+          shasum -a 256 artifacts/iQSwiftEnhancer.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQSwiftEnhancer-1.0-arm64
+          path: iqswift-enhancer/artifacts/
+          if-no-files-found: error
+
+      - name: Publish build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-output/iqswift
+          cp iqswift-enhancer/artifacts/iQSwiftEnhancer.dylib build-output/iqswift/iQSwiftEnhancer.dylib
+          cp iqswift-enhancer/artifacts/SHA256SUMS.txt build-output/iqswift/SHA256SUMS.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-output/iqswift/iQSwiftEnhancer.dylib build-output/iqswift/SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Build iQSwiftEnhancer 1.0 dylib"
+            git push
+          fi
