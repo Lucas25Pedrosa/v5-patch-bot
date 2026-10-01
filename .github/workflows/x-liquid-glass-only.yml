@@ -8,7 +8,7 @@ name: Build XLiquidGlass
       - ".github/workflows/x-liquid-glass-only.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -43,6 +43,22 @@ jobs:
       - name: Upload standalone dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass-2.0-Stable-X12.28.1-arm64
+          name: XLiquidGlass-2.0.1-Beta1-X12.31-arm64
           path: x-liquid-glass-only/artifacts/
           if-no-files-found: error
+
+      - name: Publish beta build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-output/xlg-2.0.1-beta1-x12.31
+          cp x-liquid-glass-only/artifacts/XLiquidGlass.dylib build-output/xlg-2.0.1-beta1-x12.31/XLiquidGlass.dylib
+          cp x-liquid-glass-only/artifacts/SHA256SUMS.txt build-output/xlg-2.0.1-beta1-x12.31/SHA256SUMS.txt
+          printf '%s\n' "$GITHUB_RUN_ID" > build-output/xlg-2.0.1-beta1-x12.31/RUN_ID.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-output/xlg-2.0.1-beta1-x12.31/XLiquidGlass.dylib build-output/xlg-2.0.1-beta1-x12.31/SHA256SUMS.txt build-output/xlg-2.0.1-beta1-x12.31/RUN_ID.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Build XLiquidGlass 2.0.1 Beta 1 for X 12.31"
+            git push
+          fi
