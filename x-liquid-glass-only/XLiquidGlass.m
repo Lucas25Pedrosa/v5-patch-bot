@@ -6663,19 +6663,69 @@ static UIView *XLGSearchXDSExternalBackingView(
     return backing;
 }
 
-static BOOL XLGSearchHasVisibleResultsSegmentedTabBar(
+static BOOL XLGViewIsActuallyVisibleInWindow(
+    UIView *view) {
+
+    if (!view || !view.window ||
+        view.hidden || view.alpha<=0.01) {
+        return NO;
+    }
+
+    UIWindow *window=view.window;
+    CGRect visibleRect=
+        [view convertRect:view.bounds
+                   toView:window];
+
+    visibleRect=
+        CGRectIntersection(
+            visibleRect,
+            window.bounds);
+
+    if (CGRectIsNull(visibleRect) ||
+        CGRectIsEmpty(visibleRect)) {
+        return NO;
+    }
+
+    UIView *ancestor=view.superview;
+    while (ancestor && ancestor!=window) {
+        if (ancestor.hidden || ancestor.alpha<=0.01) {
+            return NO;
+        }
+
+        if (ancestor.clipsToBounds) {
+            CGRect ancestorRect=
+                [ancestor convertRect:ancestor.bounds
+                               toView:window];
+
+            visibleRect=
+                CGRectIntersection(
+                    visibleRect,
+                    ancestorRect);
+
+            if (CGRectIsNull(visibleRect) ||
+                CGRectIsEmpty(visibleRect)) {
+                return NO;
+            }
+        }
+
+        ancestor=ancestor.superview;
+    }
+
+    return CGRectGetWidth(visibleRect)>=20.0 &&
+           CGRectGetHeight(visibleRect)>=20.0;
+}
+
+static UIView *XLGSearchVisibleResultsSegmentedTabBar(
     UIView *root) {
 
-    if (!root || !root.window) return NO;
+    if (!root || !root.window) return nil;
 
     for (UIView *tabBar in
          XLGSubviewsMatchingClassName(
              root,
              @"TFNUISwift.LegacySegmentedTabBarView")) {
 
-        if (!tabBar.window ||
-            tabBar.hidden ||
-            tabBar.alpha<=0.01) {
+        if (!XLGViewIsActuallyVisibleInWindow(tabBar)) {
             continue;
         }
 
@@ -6683,12 +6733,13 @@ static BOOL XLGSearchHasVisibleResultsSegmentedTabBar(
             [tabBar convertRect:tabBar.bounds
                          toView:root];
 
-        if (CGRectIntersectsRect(frame,root.bounds)) {
-            return YES;
+        if (CGRectIntersectsRect(frame,root.bounds) &&
+            CGRectGetHeight(frame)>=20.0) {
+            return tabBar;
         }
     }
 
-    return NO;
+    return nil;
 }
 
 static NSUInteger XLGNeutralizeSearchXDSBlurViews(
@@ -6698,8 +6749,9 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
     if (!XLGEnabled() || !root || !root.window) return 0;
 
     NSUInteger neutralized=0;
-    BOOL resultsMode=
-        XLGSearchHasVisibleResultsSegmentedTabBar(root);
+    UIView *resultsTabBar=
+        XLGSearchVisibleResultsSegmentedTabBar(root);
+    BOOL resultsMode=(resultsTabBar!=nil);
 
     for (UIView *candidate in
          XLGSubviewsMatchingClassName(root, @"XDSBlur")) {
@@ -6799,11 +6851,24 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
                 candidate,
                 treatment);
 
-        if (backing) {
-            CGRect localFrame=candidate.frame;
-            localFrame.size.height=bandHeight;
+        if (backing && resultsTabBar) {
+            CGRect tabFrame=
+                [resultsTabBar convertRect:resultsTabBar.bounds
+                                    toView:treatment];
 
-            backing.hidden=NO;
+            CGFloat minY=
+                MAX(0.0,CGRectGetMinY(tabFrame)-1.0);
+            CGFloat maxY=
+                MIN(CGRectGetHeight(treatment.bounds),
+                    CGRectGetMaxY(tabFrame)+1.0);
+
+            CGRect localFrame=CGRectMake(
+                0.0,
+                minY,
+                CGRectGetWidth(treatment.bounds),
+                MAX(0.0,maxY-minY));
+
+            backing.hidden=CGRectIsEmpty(localFrame);
             backing.alpha=1.0;
             backing.backgroundColor=
                 backingColor ?: UIColor.systemBackgroundColor;
@@ -6862,7 +6927,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.2 Beta 2 Search results-only XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.2 Beta 3 Search results-only XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7094,6 +7159,51 @@ static NSUInteger XLGRemoveBlurFiltersFromLayer(CALayer *layer) {
     return removed;
 }
 
+static BOOL XLGFilterLooksBlurLike(id filter) {
+    if (!filter) return NO;
+    NSString *description=
+        [[filter description] lowercaseString] ?: @"";
+    return [description containsString:@"gaussianblur"] ||
+           [description containsString:@"variableblur"] ||
+           [description containsString:@"blur"];
+}
+
+static NSUInteger XLGRemoveBlurBackgroundFiltersFromLayer(
+    CALayer *layer) {
+
+    if (!layer) return 0;
+
+    NSUInteger removed=0;
+
+    NSArray *backgroundFilters=layer.backgroundFilters;
+    if ([backgroundFilters isKindOfClass:NSArray.class] &&
+        backgroundFilters.count>0) {
+
+        NSMutableArray *kept=
+            [NSMutableArray arrayWithCapacity:
+                backgroundFilters.count];
+
+        for (id filter in backgroundFilters) {
+            if (XLGFilterLooksBlurLike(filter)) {
+                removed++;
+            } else {
+                [kept addObject:filter];
+            }
+        }
+
+        layer.backgroundFilters=
+            kept.count ? [kept copy] : nil;
+    }
+
+    id compositingFilter=layer.compositingFilter;
+    if (XLGFilterLooksBlurLike(compositingFilter)) {
+        layer.compositingFilter=nil;
+        removed++;
+    }
+
+    return removed;
+}
+
 static NSUInteger XLGRemoveBlurFiltersRecursivelyFromLayer(
     CALayer *layer) {
 
@@ -7101,6 +7211,21 @@ static NSUInteger XLGRemoveBlurFiltersRecursivelyFromLayer(
 
     NSUInteger removed=
         XLGRemoveBlurFiltersFromLayer(layer);
+
+    removed+=
+        XLGRemoveBlurBackgroundFiltersFromLayer(layer);
+
+    NSString *layerClass=
+        NSStringFromClass(layer.class).lowercaseString ?: @"";
+
+    // X 12.31 can render the typeahead haze through its own blur-radius
+    // layer even after UIVisualEffectView.effect is nil. Suppress only that
+    // private blur-rendering layer; the owning XDSBlur view stays visible so
+    // Search keeps its native layout and insets.
+    if ([layerClass containsString:@"blurradiuslayer"]) {
+        layer.hidden=YES;
+        removed++;
+    }
 
     NSArray<CALayer *> *sublayers=
         [layer.sublayers copy] ?: @[];
@@ -7717,7 +7842,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.2 Beta 2 loaded: X 12.31 Search results + typeahead blur fix + validated 2.0 feature set");
+        NSLog(@"[XLiquidGlass] 2.0.2 Beta 3 loaded: X 12.31 Search typeahead + precise backing fix + validated 2.0 feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
