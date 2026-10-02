@@ -5,7 +5,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString * const IQTLVersion = @"1.0 Beta 2";
+static NSString * const IQTLVersion = @"1.0 Beta 3";
 static NSString * const IQTLEnabledKey = @"LucasIQTFakeLocationEnabled";
 static NSString * const IQTLLatitudeKey = @"LucasIQTFakeLatitude";
 static NSString * const IQTLLongitudeKey = @"LucasIQTFakeLongitude";
@@ -380,8 +380,8 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     (void)tableView;
-    if (section == 0) return @"FAKE LOCATION";
-    if (section == 1) return @"LOCALIZAÇÃO";
+    if (section == 0) return @"Localização falsa";
+    if (section == 1) return @"Localização";
     return nil;
 }
 
@@ -405,7 +405,7 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
 
     if (indexPath.section == 0) {
         cell.textLabel.text = @"Ativar localização falsa";
-        cell.detailTextLabel.text = @"Substitui a localização recebida pelo Telegram.";
+        cell.detailTextLabel.text = @"Substitui a localização recebida pelo app.";
         UISwitch *toggle = [UISwitch new];
         toggle.on = IQTLFakeEnabled();
         [toggle addTarget:self action:@selector(toggleChanged:) forControlEvents:UIControlEventValueChanged];
@@ -463,6 +463,68 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
 
 @end
 
+
+#pragma mark - Root settings presentation
+
+static UIImage *IQTLRootIcon(void) {
+    static UIImage *icon = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        CGSize size = CGSizeMake(30.0, 30.0);
+        UIGraphicsImageRenderer *renderer =
+            [[UIGraphicsImageRenderer alloc] initWithSize:size];
+
+        icon = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+            CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
+            UIBezierPath *background =
+                [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:7.5];
+            [UIColor.systemIndigoColor setFill];
+            [background fill];
+
+            UIImage *symbol = [UIImage systemImageNamed:@"location.fill"];
+            if (symbol != nil) {
+                UIImage *white =
+                    [symbol imageWithTintColor:UIColor.whiteColor
+                                 renderingMode:UIImageRenderingModeAlwaysOriginal];
+
+                CGRect glyphRect = CGRectMake(7.0, 6.5, 16.0, 17.0);
+                [white drawInRect:glyphRect];
+            }
+        }];
+    });
+    return icon;
+}
+
+static NSString *IQTLNormalizeHeader(NSString *value) {
+    if (value.length == 0) return @"";
+    return [[value stringByFoldingWithOptions:(NSCaseInsensitiveSearch | NSDiacriticInsensitiveSearch)
+                                       locale:NSLocale.currentLocale] lowercaseString];
+}
+
+static BOOL IQTLHeaderLooksLikeAppearance(NSString *title) {
+    NSString *value = IQTLNormalizeHeader(title);
+    if (value.length == 0) return NO;
+
+    NSArray<NSString *> *matches = @[
+        @"aparencia",
+        @"appearance",
+        @"apariencia",
+        @"apparence",
+        @"aspetto",
+        @"görünüm",
+        @"gorunum",
+        @"внешний вид"
+    ];
+
+    for (NSString *candidate in matches) {
+        if ([value isEqualToString:IQTLNormalizeHeader(candidate)] ||
+            [value containsString:IQTLNormalizeHeader(candidate)]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
 #pragma mark - iQTele settings integration
 
 static id (*IQTLOrigSettingsInit)(id, SEL) = NULL;
@@ -484,6 +546,38 @@ static id IQTLSettingsInit(id self, SEL _cmd) {
     return result;
 }
 
+static NSInteger IQTLSettingsOriginalSectionCount(id self, UITableView *tableView) {
+    return IQTLOrigNumberOfSections ?
+        IQTLOrigNumberOfSections(self, @selector(numberOfSectionsInTableView:), tableView) : 0;
+}
+
+static NSInteger IQTLSettingsInsertionSection(id self, UITableView *tableView) {
+    NSInteger originalSections = IQTLSettingsOriginalSectionCount(self, tableView);
+
+    if (IQTLOrigHeaderTitle != NULL) {
+        for (NSInteger section = 0; section < originalSections; section++) {
+            NSString *title =
+                IQTLOrigHeaderTitle(self,
+                                    @selector(tableView:titleForHeaderInSection:),
+                                    tableView,
+                                    section);
+            if (IQTLHeaderLooksLikeAppearance(title)) {
+                return section;
+            }
+        }
+    }
+
+    // Fallback: if Appearance cannot be identified, preserve the Beta 2 behavior.
+    return originalSections;
+}
+
+static NSInteger IQTLOriginalSectionForDisplayedSection(id self,
+                                                         UITableView *tableView,
+                                                         NSInteger displayedSection) {
+    NSInteger insertion = IQTLSettingsInsertionSection(self, tableView);
+    return displayedSection > insertion ? displayedSection - 1 : displayedSection;
+}
+
 static NSInteger IQTLSettingsNumberOfSections(id self, SEL _cmd, UITableView *tableView) {
     NSInteger original = IQTLOrigNumberOfSections ?
         IQTLOrigNumberOfSections(self, _cmd, tableView) : 0;
@@ -491,37 +585,52 @@ static NSInteger IQTLSettingsNumberOfSections(id self, SEL _cmd, UITableView *ta
 }
 
 static NSInteger IQTLSettingsRowsInSection(id self, SEL _cmd, UITableView *tableView, NSInteger section) {
-    NSInteger originalSections = IQTLOrigNumberOfSections ?
-        IQTLOrigNumberOfSections(self, @selector(numberOfSectionsInTableView:), tableView) : 0;
+    if (!IQTLIsRootSettings(self)) {
+        return IQTLOrigRowsInSection ?
+            IQTLOrigRowsInSection(self, _cmd, tableView, section) : 0;
+    }
 
-    if (IQTLIsRootSettings(self) && section == originalSections) return 1;
+    NSInteger insertion = IQTLSettingsInsertionSection(self, tableView);
+    if (section == insertion) return 1;
+
+    NSInteger originalSection =
+        IQTLOriginalSectionForDisplayedSection(self, tableView, section);
     return IQTLOrigRowsInSection ?
-        IQTLOrigRowsInSection(self, _cmd, tableView, section) : 0;
+        IQTLOrigRowsInSection(self, _cmd, tableView, originalSection) : 0;
 }
 
 static NSString *IQTLSettingsHeaderTitle(id self, SEL _cmd, UITableView *tableView, NSInteger section) {
-    NSInteger originalSections = IQTLOrigNumberOfSections ?
-        IQTLOrigNumberOfSections(self, @selector(numberOfSectionsInTableView:), tableView) : 0;
-
-    if (IQTLIsRootSettings(self) && section == originalSections) {
-        return @"LOCALIZAÇÃO";
+    if (!IQTLIsRootSettings(self)) {
+        return IQTLOrigHeaderTitle ?
+            IQTLOrigHeaderTitle(self, _cmd, tableView, section) : nil;
     }
 
+    NSInteger insertion = IQTLSettingsInsertionSection(self, tableView);
+    if (section == insertion) {
+        return @"Localização";
+    }
+
+    NSInteger originalSection =
+        IQTLOriginalSectionForDisplayedSection(self, tableView, section);
     return IQTLOrigHeaderTitle ?
-        IQTLOrigHeaderTitle(self, _cmd, tableView, section) : nil;
+        IQTLOrigHeaderTitle(self, _cmd, tableView, originalSection) : nil;
 }
 
 static UITableViewCell *IQTLSettingsCellForRow(id self, SEL _cmd,
                                                UITableView *tableView,
                                                NSIndexPath *indexPath) {
-    NSInteger originalSections = IQTLOrigNumberOfSections ?
-        IQTLOrigNumberOfSections(self, @selector(numberOfSectionsInTableView:), tableView) : 0;
+    if (!IQTLIsRootSettings(self)) {
+        return IQTLOrigCellForRow ?
+            IQTLOrigCellForRow(self, _cmd, tableView, indexPath) : [UITableViewCell new];
+    }
 
-    if (IQTLIsRootSettings(self) && indexPath.section == originalSections) {
+    NSInteger insertion = IQTLSettingsInsertionSection(self, tableView);
+    if (indexPath.section == insertion) {
         UITableViewCell *cell =
             [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle
                                    reuseIdentifier:@"iQTeleLocationRootCell"];
         cell.textLabel.text = @"Localização falsa";
+        cell.imageView.image = IQTLRootIcon();
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
 
         if (IQTLFakeEnabled()) {
@@ -534,17 +643,27 @@ static UITableViewCell *IQTLSettingsCellForRow(id self, SEL _cmd,
         return cell;
     }
 
+    NSInteger originalSection =
+        IQTLOriginalSectionForDisplayedSection(self, tableView, indexPath.section);
+    NSIndexPath *originalIndexPath =
+        [NSIndexPath indexPathForRow:indexPath.row inSection:originalSection];
+
     return IQTLOrigCellForRow ?
-        IQTLOrigCellForRow(self, _cmd, tableView, indexPath) : [UITableViewCell new];
+        IQTLOrigCellForRow(self, _cmd, tableView, originalIndexPath) : [UITableViewCell new];
 }
 
 static void IQTLSettingsDidSelect(id self, SEL _cmd,
                                   UITableView *tableView,
                                   NSIndexPath *indexPath) {
-    NSInteger originalSections = IQTLOrigNumberOfSections ?
-        IQTLOrigNumberOfSections(self, @selector(numberOfSectionsInTableView:), tableView) : 0;
+    if (!IQTLIsRootSettings(self)) {
+        if (IQTLOrigDidSelect) {
+            IQTLOrigDidSelect(self, _cmd, tableView, indexPath);
+        }
+        return;
+    }
 
-    if (IQTLIsRootSettings(self) && indexPath.section == originalSections) {
+    NSInteger insertion = IQTLSettingsInsertionSection(self, tableView);
+    if (indexPath.section == insertion) {
         [tableView deselectRowAtIndexPath:indexPath animated:YES];
         IQTLocationSettingsController *controller = [IQTLocationSettingsController new];
 
@@ -559,8 +678,13 @@ static void IQTLSettingsDidSelect(id self, SEL _cmd,
         return;
     }
 
+    NSInteger originalSection =
+        IQTLOriginalSectionForDisplayedSection(self, tableView, indexPath.section);
+    NSIndexPath *originalIndexPath =
+        [NSIndexPath indexPathForRow:indexPath.row inSection:originalSection];
+
     if (IQTLOrigDidSelect) {
-        IQTLOrigDidSelect(self, _cmd, tableView, indexPath);
+        IQTLOrigDidSelect(self, _cmd, tableView, originalIndexPath);
     }
 }
 
