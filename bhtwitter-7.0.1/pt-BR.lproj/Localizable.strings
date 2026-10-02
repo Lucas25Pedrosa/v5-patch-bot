@@ -111,7 +111,7 @@
 "TWEET_CONFIRM_DETAIL" = "Pergunta antes de publicar um Tweet.";
 
 "SHOW_POLL_RESULTS_TITLE" = "Ver resultados antes de votar";
-"SHOW_POLL_RESULTS_DETAIL" = "Mostra os resultados da enquete antes do seu voto.";
+"SHOW_POLL_RESULTS_DETAIL" = "Mostra os resultados da enquete antes da votação.";
 
 "SHOW_ACCOUNT_LOCATION_TITLE" = "Mostrar localização da conta";
 "SHOW_ACCOUNT_LOCATION_DETAIL" = "Mostra no rodapé do Tweet a localização da conta que o publicou.";
