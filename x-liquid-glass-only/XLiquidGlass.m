@@ -6588,40 +6588,6 @@ static UIColor *XLGSearchBackingColorForBlur(
     return UIColor.systemBackgroundColor;
 }
 
-static CGFloat XLGSearchHeaderBandHeight(
-    UIView *candidate,
-    UIView *root,
-    CGRect candidateFrame) {
-
-    CGFloat fallback=72.0;
-    CGFloat candidateHeight=CGRectGetHeight(candidate.bounds);
-    if (candidateHeight<=0.0) return 0.0;
-
-    for (UIView *tabBar in
-         XLGSubviewsMatchingClassName(
-             root,
-             @"TFNUISwift.LegacySegmentedTabBarView")) {
-
-        if (!tabBar.window || tabBar.hidden || tabBar.alpha<=0.01) continue;
-
-        CGRect tabFrame=
-            [tabBar convertRect:tabBar.bounds
-                         toView:root];
-
-        if (!CGRectIntersectsRect(tabFrame,root.bounds)) continue;
-
-        CGFloat derived=
-            CGRectGetMaxY(tabFrame)-
-            CGRectGetMinY(candidateFrame);
-
-        if (derived>=36.0 && derived<=140.0) {
-            return MIN(derived+1.0,candidateHeight);
-        }
-    }
-
-    return MIN(fallback,candidateHeight);
-}
-
 static UIView *XLGSearchTabBarBackingView(
     UIView *candidate,
     UIView *tabBar) {
