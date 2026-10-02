@@ -5,7 +5,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString * const IQTLVersion = @"1.0 Beta 1";
+static NSString * const IQTLVersion = @"1.0 Beta 2";
 static NSString * const IQTLEnabledKey = @"LucasIQTFakeLocationEnabled";
 static NSString * const IQTLLatitudeKey = @"LucasIQTFakeLatitude";
 static NSString * const IQTLLongitudeKey = @"LucasIQTFakeLongitude";
@@ -638,7 +638,10 @@ static BOOL IQTLIsTelegramProcess(void) {
     NSString *proc = NSProcessInfo.processInfo.processName ?: @"";
     return [bid isEqualToString:@"ph.telegra.Telegraph"] ||
            [exe isEqualToString:@"Telegram"] ||
-           [proc isEqualToString:@"Telegram"];
+           [proc isEqualToString:@"Telegram"] ||
+           [bid isEqualToString:@"app.swiftgram.ios"] ||
+           [exe isEqualToString:@"Swiftgram"] ||
+           [proc isEqualToString:@"Swiftgram"];
 }
 
 __attribute__((constructor)) static void IQTLocationInit(void) {
