@@ -30,8 +30,8 @@ jobs:
             echo "❌ Hook marker found in passive startup probe"
             exit 1
           fi
-          grep -F 'Nexus OLED Startup Probe 0.1.0' NexusOLEDStartupProbe.m
-          grep -F 'FBOLED_StartupMap.csv' NexusOLEDStartupProbe.m
+          grep -F 'Nexus OLED Startup Probe 0.2.0' NexusOLEDStartupProbe.m
+          grep -F 'NexusOLEDStartupProbe.txt' NexusOLEDStartupProbe.m
           grep -F '0.25' NexusOLEDStartupProbe.m
           echo "✅ Source is passive and Facebook-style"
 
@@ -52,14 +52,14 @@ jobs:
           file artifacts/NexusOLEDStartupProbe.dylib | tee artifacts/file.txt
           otool -D artifacts/NexusOLEDStartupProbe.dylib | tee artifacts/install-name.txt
           otool -L artifacts/NexusOLEDStartupProbe.dylib | tee artifacts/dependencies.txt
-          strings artifacts/NexusOLEDStartupProbe.dylib | grep -F 'Nexus OLED Startup Probe 0.1.0'
-          strings artifacts/NexusOLEDStartupProbe.dylib | grep -F 'FBOLED_StartupMap.csv'
+          strings artifacts/NexusOLEDStartupProbe.dylib | grep -F 'Nexus OLED Startup Probe 0.2.0'
+          strings artifacts/NexusOLEDStartupProbe.dylib | grep -F 'NexusOLEDStartupProbe.txt'
           shasum -a 256 artifacts/NexusOLEDStartupProbe.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload startup probe
         uses: actions/upload-artifact@v4
         with:
-          name: NexusOLEDStartupProbe-0.1.0-arm64
+          name: NexusOLEDStartupProbe-0.2.0-arm64
           path: fboled-startup-probe/artifacts/
           if-no-files-found: error
           retention-days: 90
