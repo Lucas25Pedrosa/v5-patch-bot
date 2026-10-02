@@ -6662,6 +6662,34 @@ static UIView *XLGSearchXDSExternalBackingView(
     return backing;
 }
 
+static BOOL XLGSearchHasVisibleResultsSegmentedTabBar(
+    UIView *root) {
+
+    if (!root || !root.window) return NO;
+
+    for (UIView *tabBar in
+         XLGSubviewsMatchingClassName(
+             root,
+             @"TFNUISwift.LegacySegmentedTabBarView")) {
+
+        if (!tabBar.window ||
+            tabBar.hidden ||
+            tabBar.alpha<=0.01) {
+            continue;
+        }
+
+        CGRect frame=
+            [tabBar convertRect:tabBar.bounds
+                         toView:root];
+
+        if (CGRectIntersectsRect(frame,root.bounds)) {
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
 static NSUInteger XLGNeutralizeSearchXDSBlurViews(
     UIView *root,
     NSString *reason) {
@@ -6669,6 +6697,8 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
     if (!XLGEnabled() || !root || !root.window) return 0;
 
     NSUInteger neutralized=0;
+    BOOL resultsMode=
+        XLGSearchHasVisibleResultsSegmentedTabBar(root);
 
     for (UIView *candidate in
          XLGSubviewsMatchingClassName(root, @"XDSBlur")) {
@@ -6694,6 +6724,35 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
             height>=120.0;
 
         if (!topBand) continue;
+
+        // X 12.31 uses a different top XDSBlur while the user is typing
+        // (typeahead) than on the real results pager. The oversized-blur fix
+        // is only valid on the results pager, identified by X's visible
+        // LegacySegmentedTabBarView ("Top / Latest / People / Videos").
+        // If a view previously touched by us is reused for typeahead, restore
+        // it to native visibility and remove our external backing surface.
+        if (!resultsMode) {
+            UIView *existingBacking=
+                objc_getAssociatedObject(
+                    candidate,
+                    &kXLGSearchXDSBackingViewKey);
+
+            if (existingBacking) {
+                [existingBacking removeFromSuperview];
+                existingBacking.hidden=YES;
+
+                candidate.hidden=NO;
+                candidate.alpha=1.0;
+                candidate.backgroundColor=UIColor.clearColor;
+
+                XLGDiagLog(
+                    @"SEARCH_XDSBLUR restoredNativeTypeahead candidate=%p frame=%@ reason=%@",
+                    candidate,
+                    NSStringFromCGRect(frame),
+                    reason ?: @"-");
+            }
+            continue;
+        }
 
         // Beta 4 combines the two validated observations:
         // Beta 1 proved the top XDSBlur must be fully hidden to stop the
@@ -6778,7 +6837,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.1 Stable Search XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.2 Beta 1 Search results-only XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7613,7 +7672,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.1 Stable loaded: X 12.31 Search external header backing fix + validated 2.0 feature set");
+        NSLog(@"[XLiquidGlass] 2.0.2 Beta 1 loaded: X 12.31 Search results-only blur fix + validated 2.0 feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
