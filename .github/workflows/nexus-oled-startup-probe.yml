@@ -1,0 +1,65 @@
+name: Build Nexus OLED Startup Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "fboled-startup-probe/**"
+      - ".github/workflows/nexus-oled-startup-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: fboled-startup-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate passive probe source
+        run: |
+          set -euo pipefail
+          if grep -E 'MSHook|method_exchangeImplementations|method_setImplementation|class_replaceMethod|rebind_symbols' NexusOLEDStartupProbe.m; then
+            echo "❌ Hook marker found in passive startup probe"
+            exit 1
+          fi
+          grep -F 'Nexus OLED Startup Probe 0.1.0' NexusOLEDStartupProbe.m
+          grep -F 'FBOLED_StartupMap.csv' NexusOLEDStartupProbe.m
+          grep -F '0.25' NexusOLEDStartupProbe.m
+          echo "✅ Source is passive and Facebook-style"
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build startup probe
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name NexusOLEDStartupProbe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/NexusOLEDStartupProbe.dylib
+          file artifacts/NexusOLEDStartupProbe.dylib | tee artifacts/file.txt
+          otool -D artifacts/NexusOLEDStartupProbe.dylib | tee artifacts/install-name.txt
+          otool -L artifacts/NexusOLEDStartupProbe.dylib | tee artifacts/dependencies.txt
+          strings artifacts/NexusOLEDStartupProbe.dylib | grep -F 'Nexus OLED Startup Probe 0.1.0'
+          strings artifacts/NexusOLEDStartupProbe.dylib | grep -F 'FBOLED_StartupMap.csv'
+          shasum -a 256 artifacts/NexusOLEDStartupProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload startup probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusOLEDStartupProbe-0.1.0-arm64
+          path: fboled-startup-probe/artifacts/
+          if-no-files-found: error
+          retention-days: 90
