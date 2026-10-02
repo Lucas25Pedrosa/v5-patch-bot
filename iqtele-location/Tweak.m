@@ -5,7 +5,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString * const IQTLVersion = @"1.0 Beta 4";
+static NSString * const IQTLVersion = @"1.0";
 static NSString * const IQTLEnabledKey = @"LucasIQTFakeLocationEnabled";
 static NSString * const IQTLLatitudeKey = @"LucasIQTFakeLatitude";
 static NSString * const IQTLLongitudeKey = @"LucasIQTFakeLongitude";
