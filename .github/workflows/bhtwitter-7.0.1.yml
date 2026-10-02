@@ -1,0 +1,254 @@
+name: Build BHTwitter 7.0.1 PT-BR
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - bhtwitter-7.0.1-ptbr-xlg201-20261001
+    paths:
+      - "bhtwitter-7.0.1/**"
+      - ".github/workflows/bhtwitter-7.0.1.yml"
+
+permissions:
+  contents: read
+
+env:
+  NFB_REPO: orionblur/NeoFreeBird
+  NFB_COMMIT: 3f6119b5be0cd18cf596545df8e28756cbc244dd
+  XLG_BRANCH: xlg-2.0.1-stable-x12.31-beta4-validated-20261001
+  BUILD_VERSION: 7.0.1
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout build overlay
+        uses: actions/checkout@v5
+        with:
+          path: patch
+
+      - name: Checkout NeoFreeBird snapshot
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.NFB_REPO }}
+          ref: ${{ env.NFB_COMMIT }}
+          path: nfb
+          submodules: recursive
+
+      - name: Checkout XLiquidGlass 2.0.1 Stable reference
+        uses: actions/checkout@v5
+        with:
+          repository: Lucas25Pedrosa/v5-patch-bot
+          ref: ${{ env.XLG_BRANCH }}
+          path: xlg201
+
+      - name: Install build dependencies
+        run: brew install make dpkg ldid
+
+      - name: Add GNU Make to PATH
+        run: echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Cache iOS 16.5 SDK
+        id: sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/theos/sdks
+          key: theos-ios-16.5-sdk-v1
+
+      - name: Download iOS 16.5 SDK
+        if: steps.sdk.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks/ "$RUNNER_TEMP/sdks"
+          cd "$RUNNER_TEMP/sdks"
+          git sparse-checkout set --no-cone iPhoneOS16.5.sdk
+          git checkout
+          mv ./*.sdk "$RUNNER_TEMP/theos/sdks/"
+
+      - name: Verify pinned upstream
+        run: |
+          set -euo pipefail
+          actual="$(git -C nfb rev-parse HEAD)"
+          test "$actual" = "$NFB_COMMIT"
+          echo "NeoFreeBird snapshot: $actual"
+
+      - name: Apply 7.0.1 version and pt-BR localization
+        run: |
+          set -euo pipefail
+          sed -i '' "s/^Version: .*/Version: ${BUILD_VERSION}/" nfb/control
+
+          dest="nfb/layout/Library/Application Support/BHT/BHTwitter.bundle/pt-BR.lproj"
+          mkdir -p "$dest"
+          cp patch/bhtwitter-7.0.1/pt-BR.lproj/*.strings "$dest/"
+
+          grep -F "Version: ${BUILD_VERSION}" nfb/control
+          test -f "$dest/Localizable.strings"
+          test -f "$dest/RenameWords.strings"
+          test -f "$dest/RenameOverrides.strings"
+
+      - name: Validate pt-BR key parity
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          base = Path("nfb/layout/Library/Application Support/BHT/BHTwitter.bundle")
+          en = (base / "en.lproj/Localizable.strings").read_text(encoding="utf-8")
+          pt = (base / "pt-BR.lproj/Localizable.strings").read_text(encoding="utf-8")
+
+          pattern = re.compile(r'^\s*"((?:\\.|[^"])*)"\s*=', re.M)
+          ek = pattern.findall(en)
+          pk = pattern.findall(pt)
+
+          es, ps = set(ek), set(pk)
+          missing = [k for k in ek if k not in ps]
+          extra = [k for k in pk if k not in es]
+          dup_en = sorted({k for k in ek if ek.count(k) > 1})
+          dup_pt = sorted({k for k in pk if pk.count(k) > 1})
+
+          print(f"English keys: {len(ek)}")
+          print(f"pt-BR keys:   {len(pk)}")
+          print(f"Missing: {missing}")
+          print(f"Extra: {extra}")
+          print(f"Duplicate EN: {dup_en}")
+          print(f"Duplicate pt-BR: {dup_pt}")
+
+          if missing or extra or dup_en or dup_pt or len(ek) != len(pk):
+              raise SystemExit("Localization parity validation failed")
+          PY
+
+      - name: Validate XLiquidGlass 2.0.1 integration points
+        run: |
+          set -euo pipefail
+          XLG="xlg201/x-liquid-glass-only/XLiquidGlass.m"
+          MODERN="nfb/src/Settings/ModernSettingsViewController.m"
+          APPEARANCE="nfb/src/Settings/Pages/AppearanceSettingsViewController.m"
+
+          grep -F "XLiquidGlass 2.0.1 Stable" "$XLG"
+          grep -F 'NSClassFromString(@"ModernSettingsViewController")' "$XLG"
+          grep -F 'NSSelectorFromString(@"setupSections")' "$XLG"
+          grep -F 'NSClassFromString(@"AppearanceSettingsViewController")' "$XLG"
+
+          grep -F '@implementation ModernSettingsViewController' "$MODERN"
+          grep -F -- '- (void)setupSections' "$MODERN"
+          grep -F '@implementation AppearanceSettingsViewController' "$APPEARANCE"
+
+          mkdir -p artifacts
+          cat > artifacts/COMPATIBILITY.txt <<EOF
+          BHTwitter 7.0.1 PT-BR compatibility report
+          ===========================================
+          NeoFreeBird upstream: ${NFB_REPO}
+          NeoFreeBird commit: ${NFB_COMMIT}
+          Local provisional version: ${BUILD_VERSION}
+
+          XLiquidGlass reference branch:
+          ${XLG_BRANCH}
+
+          Source-level integration checks:
+          [PASS] XLiquidGlass 2.0.1 Stable marker present
+          [PASS] ModernSettingsViewController present
+          [PASS] setupSections selector present
+          [PASS] AppearanceSettingsViewController present
+
+          Localization checks:
+          [PASS] pt-BR has exact 1:1 Localizable.strings key parity with English
+
+          Scope:
+          - No XLiquidGlass source modification was made.
+          - No NeoFreeBird functional source modification was made.
+          - Local changes are limited to Version 7.0.1 metadata and pt-BR resources.
+          - Runtime behavior still requires an on-device test with X + BHTwitter + XLiquidGlass.
+          EOF
+
+      - name: Build XLiquidGlass 2.0.1 unchanged
+        run: |
+          set -euo pipefail
+          cd xlg201/x-liquid-glass-only
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          dylib_path="$(find .theos -type f -name XLiquidGlass.dylib ! -path '*/XLiquidGlass.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" ../../artifacts/XLiquidGlass-2.0.1-Stable-X12.31.dylib
+          file ../../artifacts/XLiquidGlass-2.0.1-Stable-X12.31.dylib
+
+      - name: Compute ffmpeg cache key
+        id: ffmpeg-key
+        run: |
+          set -euo pipefail
+          upstream_sha="$(git -C nfb rev-parse --short HEAD:deps/ffmpeg-kit-next/upstream)"
+          script_hash="$(shasum -a 256 nfb/deps/ffmpeg-kit-next/build-ffmpeg.sh | awk '{print $1}')"
+          echo "key=ffmpeg-stack-ios16.5-${upstream_sha}-${script_hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache ffmpeg stack
+        uses: actions/cache@v4
+        with:
+          path: |
+            ffmpeg-build
+            nfb/deps/ffmpeg-kit-next/build
+          key: ${{ steps.ffmpeg-key.outputs.key }}
+
+      - name: Build BHTwitter 7.0.1
+        env:
+          THEOS: ${{ runner.temp }}/theos
+          BUILD_DIR: ${{ github.workspace }}/ffmpeg-build
+        run: |
+          set -euo pipefail
+          cd nfb
+          sed -i '' 's/^TARGET.*$/TARGET := iphone:clang:16.5:15.0/' Makefile
+          ./build.sh --rootfull
+
+      - name: Collect BHTwitter artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          bht="$(find nfb/.theos -type f -name BHTwitter.dylib ! -path '*/BHTwitter.dylib.dSYM/*' -print -quit)"
+          test -n "$bht"
+          cp "$bht" artifacts/BHTwitter-7.0.1-PTBR.dylib
+
+          flex="$(find nfb/.theos -type f -name libbhFLEX.dylib ! -path '*/libbhFLEX.dylib.dSYM/*' -print -quit || true)"
+          if [ -n "$flex" ]; then
+            cp "$flex" artifacts/libbhFLEX.dylib
+          fi
+
+          (
+            cd "nfb/layout/Library/Application Support/BHT"
+            zip -qry "$GITHUB_WORKSPACE/artifacts/BHTwitter.bundle.zip" BHTwitter.bundle
+          )
+
+          deb="$(find nfb/packages -maxdepth 1 -type f -name '*.deb' -print | sort | tail -n1)"
+          test -n "$deb"
+          cp "$deb" artifacts/
+
+          file artifacts/BHTwitter-7.0.1-PTBR.dylib
+          test -f artifacts/BHTwitter.bundle.zip
+          test -f artifacts/XLiquidGlass-2.0.1-Stable-X12.31.dylib
+
+          (
+            cd artifacts
+            shasum -a 256 BHTwitter-7.0.1-PTBR.dylib               BHTwitter.bundle.zip               XLiquidGlass-2.0.1-Stable-X12.31.dylib               *.deb > SHA256SUMS.txt
+          )
+
+          {
+            echo
+            echo "Build checks:"
+            echo "[PASS] BHTwitter 7.0.1 compiled"
+            echo "[PASS] XLiquidGlass 2.0.1 compiled unchanged"
+            echo "[PASS] Both dylibs compiled with the same Theos toolchain"
+          } >> artifacts/COMPATIBILITY.txt
+
+          ls -lah artifacts
+          cat artifacts/COMPATIBILITY.txt
+          cat artifacts/SHA256SUMS.txt
+
+      - name: Upload BHTwitter 7.0.1 PT-BR package
+        uses: actions/upload-artifact@v4
+        with:
+          name: BHTwitter-7.0.1-PTBR-NFB-3f6119b-XLG201-check
+          path: artifacts/
+          if-no-files-found: error
