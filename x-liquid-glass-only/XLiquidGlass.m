@@ -35,6 +35,7 @@ static NSInteger XLGNotificationDisplayCountForState(NSDictionary *state);
 static void XLGPersistBadgeStates(void);
 static void XLGRefreshGlobalTabBar(void);
 static NSString *XLGTryResolveUserID(id object, NSUInteger depth);
+static NSUInteger XLGRemoveBlurFiltersRecursivelyFromLayer(CALayer *layer);
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
 static NSString *const kXLGPersistedGateKey = @"T1LiquidGlassRedesignPersistedGate";
@@ -6740,17 +6741,41 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
             if (existingBacking) {
                 [existingBacking removeFromSuperview];
                 existingBacking.hidden=YES;
-
-                candidate.hidden=NO;
-                candidate.alpha=1.0;
-                candidate.backgroundColor=UIColor.clearColor;
-
-                XLGDiagLog(
-                    @"SEARCH_XDSBLUR restoredNativeTypeahead candidate=%p frame=%@ reason=%@",
-                    candidate,
-                    NSStringFromCGRect(frame),
-                    reason ?: @"-");
             }
+
+            // Typeahead is a different X 12.31 surface. Keep its native
+            // geometry and visibility so suggestions retain the correct
+            // vertical layout, but strip the XDSBlur layer filters that
+            // produce the dark oversized haze while typing.
+            candidate.hidden=NO;
+            candidate.alpha=1.0;
+            candidate.backgroundColor=UIColor.clearColor;
+
+            NSUInteger typeaheadFiltersRemoved=
+                XLGRemoveBlurFiltersRecursivelyFromLayer(
+                    candidate.layer);
+
+            for (UIView *subview in
+                 XLGSubviewsMatchingClassName(
+                     candidate,
+                     @"UIVisualEffectView")) {
+
+                if (![subview isKindOfClass:UIVisualEffectView.class]) continue;
+                UIVisualEffectView *effectView=(UIVisualEffectView *)subview;
+                if (effectView.effect) {
+                    effectView.effect=nil;
+                }
+                effectView.backgroundColor=UIColor.clearColor;
+            }
+
+            neutralized++;
+
+            XLGDiagLog(
+                @"SEARCH_XDSBLUR typeaheadNoBlur candidate=%p frame=%@ removedLayerFilters=%lu reason=%@",
+                candidate,
+                NSStringFromCGRect(frame),
+                (unsigned long)typeaheadFiltersRemoved,
+                reason ?: @"-");
             continue;
         }
 
@@ -6837,7 +6862,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.2 Beta 1 Search results-only XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.2 Beta 2 Search results-only XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7066,6 +7091,26 @@ static NSUInteger XLGRemoveBlurFiltersFromLayer(CALayer *layer) {
     if (removed>0) {
         layer.filters=kept.count ? [kept copy] : nil;
     }
+    return removed;
+}
+
+static NSUInteger XLGRemoveBlurFiltersRecursivelyFromLayer(
+    CALayer *layer) {
+
+    if (!layer) return 0;
+
+    NSUInteger removed=
+        XLGRemoveBlurFiltersFromLayer(layer);
+
+    NSArray<CALayer *> *sublayers=
+        [layer.sublayers copy] ?: @[];
+
+    for (CALayer *sublayer in sublayers) {
+        removed+=
+            XLGRemoveBlurFiltersRecursivelyFromLayer(
+                sublayer);
+    }
+
     return removed;
 }
 
@@ -7672,7 +7717,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.2 Beta 1 loaded: X 12.31 Search results-only blur fix + validated 2.0 feature set");
+        NSLog(@"[XLiquidGlass] 2.0.2 Beta 2 loaded: X 12.31 Search results + typeahead blur fix + validated 2.0 feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
