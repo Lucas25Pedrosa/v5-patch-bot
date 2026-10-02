@@ -1,0 +1,68 @@
+name: Build iQTeleLocation Beta 1
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "iqtele-location/**"
+      - ".github/workflows/iqtele-location.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: iqtele-location
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name iQTeleLocation.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/iQTeleLocation.dylib
+          strings artifacts/iQTeleLocation.dylib > artifacts/strings.txt
+          grep -F "Localização falsa" artifacts/strings.txt
+          grep -F "LucasIQTFakeLocationEnabled" artifacts/strings.txt
+          grep -F "1.0 Beta 1" artifacts/strings.txt
+          shasum -a 256 artifacts/iQTeleLocation.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: iQTeleLocation-1.0-Beta-1-arm64
+          path: iqtele-location/artifacts/
+          if-no-files-found: error
+
+      - name: Publish test build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-output/iqtele-location
+          cp iqtele-location/artifacts/iQTeleLocation.dylib build-output/iqtele-location/iQTeleLocation.dylib
+          cp iqtele-location/artifacts/SHA256SUMS.txt build-output/iqtele-location/SHA256SUMS.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-output/iqtele-location/iQTeleLocation.dylib build-output/iqtele-location/SHA256SUMS.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Build iQTeleLocation 1.0 Beta 1"
+            git push
+          fi
