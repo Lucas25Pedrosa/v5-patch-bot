@@ -238,6 +238,7 @@ s = s.replace(transform, '''static void IQFOLEDTransformView(UIView *view) {
 ''', 1)
 
 constructor = '''        gIQFOLEDEnabled = IQFOLEDLoadEnabledPreference();
+        gIQFOLEDSeparatorsEnabled = IQFOLEDLoadSeparatorsPreference();
         IQFOLEDInstallInstantSetter();
 
         dispatch_async(dispatch_get_main_queue(), ^{'''
@@ -246,6 +247,7 @@ s = s.replace(constructor, '''        NexusOLEDProbeStartLogging();
         NexusOLEDProbeInstallLayerHook();
 
         gIQFOLEDEnabled = IQFOLEDLoadEnabledPreference();
+        gIQFOLEDSeparatorsEnabled = IQFOLEDLoadSeparatorsPreference();
         IQFOLEDInstallInstantSetter();
 
         dispatch_async(dispatch_get_main_queue(), ^{''', 1)
