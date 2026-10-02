@@ -3,7 +3,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <math.h>
 
-// Nexus OLED Startup Probe 0.1.0
+// Nexus OLED Startup Probe 0.2.0
 // Facebook-style passive view mapper based on the proven FBOLEDViewMapper.
 // No hooks, no swizzle, no method replacement and no visual modification.
 // Purpose: capture the startup gray shown before Nexus OLED takes over.
@@ -229,7 +229,7 @@ static void Scan(void) {
             [gTimer invalidate];
             gTimer = nil;
             Append([NSString stringWithFormat:
-                    @"# %@ END Nexus OLED Startup Probe 0.1.0 scans=%lu elapsed=%.3f",
+                    @"# %@ END Nexus OLED Startup Probe 0.2.0 scans=%lu elapsed=%.3f",
                     Stamp(),
                     (unsigned long)gScanNumber,
                     elapsed]);
@@ -287,34 +287,32 @@ __attribute__((constructor)) static void Init(void) {
         }
 
         gMapQueue = dispatch_queue_create("com.nexus.oled-startup-viewmapper", DISPATCH_QUEUE_SERIAL);
-        gStartTime = CACurrentMediaTime();
-
-        NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
-                                                                   NSUserDomainMask,
-                                                                   YES).firstObject;
-        NSString *directory = [documents stringByAppendingPathComponent:@"FBOLED"];
-        [NSFileManager.defaultManager createDirectoryAtPath:directory
-                                withIntermediateDirectories:YES
-                                                 attributes:nil
-                                                      error:nil];
-
-        gMapPath = [directory stringByAppendingPathComponent:@"FBOLED_StartupMap.csv"];
-
-        NSString *header = @"timestamp,elapsed,scan,window,depth,view_ptr,view_class,parent_class,view_rgba,layer_rgba,width,height,screen_width,screen_height,view_alpha,mapped_dark,black,subview_count\n";
-        [header writeToFile:gMapPath
-                 atomically:YES
-                   encoding:NSUTF8StringEncoding
-                      error:nil];
-
-        Append([NSString stringWithFormat:
-                @"# %@ START Nexus OLED Startup Probe 0.1.0 bundle=%@ app=%@ build=%@ ios=%@",
-                Stamp(),
-                NSBundle.mainBundle.bundleIdentifier ?: @"?",
-                NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
-                NSBundle.mainBundle.infoDictionary[@"CFBundleVersion"] ?: @"?",
-                UIDevice.currentDevice.systemVersion ?: @"?"]);
 
         dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,
+                                                                       NSUserDomainMask,
+                                                                       YES).firstObject
+                ?: NSTemporaryDirectory();
+            gMapPath = [documents stringByAppendingPathComponent:@"NexusOLEDStartupProbe.txt"];
+
+            [[NSFileManager defaultManager] createFileAtPath:gMapPath
+                                                   contents:nil
+                                                 attributes:nil];
+
+            gStartTime = CACurrentMediaTime();
+
+            Append(@"Nexus OLED Startup Probe 0.2.0");
+            Append(@"Facebook-style startup diagnostic; no UI state or colors are modified.");
+            Append([NSString stringWithFormat:
+                    @"%@ START bundle=%@ app=%@ build=%@ iOS=%@ device=%@",
+                    Stamp(),
+                    NSBundle.mainBundle.bundleIdentifier ?: @"?",
+                    NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
+                    NSBundle.mainBundle.infoDictionary[@"CFBundleVersion"] ?: @"?",
+                    UIDevice.currentDevice.systemVersion ?: @"?",
+                    UIDevice.currentDevice.model ?: @"?"]);
+            Append(@"timestamp,elapsed,scan,window,depth,view_ptr,view_class,parent_class,view_rgba,layer_rgba,width,height,screen_width,screen_height,view_alpha,mapped_dark,black,subview_count");
+
             StartScanner();
         });
     }
