@@ -40,9 +40,19 @@ jobs:
           set -e
           echo "Theos status: $make_status (the linked dylib is used for this test build)"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name iQTeleLocation.dylib -print -quit)"
+          dylib_path=""
+          while IFS= read -r candidate; do
+            if file "$candidate" | grep -q "dynamically linked shared library"; then
+              dylib_path="$candidate"
+              break
+            fi
+          done < <(find .theos -name iQTeleLocation.dylib -print)
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/iQTeleLocation.dylib
+          file artifacts/iQTeleLocation.dylib | tee artifacts/file.txt
+          grep -F "Mach-O 64-bit" artifacts/file.txt
+          grep -F "arm64" artifacts/file.txt
+          grep -F "dynamically linked shared library" artifacts/file.txt
           strings artifacts/iQTeleLocation.dylib > artifacts/strings.txt
           grep -F "Localização falsa" artifacts/strings.txt
           grep -F "LucasIQTFakeLocationEnabled" artifacts/strings.txt
