@@ -34,7 +34,7 @@ jobs:
       - name: Build arm64 dylib
         run: |
           set -euo pipefail
-          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos" TARGET_CODESIGN=
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name iQTeleLocation.dylib -print -quit)"
           test -n "$dylib_path"
