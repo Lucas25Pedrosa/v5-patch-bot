@@ -474,7 +474,7 @@ static UIImage *IQTLRootIcon(void) {
         UIGraphicsImageRenderer *renderer =
             [[UIGraphicsImageRenderer alloc] initWithSize:size];
 
-        icon = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+        icon = [renderer imageWithActions:^(__unused UIGraphicsImageRendererContext * _Nonnull context) {
             CGRect bounds = CGRectMake(0.0, 0.0, size.width, size.height);
             UIBezierPath *background =
                 [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:7.5];
