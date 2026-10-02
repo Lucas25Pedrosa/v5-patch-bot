@@ -6621,10 +6621,11 @@ static CGFloat XLGSearchHeaderBandHeight(
     return MIN(fallback,candidateHeight);
 }
 
-static UIView *XLGSearchXDSBackingView(
-    UIView *candidate) {
+static UIView *XLGSearchXDSExternalBackingView(
+    UIView *candidate,
+    UIView *treatment) {
 
-    if (!candidate) return nil;
+    if (!candidate || !treatment) return nil;
 
     UIView *backing=
         objc_getAssociatedObject(
@@ -6642,10 +6643,20 @@ static UIView *XLGSearchXDSBackingView(
             &kXLGSearchXDSBackingViewKey,
             backing,
             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 
-        [candidate insertSubview:backing atIndex:0];
-    } else if (backing.superview!=candidate) {
-        [candidate insertSubview:backing atIndex:0];
+    if (backing.superview!=treatment) {
+        [backing removeFromSuperview];
+
+        NSUInteger candidateIndex=
+            [treatment.subviews indexOfObjectIdenticalTo:candidate];
+
+        if (candidateIndex!=NSNotFound) {
+            [treatment insertSubview:backing
+                             belowSubview:candidate];
+        } else {
+            [treatment addSubview:backing];
+        }
     }
 
     return backing;
@@ -6684,16 +6695,14 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
 
         if (!topBand) continue;
 
-        // Beta 3 keeps the XDSBlur container geometry intact because X owns
-        // that layout, but paints only the real Search header/tab band. This
-        // avoids Beta 1 transparency and Beta 2's 229pt solid block covering
-        // the first results. The lower 82pt ScrollEdge treatment stays intact.
+        // Beta 4 combines the two validated observations:
+        // Beta 1 proved the top XDSBlur must be fully hidden to stop the
+        // oversized native blur, while Beta 2/3 proved Search still needs a
+        // backing surface behind its header. Keep XDSBlur hidden and place a
+        // separate sibling backing view in ScrollEdgeTreatment so the backing
+        // is not affected by XDSBlur's own renderer.
         UIColor *backingColor=
             XLGSearchBackingColorForBlur(candidate,root);
-
-        candidate.hidden=NO;
-        candidate.alpha=1.0;
-        candidate.backgroundColor=UIColor.clearColor;
 
         CGFloat bandHeight=
             XLGSearchHeaderBandHeight(
@@ -6702,18 +6711,24 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
                 frame);
 
         UIView *backing=
-            XLGSearchXDSBackingView(candidate);
+            XLGSearchXDSExternalBackingView(
+                candidate,
+                treatment);
+
         if (backing) {
+            CGRect localFrame=candidate.frame;
+            localFrame.size.height=bandHeight;
+
             backing.hidden=NO;
             backing.alpha=1.0;
             backing.backgroundColor=
                 backingColor ?: UIColor.systemBackgroundColor;
-            backing.frame=CGRectMake(
-                0.0,
-                0.0,
-                CGRectGetWidth(candidate.bounds),
-                bandHeight);
+            backing.frame=localFrame;
         }
+
+        candidate.backgroundColor=UIColor.clearColor;
+        candidate.alpha=1.0;
+        candidate.hidden=YES;
 
         for (UIView *subview in
              XLGSubviewsMatchingClassName(
@@ -6731,10 +6746,12 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
         neutralized++;
 
         XLGDiagLog(
-            @"SEARCH_XDSBLUR headerBand=%p frame=%@ bandHeight=%.1f color=%@ treatment=%p reason=%@",
+            @"SEARCH_XDSBLUR externalBacking candidate=%p frame=%@ bandHeight=%.1f backing=%p backingFrame=%@ color=%@ treatment=%p reason=%@",
             candidate,
             NSStringFromCGRect(frame),
             bandHeight,
+            backing,
+            backing ? NSStringFromCGRect(backing.frame) : @"-",
             backing.backgroundColor,
             treatment,
             reason ?: @"-");
@@ -6761,7 +6778,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.1 Beta 3 Search XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.1 Beta 4 Search XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7596,7 +7613,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.1 Beta 3 loaded: X 12.31 Search XDSBlur header-band fix + 2.0 Stable feature set");
+        NSLog(@"[XLiquidGlass] 2.0.1 Beta 4 loaded: X 12.31 Search external header backing fix + 2.0 Stable feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
