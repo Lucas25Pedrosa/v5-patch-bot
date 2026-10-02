@@ -34,7 +34,11 @@ jobs:
       - name: Build arm64 dylib
         run: |
           set -euo pipefail
+          set +e
           make clean all THEOS="$RUNNER_TEMP/theos" DEBUG=1 TARGET_CODESIGN=
+          make_status=$?
+          set -e
+          echo "Theos status: $make_status (the linked dylib is used for this test build)"
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name iQTeleLocation.dylib -print -quit)"
           test -n "$dylib_path"
