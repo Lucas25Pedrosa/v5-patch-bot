@@ -6,7 +6,7 @@
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.0.1 Beta 2
+#pragma mark - XLiquidGlass 1.0.1 Stable
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -6845,7 +6845,7 @@ static void XLGInstallXAppPremiumRouter(void) {
     gXLGXAppPremiumRouterInstalled=any;
 }
 
-#pragma mark - XLiquidGlass 1.0.1 Beta 2 Search blur fix
+#pragma mark - XLiquidGlass 1.0.1 Stable Search blur fix
 
 static NSUInteger XLGRemoveSearchBlurViews(
     UIView *view,
@@ -7668,14 +7668,14 @@ static void XLiquidGlassInit(void) {
     @autoreleasepool {
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         if (!XLGIsSupportedOS()) {
-            NSLog(@"[XLiquidGlass] 1.0.1 Beta 2 inactive on iOS %ld.%ld.%ld; iOS 26+ required",
+            NSLog(@"[XLiquidGlass] 1.0.1 Stable inactive on iOS %ld.%ld.%ld; iOS 26+ required",
                   (long)version.majorVersion,
                   (long)version.minorVersion,
                   (long)version.patchVersion);
             return;
         }
 
-        NSLog(@"[XLiquidGlass] 1.0.1 Beta 2 loaded: iOS 26+ + NFB localization + credits + X 12.31 2.0.2 Search blur fixes");
+        NSLog(@"[XLiquidGlass] 1.0.1 Stable loaded: iOS 26+ + NFB localization + credits + validated X 12.31 Search blur fixes");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
