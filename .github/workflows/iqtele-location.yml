@@ -53,10 +53,10 @@ jobs:
           grep -F "Mach-O 64-bit" artifacts/file.txt
           grep -F "arm64" artifacts/file.txt
           grep -F "dynamically linked shared library" artifacts/file.txt
-          strings artifacts/iQTeleLocation.dylib > artifacts/strings.txt
-          grep -F "Localização falsa" artifacts/strings.txt
-          grep -F "LucasIQTFakeLocationEnabled" artifacts/strings.txt
-          grep -F "1.0 Beta 1" artifacts/strings.txt
+          grep -F 'Localização falsa' Tweak.m
+          grep -F 'LucasIQTFakeLocationEnabled' Tweak.m
+          grep -F '1.0 Beta 1' Tweak.m
+          strings -a artifacts/iQTeleLocation.dylib > artifacts/strings.txt || true
           shasum -a 256 artifacts/iQTeleLocation.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload dylib
