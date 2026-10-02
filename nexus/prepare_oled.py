@@ -16,18 +16,19 @@ s = s.replace(old, '''        dispatch_async(dispatch_get_main_queue(), ^{
         });''', 1)
 
 probe = r'''
-// Nexus 1.0.3 Beta 2 — integrated OLED startup probe -------------------------
+// Nexus 1.0.3 Beta 3 — integrated OLED startup probe -------------------------
 // Same passive Facebook-style view mapper used by the proven diagnostics.
 // No swizzle, no method replacement, no visual modification.
 
 __attribute__((used, visibility("default")))
-NSString * const NexusOLEDIntegratedProbeVersion = @"1.0.3 Beta 2";
+NSString * const NexusOLEDIntegratedProbeVersion = @"1.0.3 Beta 3";
 
 static NSString *gNexusOLEDProbePath = nil;
 static dispatch_queue_t gNexusOLEDProbeQueue;
 static NSTimer *gNexusOLEDProbeTimer;
 static NSUInteger gNexusOLEDProbeScanNumber = 0;
 static CFTimeInterval gNexusOLEDProbeStart = 0.0;
+static BOOL gNexusOLEDProbeDialogShown = NO;
 static const CFTimeInterval kNexusOLEDProbeDuration = 8.0;
 static const CFTimeInterval kNexusOLEDProbeInterval = 0.25;
 
@@ -209,6 +210,108 @@ static void NexusOLEDProbeWalk(UIView *view,
     }
 }
 
+static UIViewController *NexusOLEDProbeTopController(void) {
+    UIWindow *bestWindow = nil;
+    for (UIWindow *window in NexusOLEDProbeWindows()) {
+        if (window.hidden || window.alpha <= 0.01) continue;
+        if (!bestWindow || window.isKeyWindow) bestWindow = window;
+        if (window.isKeyWindow) break;
+    }
+
+    UIViewController *controller = bestWindow.rootViewController;
+    if (!controller) return nil;
+
+    BOOL advanced = YES;
+    while (advanced) {
+        advanced = NO;
+
+        if (controller.presentedViewController &&
+            !controller.presentedViewController.isBeingDismissed) {
+            controller = controller.presentedViewController;
+            advanced = YES;
+            continue;
+        }
+
+        if ([controller isKindOfClass:UINavigationController.class]) {
+            UIViewController *visible =
+                ((UINavigationController *)controller).visibleViewController;
+            if (visible && visible != controller) {
+                controller = visible;
+                advanced = YES;
+                continue;
+            }
+        }
+
+        if ([controller isKindOfClass:UITabBarController.class]) {
+            UIViewController *selected =
+                ((UITabBarController *)controller).selectedViewController;
+            if (selected && selected != controller) {
+                controller = selected;
+                advanced = YES;
+                continue;
+            }
+        }
+    }
+
+    return controller;
+}
+
+static void NexusOLEDProbePresentCopyDialog(void) {
+    if (gNexusOLEDProbeDialogShown) return;
+    gNexusOLEDProbeDialogShown = YES;
+
+    dispatch_async(gNexusOLEDProbeQueue, ^{
+        NSString *log =
+            [NSString stringWithContentsOfFile:gNexusOLEDProbePath
+                                      encoding:NSUTF8StringEncoding
+                                         error:nil] ?: @"";
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *presenter = NexusOLEDProbeTopController();
+            if (!presenter) {
+                gNexusOLEDProbeDialogShown = NO;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                             (int64_t)(0.75 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    NexusOLEDProbePresentCopyDialog();
+                });
+                return;
+            }
+
+            NSString *message = log.length > 0
+                ? [NSString stringWithFormat:
+                    @"Captura OLED concluída (%lu caracteres). Toque em Copiar log e envie o conteúdo no chat.",
+                    (unsigned long)log.length]
+                : @"A captura terminou, mas o arquivo de log ficou vazio.";
+
+            UIAlertController *alert =
+                [UIAlertController alertControllerWithTitle:@"Nexus OLED Probe"
+                                                    message:message
+                                             preferredStyle:UIAlertControllerStyleAlert];
+
+            if (log.length > 0) {
+                [alert addAction:
+                    [UIAlertAction actionWithTitle:@"Copiar log"
+                                             style:UIAlertActionStyleDefault
+                                           handler:^(__unused UIAlertAction *action) {
+                        UIPasteboard.generalPasteboard.string = log;
+                    }]];
+            }
+
+            [alert addAction:
+                [UIAlertAction actionWithTitle:@"Fechar"
+                                         style:UIAlertActionStyleCancel
+                                       handler:nil]];
+
+            @try {
+                [presenter presentViewController:alert animated:YES completion:nil];
+            } @catch (__unused NSException *exception) {
+                gNexusOLEDProbeDialogShown = NO;
+            }
+        });
+    });
+}
+
 static void NexusOLEDStartupProbeScan(void) {
     if (!NSThread.isMainThread) {
         dispatch_async(dispatch_get_main_queue(), ^{ NexusOLEDStartupProbeScan(); });
@@ -224,6 +327,12 @@ static void NexusOLEDStartupProbeScan(void) {
             NexusOLEDProbeStamp(),
             (unsigned long)gNexusOLEDProbeScanNumber,
             elapsed]);
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(0.35 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            NexusOLEDProbePresentCopyDialog();
+        });
         return;
     }
 
@@ -268,7 +377,7 @@ static void NexusOLEDStartupProbePrepare(void) {
 
     gNexusOLEDProbeStart = CACurrentMediaTime();
 
-    NexusOLEDProbeAppend(@"Nexus OLED Startup Probe — Integrated 1.0.3 Beta 2");
+    NexusOLEDProbeAppend(@"Nexus OLED Startup Probe — Integrated 1.0.3 Beta 3");
     NexusOLEDProbeAppend(@"Passive diagnostic inside Nexus; no probe hook or visual modification.");
     NexusOLEDProbeAppend([NSString stringWithFormat:
         @"%@ START bundle=%@ app=%@ build=%@ iOS=%@ device=%@",
@@ -311,4 +420,4 @@ void NexusOLEDPrepareSettingsCell(void) {
 '''
 
 out.write_text(s, encoding="utf-8")
-print("Prepared Nexus integrated OLED startup probe 1.0.3 Beta 2")
+print("Prepared Nexus integrated OLED startup probe 1.0.3 Beta 3")
