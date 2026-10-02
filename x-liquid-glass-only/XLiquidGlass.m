@@ -6867,7 +6867,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.2 Beta 4 Search results-only XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.2 Stable Search results-only XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7782,7 +7782,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.2 Beta 4 loaded: X 12.31 Search typeahead + tab-owned backing fix + validated 2.0 feature set");
+        NSLog(@"[XLiquidGlass] 2.0.2 Stable loaded: X 12.31 Search typeahead + tab-owned backing fix + validated 2.0 feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
