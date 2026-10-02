@@ -1,0 +1,21 @@
+/*
+  Terminologia pt-BR para o recurso "Restaurar terminologia do Twitter".
+  Mantém a nomenclatura clássica do Twitter quando a interface do app está em português do Brasil.
+*/
+
+"repost" = "retweet";
+"reposts" = "retweets";
+"reposted" = "retweetado";
+"reposting" = "retweetando";
+"republicar" = "retweetar";
+"republicação" = "Retweet";
+"republicações" = "Retweets";
+"publicação" = "Tweet";
+"publicações" = "Tweets";
+"publicar" = "Tweetar";
+"publicado" = "Tweetado";
+"publicada" = "Tweetada";
+"publicados" = "Tweetados";
+"publicadas" = "Tweetadas";
+"premium" = "blue";
+"X" = "Twitter";
