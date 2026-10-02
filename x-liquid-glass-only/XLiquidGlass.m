@@ -6622,11 +6622,11 @@ static CGFloat XLGSearchHeaderBandHeight(
     return MIN(fallback,candidateHeight);
 }
 
-static UIView *XLGSearchXDSExternalBackingView(
+static UIView *XLGSearchTabBarBackingView(
     UIView *candidate,
-    UIView *treatment) {
+    UIView *tabBar) {
 
-    if (!candidate || !treatment) return nil;
+    if (!candidate || !tabBar) return nil;
 
     UIView *backing=
         objc_getAssociatedObject(
@@ -6637,7 +6637,9 @@ static UIView *XLGSearchXDSExternalBackingView(
         backing=[[UIView alloc] initWithFrame:CGRectZero];
         backing.userInteractionEnabled=NO;
         backing.accessibilityElementsHidden=YES;
-        backing.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+        backing.autoresizingMask=
+            UIViewAutoresizingFlexibleWidth |
+            UIViewAutoresizingFlexibleHeight;
 
         objc_setAssociatedObject(
             candidate,
@@ -6646,20 +6648,15 @@ static UIView *XLGSearchXDSExternalBackingView(
             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    if (backing.superview!=treatment) {
+    // Keep the replacement surface owned by the segmented tab bar itself.
+    // That makes it move/collapse/disappear with the native tabs instead of
+    // remaining pinned in ScrollEdgeTreatment after the tabs scroll away.
+    if (backing.superview!=tabBar) {
         [backing removeFromSuperview];
-
-        NSUInteger candidateIndex=
-            [treatment.subviews indexOfObjectIdenticalTo:candidate];
-
-        if (candidateIndex!=NSNotFound) {
-            [treatment insertSubview:backing
-                             belowSubview:candidate];
-        } else {
-            [treatment addSubview:backing];
-        }
+        [tabBar insertSubview:backing atIndex:0];
     }
 
+    backing.frame=tabBar.bounds;
     return backing;
 }
 
@@ -6840,39 +6837,17 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
         UIColor *backingColor=
             XLGSearchBackingColorForBlur(candidate,root);
 
-        CGFloat bandHeight=
-            XLGSearchHeaderBandHeight(
-                candidate,
-                root,
-                frame);
-
         UIView *backing=
-            XLGSearchXDSExternalBackingView(
+            XLGSearchTabBarBackingView(
                 candidate,
-                treatment);
+                resultsTabBar);
 
         if (backing && resultsTabBar) {
-            CGRect tabFrame=
-                [resultsTabBar convertRect:resultsTabBar.bounds
-                                    toView:treatment];
-
-            CGFloat minY=
-                MAX(0.0,CGRectGetMinY(tabFrame)-1.0);
-            CGFloat maxY=
-                MIN(CGRectGetHeight(treatment.bounds),
-                    CGRectGetMaxY(tabFrame)+1.0);
-
-            CGRect localFrame=CGRectMake(
-                0.0,
-                minY,
-                CGRectGetWidth(treatment.bounds),
-                MAX(0.0,maxY-minY));
-
-            backing.hidden=CGRectIsEmpty(localFrame);
+            backing.hidden=NO;
             backing.alpha=1.0;
             backing.backgroundColor=
                 backingColor ?: UIColor.systemBackgroundColor;
-            backing.frame=localFrame;
+            backing.frame=resultsTabBar.bounds;
         }
 
         candidate.backgroundColor=UIColor.clearColor;
@@ -6895,14 +6870,13 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
         neutralized++;
 
         XLGDiagLog(
-            @"SEARCH_XDSBLUR externalBacking candidate=%p frame=%@ bandHeight=%.1f backing=%p backingFrame=%@ color=%@ treatment=%p reason=%@",
+            @"SEARCH_XDSBLUR tabBarBacking candidate=%p frame=%@ backing=%p backingFrame=%@ color=%@ tabBar=%p reason=%@",
             candidate,
             NSStringFromCGRect(frame),
-            bandHeight,
             backing,
             backing ? NSStringFromCGRect(backing.frame) : @"-",
             backing.backgroundColor,
-            treatment,
+            resultsTabBar,
             reason ?: @"-");
     }
 
@@ -6927,7 +6901,7 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
-#pragma mark - XLiquidGlass 2.0.2 Beta 3 Search results-only XDSBlur + 2.0 timeline edge blur
+#pragma mark - XLiquidGlass 2.0.2 Beta 4 Search results-only XDSBlur + 2.0 timeline edge blur
 
 static BOOL XLGIsHomeTimelineControllerClass(Class cls) {
     if (!cls) return NO;
@@ -7842,7 +7816,7 @@ static void XLGScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.2 Beta 3 loaded: X 12.31 Search typeahead + precise backing fix + validated 2.0 feature set");
+        NSLog(@"[XLiquidGlass] 2.0.2 Beta 4 loaded: X 12.31 Search typeahead + tab-owned backing fix + validated 2.0 feature set");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
