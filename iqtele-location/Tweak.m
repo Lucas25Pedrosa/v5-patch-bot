@@ -5,11 +5,12 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString * const IQTLVersion = @"1.0 Beta 3";
+static NSString * const IQTLVersion = @"1.0 Beta 4";
 static NSString * const IQTLEnabledKey = @"LucasIQTFakeLocationEnabled";
 static NSString * const IQTLLatitudeKey = @"LucasIQTFakeLatitude";
 static NSString * const IQTLLongitudeKey = @"LucasIQTFakeLongitude";
 static NSString * const IQTLDidChangeNotification = @"LucasIQTFakeLocationDidChange";
+static NSString * const IQTLSavedLocationsKey = @"LucasIQTFakeSavedLocations";
 
 static char IQTLRootSettingsKey;
 
@@ -50,6 +51,88 @@ static void IQTLSaveCoordinate(CLLocationCoordinate2D c) {
     [d setDouble:c.longitude forKey:IQTLLongitudeKey];
     [d synchronize];
     [NSNotificationCenter.defaultCenter postNotificationName:IQTLDidChangeNotification object:nil];
+}
+
+
+static NSArray<NSDictionary *> *IQTLSavedLocations(void) {
+    id stored = [IQTLDefaults() objectForKey:IQTLSavedLocationsKey];
+    if (![stored isKindOfClass:NSArray.class]) return @[];
+
+    NSMutableArray<NSDictionary *> *valid = [NSMutableArray array];
+    for (id item in (NSArray *)stored) {
+        if (![item isKindOfClass:NSDictionary.class]) continue;
+        NSNumber *lat = item[@"latitude"];
+        NSNumber *lon = item[@"longitude"];
+        NSString *name = item[@"name"];
+        if (![lat isKindOfClass:NSNumber.class] ||
+            ![lon isKindOfClass:NSNumber.class] ||
+            ![name isKindOfClass:NSString.class]) {
+            continue;
+        }
+
+        CLLocationCoordinate2D c =
+            CLLocationCoordinate2DMake(lat.doubleValue, lon.doubleValue);
+        if (!IQTLCoordinateIsUsable(c)) continue;
+        [valid addObject:item];
+    }
+    return valid.copy;
+}
+
+static void IQTLStoreSavedLocations(NSArray<NSDictionary *> *locations) {
+    [IQTLDefaults() setObject:locations ?: @[] forKey:IQTLSavedLocationsKey];
+    [IQTLDefaults() synchronize];
+    [NSNotificationCenter.defaultCenter postNotificationName:IQTLDidChangeNotification object:nil];
+}
+
+static NSString *IQTLTrimmedString(NSString *value) {
+    if (![value isKindOfClass:NSString.class]) return @"";
+    return [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+
+static NSString *IQTLDefaultSavedName(void) {
+    return [NSString stringWithFormat:@"Localização %lu",
+            (unsigned long)(IQTLSavedLocations().count + 1)];
+}
+
+static void IQTLAddSavedLocation(NSString *name, CLLocationCoordinate2D c) {
+    if (!IQTLCoordinateIsUsable(c)) return;
+
+    NSString *cleanName = IQTLTrimmedString(name);
+    if (cleanName.length == 0) cleanName = IQTLDefaultSavedName();
+
+    NSMutableArray<NSDictionary *> *locations =
+        [IQTLSavedLocations() mutableCopy] ?: [NSMutableArray array];
+
+    NSDictionary *record = @{
+        @"name": cleanName,
+        @"latitude": @(c.latitude),
+        @"longitude": @(c.longitude)
+    };
+    [locations addObject:record];
+    IQTLStoreSavedLocations(locations);
+}
+
+static BOOL IQTLCoordinateMatchesRecord(CLLocationCoordinate2D c, NSDictionary *record) {
+    if (!IQTLCoordinateIsUsable(c) || ![record isKindOfClass:NSDictionary.class]) return NO;
+    NSNumber *lat = record[@"latitude"];
+    NSNumber *lon = record[@"longitude"];
+    if (![lat isKindOfClass:NSNumber.class] || ![lon isKindOfClass:NSNumber.class]) return NO;
+
+    return fabs(c.latitude - lat.doubleValue) < 0.000001 &&
+           fabs(c.longitude - lon.doubleValue) < 0.000001;
+}
+
+static BOOL IQTLParseCoordinateText(NSString *text, double *valueOut) {
+    NSString *clean = IQTLTrimmedString(text);
+    if (clean.length == 0) return NO;
+    clean = [clean stringByReplacingOccurrencesOfString:@"," withString:@"."];
+
+    NSScanner *scanner = [NSScanner scannerWithString:clean];
+    double value = 0.0;
+    if (![scanner scanDouble:&value] || !scanner.isAtEnd) return NO;
+
+    if (valueOut != NULL) *valueOut = value;
+    return YES;
 }
 
 static CLLocation *IQTLFakeLocationFrom(CLLocation *original) {
@@ -341,6 +424,329 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
 
 @end
 
+
+@interface IQTManualCoordinateController : UITableViewController
+@property (nonatomic, strong) UITextField *latitudeField;
+@property (nonatomic, strong) UITextField *longitudeField;
+@property (nonatomic, strong) UITextField *nameField;
+@end
+
+@implementation IQTManualCoordinateController
+
+- (instancetype)init {
+    self = [super initWithStyle:UITableViewStyleInsetGrouped];
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Inserir coordenadas";
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithTitle:@"Usar"
+                                        style:UIBarButtonItemStyleDone
+                                       target:self
+                                       action:@selector(useCoordinates)];
+
+    if (IQTLHasCoordinate()) {
+        CLLocationCoordinate2D c = IQTLSavedCoordinate();
+        self.latitudeField.text = [NSString stringWithFormat:@"%.6f", c.latitude];
+        self.longitudeField.text = [NSString stringWithFormat:@"%.6f", c.longitude];
+    }
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void)tableView;
+    return 2;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView;
+    return section == 0 ? 2 : 1;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    (void)tableView;
+    return section == 0 ? @"Coordenadas" : @"Salvar localização";
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void)tableView;
+    if (section == 0) {
+        return @"Aceita ponto ou vírgula como separador decimal.";
+    }
+    return @"O nome é opcional. Se preenchido, a coordenada também será adicionada a Localizações salvas.";
+}
+
+- (UITextField *)coordinateFieldWithPlaceholder:(NSString *)placeholder {
+    UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 185, 34)];
+    field.placeholder = placeholder;
+    field.keyboardType = UIKeyboardTypeNumbersAndPunctuation;
+    field.textAlignment = NSTextAlignmentRight;
+    field.clearButtonMode = UITextFieldViewModeWhileEditing;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    return field;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView;
+    UITableViewCell *cell =
+        [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+
+    if (indexPath.section == 0 && indexPath.row == 0) {
+        cell.textLabel.text = @"Latitude";
+        if (self.latitudeField == nil) {
+            self.latitudeField = [self coordinateFieldWithPlaceholder:@"-90 a 90"];
+            if (IQTLHasCoordinate()) {
+                self.latitudeField.text =
+                    [NSString stringWithFormat:@"%.6f", IQTLSavedCoordinate().latitude];
+            }
+        }
+        cell.accessoryView = self.latitudeField;
+    } else if (indexPath.section == 0) {
+        cell.textLabel.text = @"Longitude";
+        if (self.longitudeField == nil) {
+            self.longitudeField = [self coordinateFieldWithPlaceholder:@"-180 a 180"];
+            if (IQTLHasCoordinate()) {
+                self.longitudeField.text =
+                    [NSString stringWithFormat:@"%.6f", IQTLSavedCoordinate().longitude];
+            }
+        }
+        cell.accessoryView = self.longitudeField;
+    } else {
+        cell.textLabel.text = @"Nome";
+        if (self.nameField == nil) {
+            self.nameField = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 185, 34)];
+            self.nameField.placeholder = @"Opcional";
+            self.nameField.textAlignment = NSTextAlignmentRight;
+            self.nameField.clearButtonMode = UITextFieldViewModeWhileEditing;
+            self.nameField.autocorrectionType = UITextAutocorrectionTypeDefault;
+            self.nameField.autocapitalizationType = UITextAutocapitalizationTypeWords;
+        }
+        cell.accessoryView = self.nameField;
+    }
+    return cell;
+}
+
+- (void)showInvalidCoordinateAlert {
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"Coordenadas inválidas"
+                                            message:@"Latitude deve ficar entre -90 e 90 e longitude entre -180 e 180."
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                              style:UIAlertActionStyleDefault
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)useCoordinates {
+    double lat = 0.0;
+    double lon = 0.0;
+    if (!IQTLParseCoordinateText(self.latitudeField.text, &lat) ||
+        !IQTLParseCoordinateText(self.longitudeField.text, &lon)) {
+        [self showInvalidCoordinateAlert];
+        return;
+    }
+
+    CLLocationCoordinate2D c = CLLocationCoordinate2DMake(lat, lon);
+    if (!IQTLCoordinateIsUsable(c)) {
+        [self showInvalidCoordinateAlert];
+        return;
+    }
+
+    IQTLSaveCoordinate(c);
+
+    NSString *name = IQTLTrimmedString(self.nameField.text);
+    if (name.length > 0) {
+        IQTLAddSavedLocation(name, c);
+    }
+
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+@end
+
+
+@interface IQTSavedLocationsController : UITableViewController
+@property (nonatomic, copy) NSArray<NSDictionary *> *locations;
+@end
+
+@implementation IQTSavedLocationsController
+
+- (instancetype)init {
+    self = [super initWithStyle:UITableViewStyleInsetGrouped];
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Localizações salvas";
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+                                                     target:self
+                                                     action:@selector(addCurrentLocation)];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(reloadLocations)
+                                               name:IQTLDidChangeNotification
+                                             object:nil];
+    [self reloadLocations];
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+- (void)reloadLocations {
+    self.locations = IQTLSavedLocations();
+    [self.tableView reloadData];
+}
+
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    (void)tableView;
+    return 1;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return MAX((NSInteger)self.locations.count, 1);
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    return @"Localizações salvas";
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void)tableView;
+    (void)section;
+    if (self.locations.count == 0) {
+        return @"Use o botão + para salvar a coordenada selecionada atualmente.";
+    }
+    return @"Toque em uma localização para usá-la. Deslize para a esquerda para apagar.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView;
+
+    if (self.locations.count == 0) {
+        UITableViewCell *empty =
+            [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        empty.textLabel.text = @"Nenhuma localização salva";
+        empty.detailTextLabel.text = @"Selecione uma localização e toque em +.";
+        empty.selectionStyle = UITableViewCellSelectionStyleNone;
+        return empty;
+    }
+
+    NSDictionary *record = self.locations[(NSUInteger)indexPath.row];
+    UITableViewCell *cell =
+        [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+
+    cell.textLabel.text = record[@"name"];
+    cell.detailTextLabel.text =
+        [NSString stringWithFormat:@"%.6f, %.6f",
+         [record[@"latitude"] doubleValue],
+         [record[@"longitude"] doubleValue]];
+
+    UIImage *pin = [UIImage systemImageNamed:@"mappin.and.ellipse"];
+    cell.imageView.image = pin;
+    cell.accessoryType =
+        (IQTLHasCoordinate() && IQTLCoordinateMatchesRecord(IQTLSavedCoordinate(), record))
+        ? UITableViewCellAccessoryCheckmark
+        : UITableViewCellAccessoryNone;
+
+    return cell;
+}
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView;
+    (void)indexPath;
+    return self.locations.count > 0;
+}
+
+- (void)tableView:(UITableView *)tableView
+commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+forRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView;
+    if (editingStyle != UITableViewCellEditingStyleDelete ||
+        indexPath.row >= (NSInteger)self.locations.count) {
+        return;
+    }
+
+    NSMutableArray<NSDictionary *> *locations = [self.locations mutableCopy];
+    [locations removeObjectAtIndex:(NSUInteger)indexPath.row];
+    IQTLStoreSavedLocations(locations);
+    [self reloadLocations];
+}
+
+- (NSString *)tableView:(UITableView *)tableView
+titleForDeleteConfirmationButtonForRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void)tableView;
+    (void)indexPath;
+    return @"Apagar";
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (self.locations.count == 0 ||
+        indexPath.row >= (NSInteger)self.locations.count) {
+        return;
+    }
+
+    NSDictionary *record = self.locations[(NSUInteger)indexPath.row];
+    CLLocationCoordinate2D c =
+        CLLocationCoordinate2DMake([record[@"latitude"] doubleValue],
+                                   [record[@"longitude"] doubleValue]);
+    if (!IQTLCoordinateIsUsable(c)) return;
+
+    IQTLSaveCoordinate(c);
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+- (void)addCurrentLocation {
+    if (!IQTLHasCoordinate()) {
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:@"Nenhuma localização selecionada"
+                                                message:@"Escolha uma localização no mapa ou insira coordenadas antes de salvá-la."
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                  style:UIAlertActionStyleDefault
+                                                handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+
+    UIAlertController *alert =
+        [UIAlertController alertControllerWithTitle:@"Salvar localização"
+                                            message:@"Digite um nome para identificar esta localização."
+                                     preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = IQTLDefaultSavedName();
+        field.autocapitalizationType = UITextAutocapitalizationTypeWords;
+    }];
+
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancelar"
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Salvar"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(__unused UIAlertAction *action) {
+        __strong typeof(weakSelf) self = weakSelf;
+        if (self == nil) return;
+        NSString *name = alert.textFields.firstObject.text;
+        IQTLAddSavedLocation(name, IQTLSavedCoordinate());
+        [self reloadLocations];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+@end
+
+
 @interface IQTLocationSettingsController : UITableViewController
 @end
 
@@ -375,7 +781,7 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView;
-    return section == 1 ? 2 : 1;
+    return section == 1 ? 4 : 1;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
@@ -388,7 +794,7 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     if (section == 0) {
-        return @"O spoof é aplicado apenas dentro do Telegram. Outros apps continuam usando a localização real do iPhone.";
+        return @"O spoof é aplicado apenas dentro deste app. Outros apps continuam usando a localização real do iPhone.";
     }
     if (section == 2) {
         return [NSString stringWithFormat:@"iQTeleLocation %@", IQTLVersion];
@@ -415,8 +821,21 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
         cell.textLabel.text = @"Selecionar localização";
         cell.detailTextLabel.text = @"Escolha um ponto no mapa.";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (indexPath.section == 1 && indexPath.row == 1) {
+        cell.textLabel.text = @"Inserir coordenadas";
+        cell.detailTextLabel.text = @"Digite latitude e longitude manualmente.";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (indexPath.section == 1 && indexPath.row == 2) {
+        cell.textLabel.text = @"Localizações salvas";
+        NSUInteger count = IQTLSavedLocations().count;
+        cell.detailTextLabel.text =
+            count == 0
+            ? @"Nenhuma localização salva"
+            : [NSString stringWithFormat:@"%lu %@", (unsigned long)count,
+               count == 1 ? @"localização" : @"localizações"];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (indexPath.section == 1) {
-        cell.textLabel.text = @"Coordenadas";
+        cell.textLabel.text = @"Coordenadas atuais";
         if (IQTLHasCoordinate()) {
             CLLocationCoordinate2D c = IQTLSavedCoordinate();
             cell.detailTextLabel.text =
@@ -453,6 +872,12 @@ static void IQTLMKUpdate(id self, SEL _cmd, id manager, NSArray *locations) {
     if (indexPath.section == 1 && indexPath.row == 0) {
         IQTLocationMapController *picker = [IQTLocationMapController new];
         [self.navigationController pushViewController:picker animated:YES];
+    } else if (indexPath.section == 1 && indexPath.row == 1) {
+        IQTManualCoordinateController *manual = [IQTManualCoordinateController new];
+        [self.navigationController pushViewController:manual animated:YES];
+    } else if (indexPath.section == 1 && indexPath.row == 2) {
+        IQTSavedLocationsController *saved = [IQTSavedLocationsController new];
+        [self.navigationController pushViewController:saved animated:YES];
     } else if (indexPath.section == 2) {
         [IQTLDefaults() setBool:NO forKey:IQTLEnabledKey];
         [IQTLDefaults() synchronize];
