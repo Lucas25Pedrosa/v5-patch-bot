@@ -1,11 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 #import <dlfcn.h>
 
-#pragma mark - XLiquidGlass 1.0.1 Beta 1
+#pragma mark - XLiquidGlass 1.0.1 Beta 2
 
 #define XLGDiagLog(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 
@@ -70,8 +71,11 @@ static IMP gOrigXAppPremiumSettings = NULL;
 static IMP gOrigXAppShowDisplaySettings = NULL;
 static BOOL gXLGXAppPremiumRouterInstalled = NO;
 static IMP gOrigSearchContainerViewDidLayoutSubviews = NULL;
+static IMP gOrigSearchContainerViewDidAppear = NULL;
 static IMP gOrigSearchScrollEdgeTreatmentLayoutSubviews = NULL;
+static IMP gOrigVisualEffectViewSetEffect = NULL;
 static BOOL gXLGSearchBlurFixInstalled = NO;
+static BOOL gXLGSearchEffectGuardInstalled = NO;
 static BOOL gXLGSearchScrollEdgeTreatmentHooked = NO;
 static char kXLGSearchBlurLoggedKey;
 static char kXLGSearchXDSBackingViewKey;
@@ -6841,7 +6845,7 @@ static void XLGInstallXAppPremiumRouter(void) {
     gXLGXAppPremiumRouterInstalled=any;
 }
 
-#pragma mark - XLiquidGlass 1.9.0 Beta 1 Search blur fix
+#pragma mark - XLiquidGlass 1.0.1 Beta 2 Search blur fix
 
 static NSUInteger XLGRemoveSearchBlurViews(
     UIView *view,
@@ -6930,45 +6934,11 @@ static UIColor *XLGSearchBackingColorForBlur(
     return UIColor.systemBackgroundColor;
 }
 
-static CGFloat XLGSearchHeaderBandHeight(
+static UIView *XLGSearchTabBarBackingView(
     UIView *candidate,
-    UIView *root,
-    CGRect candidateFrame) {
+    UIView *tabBar) {
 
-    CGFloat fallback=72.0;
-    CGFloat candidateHeight=CGRectGetHeight(candidate.bounds);
-    if (candidateHeight<=0.0) return 0.0;
-
-    for (UIView *tabBar in
-         XLGSubviewsMatchingClassName(
-             root,
-             @"TFNUISwift.LegacySegmentedTabBarView")) {
-
-        if (!tabBar.window || tabBar.hidden || tabBar.alpha<=0.01) continue;
-
-        CGRect tabFrame=
-            [tabBar convertRect:tabBar.bounds
-                         toView:root];
-
-        if (!CGRectIntersectsRect(tabFrame,root.bounds)) continue;
-
-        CGFloat derived=
-            CGRectGetMaxY(tabFrame)-
-            CGRectGetMinY(candidateFrame);
-
-        if (derived>=36.0 && derived<=140.0) {
-            return MIN(derived+1.0,candidateHeight);
-        }
-    }
-
-    return MIN(fallback,candidateHeight);
-}
-
-static UIView *XLGSearchXDSExternalBackingView(
-    UIView *candidate,
-    UIView *treatment) {
-
-    if (!candidate || !treatment) return nil;
+    if (!candidate || !tabBar) return nil;
 
     UIView *backing=
         objc_getAssociatedObject(
@@ -6979,7 +6949,9 @@ static UIView *XLGSearchXDSExternalBackingView(
         backing=[[UIView alloc] initWithFrame:CGRectZero];
         backing.userInteractionEnabled=NO;
         backing.accessibilityElementsHidden=YES;
-        backing.autoresizingMask=UIViewAutoresizingFlexibleWidth;
+        backing.autoresizingMask=
+            UIViewAutoresizingFlexibleWidth |
+            UIViewAutoresizingFlexibleHeight;
 
         objc_setAssociatedObject(
             candidate,
@@ -6988,21 +6960,197 @@ static UIView *XLGSearchXDSExternalBackingView(
             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    if (backing.superview!=treatment) {
+    // Own the replacement surface by the segmented tab bar itself.
+    // It therefore follows the native tabs when they move/collapse/disappear.
+    if (backing.superview!=tabBar) {
         [backing removeFromSuperview];
+        [tabBar insertSubview:backing atIndex:0];
+    }
 
-        NSUInteger candidateIndex=
-            [treatment.subviews indexOfObjectIdenticalTo:candidate];
+    backing.frame=tabBar.bounds;
+    return backing;
+}
 
-        if (candidateIndex!=NSNotFound) {
-            [treatment insertSubview:backing
-                             belowSubview:candidate];
-        } else {
-            [treatment addSubview:backing];
+static BOOL XLGViewIsActuallyVisibleInWindow(
+    UIView *view) {
+
+    if (!view || !view.window ||
+        view.hidden || view.alpha<=0.01) {
+        return NO;
+    }
+
+    UIWindow *window=view.window;
+    CGRect visibleRect=
+        [view convertRect:view.bounds
+                   toView:window];
+
+    visibleRect=
+        CGRectIntersection(
+            visibleRect,
+            window.bounds);
+
+    if (CGRectIsNull(visibleRect) ||
+        CGRectIsEmpty(visibleRect)) {
+        return NO;
+    }
+
+    UIView *ancestor=view.superview;
+    while (ancestor && ancestor!=window) {
+        if (ancestor.hidden || ancestor.alpha<=0.01) {
+            return NO;
+        }
+
+        if (ancestor.clipsToBounds) {
+            CGRect ancestorRect=
+                [ancestor convertRect:ancestor.bounds
+                               toView:window];
+
+            visibleRect=
+                CGRectIntersection(
+                    visibleRect,
+                    ancestorRect);
+
+            if (CGRectIsNull(visibleRect) ||
+                CGRectIsEmpty(visibleRect)) {
+                return NO;
+            }
+        }
+
+        ancestor=ancestor.superview;
+    }
+
+    return CGRectGetWidth(visibleRect)>=20.0 &&
+           CGRectGetHeight(visibleRect)>=20.0;
+}
+
+static UIView *XLGSearchVisibleResultsSegmentedTabBar(
+    UIView *root) {
+
+    if (!root || !root.window) return nil;
+
+    for (UIView *tabBar in
+         XLGSubviewsMatchingClassName(
+             root,
+             @"TFNUISwift.LegacySegmentedTabBarView")) {
+
+        if (!XLGViewIsActuallyVisibleInWindow(tabBar)) {
+            continue;
+        }
+
+        CGRect frame=
+            [tabBar convertRect:tabBar.bounds
+                         toView:root];
+
+        if (CGRectIntersectsRect(frame,root.bounds) &&
+            CGRectGetHeight(frame)>=20.0) {
+            return tabBar;
         }
     }
 
-    return backing;
+    return nil;
+}
+
+static BOOL XLGFilterLooksBlurLike(id filter) {
+    if (!filter) return NO;
+    NSString *description=
+        [[filter description] lowercaseString] ?: @"";
+    return [description containsString:@"gaussianblur"] ||
+           [description containsString:@"variableblur"] ||
+           [description containsString:@"blur"];
+}
+
+static NSUInteger XLGRemoveBlurFiltersFromLayer(CALayer *layer) {
+    if (!layer) return 0;
+
+    NSArray *filters=layer.filters;
+    if (![filters isKindOfClass:NSArray.class] || filters.count==0) {
+        return 0;
+    }
+
+    NSMutableArray *kept=[NSMutableArray arrayWithCapacity:filters.count];
+    NSUInteger removed=0;
+
+    for (id filter in filters) {
+        if (XLGFilterLooksBlurLike(filter)) {
+            removed++;
+        } else {
+            [kept addObject:filter];
+        }
+    }
+
+    if (removed>0) {
+        layer.filters=kept.count ? [kept copy] : nil;
+    }
+    return removed;
+}
+
+static NSUInteger XLGRemoveBlurBackgroundFiltersFromLayer(
+    CALayer *layer) {
+
+    if (!layer) return 0;
+
+    NSUInteger removed=0;
+
+    NSArray *backgroundFilters=layer.backgroundFilters;
+    if ([backgroundFilters isKindOfClass:NSArray.class] &&
+        backgroundFilters.count>0) {
+
+        NSMutableArray *kept=
+            [NSMutableArray arrayWithCapacity:
+                backgroundFilters.count];
+
+        for (id filter in backgroundFilters) {
+            if (XLGFilterLooksBlurLike(filter)) {
+                removed++;
+            } else {
+                [kept addObject:filter];
+            }
+        }
+
+        layer.backgroundFilters=
+            kept.count ? [kept copy] : nil;
+    }
+
+    id compositingFilter=layer.compositingFilter;
+    if (XLGFilterLooksBlurLike(compositingFilter)) {
+        layer.compositingFilter=nil;
+        removed++;
+    }
+
+    return removed;
+}
+
+static NSUInteger XLGRemoveBlurFiltersRecursivelyFromLayer(
+    CALayer *layer) {
+
+    if (!layer) return 0;
+
+    NSUInteger removed=
+        XLGRemoveBlurFiltersFromLayer(layer);
+
+    removed+=
+        XLGRemoveBlurBackgroundFiltersFromLayer(layer);
+
+    NSString *layerClass=
+        NSStringFromClass(layer.class).lowercaseString ?: @"";
+
+    // X 12.31 can render the typeahead haze through its own private
+    // blur-radius layer even after UIVisualEffectView.effect is nil.
+    if ([layerClass containsString:@"blurradiuslayer"]) {
+        layer.hidden=YES;
+        removed++;
+    }
+
+    NSArray<CALayer *> *sublayers=
+        [layer.sublayers copy] ?: @[];
+
+    for (CALayer *sublayer in sublayers) {
+        removed+=
+            XLGRemoveBlurFiltersRecursivelyFromLayer(
+                sublayer);
+    }
+
+    return removed;
 }
 
 static NSUInteger XLGNeutralizeSearchXDSBlurViews(
@@ -7012,6 +7160,9 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
     if (!XLGEnabled() || !root || !root.window) return 0;
 
     NSUInteger neutralized=0;
+    UIView *resultsTabBar=
+        XLGSearchVisibleResultsSegmentedTabBar(root);
+    BOOL resultsMode=(resultsTabBar!=nil);
 
     for (UIView *candidate in
          XLGSubviewsMatchingClassName(root, @"XDSBlur")) {
@@ -7038,29 +7189,67 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
 
         if (!topBand) continue;
 
+        if (!resultsMode) {
+            UIView *existingBacking=
+                objc_getAssociatedObject(
+                    candidate,
+                    &kXLGSearchXDSBackingViewKey);
+
+            if (existingBacking) {
+                [existingBacking removeFromSuperview];
+                existingBacking.hidden=YES;
+            }
+
+            // Typeahead keeps X's geometry but not the X 12.31 haze.
+            candidate.hidden=NO;
+            candidate.alpha=1.0;
+            candidate.backgroundColor=UIColor.clearColor;
+
+            NSUInteger typeaheadFiltersRemoved=
+                XLGRemoveBlurFiltersRecursivelyFromLayer(
+                    candidate.layer);
+
+            for (UIView *subview in
+                 XLGSubviewsMatchingClassName(
+                     candidate,
+                     @"UIVisualEffectView")) {
+
+                if (![subview isKindOfClass:UIVisualEffectView.class]) continue;
+                UIVisualEffectView *effectView=(UIVisualEffectView *)subview;
+                if (effectView.effect) {
+                    effectView.effect=nil;
+                }
+                effectView.backgroundColor=UIColor.clearColor;
+            }
+
+            neutralized++;
+
+            XLGDiagLog(
+                @"SEARCH_XDSBLUR typeaheadNoBlur candidate=%p frame=%@ removedLayerFilters=%lu reason=%@",
+                candidate,
+                NSStringFromCGRect(frame),
+                (unsigned long)typeaheadFiltersRemoved,
+                reason ?: @"-");
+            continue;
+        }
+
+        // Results mode uses the validated 2.0.2 Stable strategy: hide the
+        // oversized top XDSBlur and let the real segmented tabs own the
+        // replacement backing surface, so it disappears with the tabs.
         UIColor *backingColor=
             XLGSearchBackingColorForBlur(candidate,root);
 
-        CGFloat bandHeight=
-            XLGSearchHeaderBandHeight(
-                candidate,
-                root,
-                frame);
-
         UIView *backing=
-            XLGSearchXDSExternalBackingView(
+            XLGSearchTabBarBackingView(
                 candidate,
-                treatment);
+                resultsTabBar);
 
-        if (backing) {
-            CGRect localFrame=candidate.frame;
-            localFrame.size.height=bandHeight;
-
+        if (backing && resultsTabBar) {
             backing.hidden=NO;
             backing.alpha=1.0;
             backing.backgroundColor=
                 backingColor ?: UIColor.systemBackgroundColor;
-            backing.frame=localFrame;
+            backing.frame=resultsTabBar.bounds;
         }
 
         candidate.backgroundColor=UIColor.clearColor;
@@ -7083,14 +7272,13 @@ static NSUInteger XLGNeutralizeSearchXDSBlurViews(
         neutralized++;
 
         XLGDiagLog(
-            @"SEARCH_XDSBLUR externalBacking candidate=%p frame=%@ bandHeight=%.1f backing=%p backingFrame=%@ color=%@ treatment=%p reason=%@",
+            @"SEARCH_XDSBLUR tabBarBacking candidate=%p frame=%@ backing=%p backingFrame=%@ color=%@ tabBar=%p reason=%@",
             candidate,
             NSStringFromCGRect(frame),
-            bandHeight,
             backing,
             backing ? NSStringFromCGRect(backing.frame) : @"-",
             backing.backgroundColor,
-            treatment,
+            resultsTabBar,
             reason ?: @"-");
     }
 
@@ -7115,6 +7303,128 @@ static UIViewController *XLGSearchControllerForView(UIView *view) {
     return nil;
 }
 
+static BOOL XLGSearchEffectViewIsProtected(
+    UIVisualEffectView *effectView) {
+
+    if (!XLGEnabled() || !effectView) return NO;
+
+    UIViewController *controller=
+        XLGSearchControllerForView(effectView);
+    if (!controller || !controller.view) return NO;
+
+    CGRect frame=
+        [effectView convertRect:effectView.bounds
+                        toView:controller.view];
+
+    return CGRectGetMaxY(frame)>0.0 &&
+           CGRectGetMinY(frame)<240.0;
+}
+
+static void XLGVisualEffectViewSetEffect(
+    id self,
+    SEL cmd,
+    UIVisualEffect *effect) {
+
+    if (!gOrigVisualEffectViewSetEffect) return;
+
+    if ([self isKindOfClass:UIVisualEffectView.class] &&
+        effect!=nil) {
+
+        UIVisualEffectView *effectView=(UIVisualEffectView *)self;
+        if (XLGSearchEffectViewIsProtected(effectView)) {
+            ((void(*)(id,SEL,id))
+                gOrigVisualEffectViewSetEffect)(
+                    self,cmd,nil);
+
+            effectView.backgroundColor=UIColor.clearColor;
+            return;
+        }
+    }
+
+    ((void(*)(id,SEL,id))
+        gOrigVisualEffectViewSetEffect)(
+            self,cmd,effect);
+}
+
+static void XLGInstallPersistentSearchEffectGuard(void) {
+    if (gXLGSearchEffectGuardInstalled) return;
+
+    Class cls=UIVisualEffectView.class;
+    SEL selector=@selector(setEffect:);
+    Method method=class_getInstanceMethod(cls,selector);
+    if (!method) return;
+
+    gXLGSearchEffectGuardInstalled=
+        XLGHookMethod(
+            cls,
+            selector,
+            NO,
+            (IMP)XLGVisualEffectViewSetEffect,
+            &gOrigVisualEffectViewSetEffect);
+}
+
+static void XLGApplySearchBlurRemoval(
+    UIViewController *controller,
+    NSString *reason) {
+
+    if (!XLGEnabled() || !controller) return;
+
+    UIView *root=controller.view;
+    if (!root) return;
+
+    NSUInteger removed=
+        XLGRemoveSearchBlurViews(root,root,0);
+
+    NSUInteger xdsNeutralized=
+        XLGNeutralizeSearchXDSBlurViews(
+            root,
+            reason);
+
+    if ((removed>0 || xdsNeutralized>0) &&
+        gXLGNavigationProbeActive &&
+        ![objc_getAssociatedObject(
+            controller,&kXLGSearchBlurLoggedKey) boolValue]) {
+
+        objc_setAssociatedObject(
+            controller,
+            &kXLGSearchBlurLoggedKey,
+            @YES,
+            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        XLGNavigationProbeLog(
+            @"SEARCH_BLUR removed=%lu xdsNeutralized=%lu controller=%@ ptr=%p reason=%@",
+            (unsigned long)removed,
+            (unsigned long)xdsNeutralized,
+            NSStringFromClass(controller.class),
+            controller,
+            reason ?: @"-");
+    }
+}
+
+static void XLGScheduleSearchBlurRemoval(
+    UIViewController *controller) {
+
+    if (!controller) return;
+
+    for (NSNumber *delayValue in @[@0.04,@0.12,@0.30]) {
+        NSTimeInterval delay=delayValue.doubleValue;
+        __weak UIViewController *weakController=controller;
+
+        dispatch_after(
+            dispatch_time(DISPATCH_TIME_NOW,
+                          (int64_t)(delay*NSEC_PER_SEC)),
+            dispatch_get_main_queue(), ^{
+                UIViewController *strongController=weakController;
+                if (!strongController) return;
+
+                XLGApplySearchBlurRemoval(
+                    strongController,
+                    [NSString stringWithFormat:
+                        @"delayed-%.2f",delay]);
+            });
+    }
+}
+
 static void XLGSearchScrollEdgeTreatmentLayoutSubviews(
     id self,
     SEL cmd) {
@@ -7127,9 +7437,8 @@ static void XLGSearchScrollEdgeTreatmentLayoutSubviews(
 
     if (!XLGEnabled() || ![self isKindOfClass:UIView.class]) return;
 
-    UIView *treatment=(UIView *)self;
     UIViewController *searchController=
-        XLGSearchControllerForView(treatment);
+        XLGSearchControllerForView((UIView *)self);
 
     if (!searchController ||
         !searchController.isViewLoaded ||
@@ -7137,8 +7446,8 @@ static void XLGSearchScrollEdgeTreatmentLayoutSubviews(
         return;
     }
 
-    XLGNeutralizeSearchXDSBlurViews(
-        searchController.view,
+    XLGApplySearchBlurRemoval(
+        searchController,
         @"treatment-layout");
 }
 
@@ -7152,64 +7461,71 @@ static void XLGSearchContainerViewDidLayoutSubviews(
                 self,cmd);
     }
 
-    if (!XLGEnabled() ||
-        ![self isKindOfClass:UIViewController.class]) {
-        return;
-    }
+    if (![self isKindOfClass:UIViewController.class]) return;
 
     UIViewController *controller=(UIViewController *)self;
-    UIView *root=controller.view;
-    if (!root) return;
+    XLGApplySearchBlurRemoval(controller,@"layout");
+    XLGScheduleSearchBlurRemoval(controller);
+}
 
-    NSUInteger removed=
-        XLGRemoveSearchBlurViews(root,root,0);
+static void XLGSearchContainerViewDidAppear(
+    id self,
+    SEL cmd,
+    BOOL animated) {
 
-    NSUInteger neutralized=
-        XLGNeutralizeSearchXDSBlurViews(
-            root,
-            @"search-layout");
-
-    if ((removed>0 || neutralized>0) &&
-        gXLGNavigationProbeActive &&
-        ![objc_getAssociatedObject(
-            controller,&kXLGSearchBlurLoggedKey) boolValue]) {
-
-        objc_setAssociatedObject(
-            controller,
-            &kXLGSearchBlurLoggedKey,
-            @YES,
-            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-        XLGNavigationProbeLog(
-            @"SEARCH_BLUR removed=%lu xdsNeutralized=%lu controller=%@ ptr=%p",
-            (unsigned long)removed,
-            (unsigned long)neutralized,
-            NSStringFromClass(controller.class),
-            controller);
+    if (gOrigSearchContainerViewDidAppear) {
+        ((void(*)(id,SEL,BOOL))
+            gOrigSearchContainerViewDidAppear)(
+                self,cmd,animated);
     }
+
+    if (![self isKindOfClass:UIViewController.class]) return;
+
+    UIViewController *controller=(UIViewController *)self;
+    XLGApplySearchBlurRemoval(controller,@"didAppear");
+    XLGScheduleSearchBlurRemoval(controller);
 }
 
 static void XLGInstallSearchBlurFix(void) {
+    XLGInstallPersistentSearchEffectGuard();
+
     if (gXLGSearchBlurFixInstalled) return;
 
-    Class cls=NSClassFromString(
-        @"TTSSearchContainerViewControllerV2");
+    Class cls=
+        NSClassFromString(
+            @"TTSSearchContainerViewControllerV2");
     if (!cls) return;
 
-    SEL selector=@selector(viewDidLayoutSubviews);
-    Method method=class_getInstanceMethod(cls,selector);
-    if (!method) return;
+    SEL layoutSEL=@selector(viewDidLayoutSubviews);
+    Method layoutMethod=
+        class_getInstanceMethod(cls,layoutSEL);
+    if (!layoutMethod) return;
 
-    gXLGSearchBlurFixInstalled=
+    BOOL layoutHooked=
         XLGHookMethod(
             cls,
-            selector,
+            layoutSEL,
             NO,
             (IMP)XLGSearchContainerViewDidLayoutSubviews,
             &gOrigSearchContainerViewDidLayoutSubviews);
 
+    SEL appearSEL=@selector(viewDidAppear:);
+    Method appearMethod=
+        class_getInstanceMethod(cls,appearSEL);
+    if (appearMethod &&
+        !gOrigSearchContainerViewDidAppear) {
+        XLGHookMethod(
+            cls,
+            appearSEL,
+            NO,
+            (IMP)XLGSearchContainerViewDidAppear,
+            &gOrigSearchContainerViewDidAppear);
+    }
+
     Class treatmentClass=
-        NSClassFromString(@"XDesignSystem.ScrollEdgeTreatment");
+        NSClassFromString(
+            @"XDesignSystem.ScrollEdgeTreatment");
+
     if (treatmentClass &&
         !gOrigSearchScrollEdgeTreatmentLayoutSubviews) {
         gXLGSearchScrollEdgeTreatmentHooked=
@@ -7220,6 +7536,8 @@ static void XLGInstallSearchBlurFix(void) {
                 (IMP)XLGSearchScrollEdgeTreatmentLayoutSubviews,
                 &gOrigSearchScrollEdgeTreatmentLayoutSubviews);
     }
+
+    gXLGSearchBlurFixInstalled=layoutHooked;
 }
 
 static BOOL gXLGGuideRouterHookInstalled = NO;
@@ -7350,14 +7668,14 @@ static void XLiquidGlassInit(void) {
     @autoreleasepool {
         NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
         if (!XLGIsSupportedOS()) {
-            NSLog(@"[XLiquidGlass] 1.0.1 Beta 1 inactive on iOS %ld.%ld.%ld; iOS 26+ required",
+            NSLog(@"[XLiquidGlass] 1.0.1 Beta 2 inactive on iOS %ld.%ld.%ld; iOS 26+ required",
                   (long)version.majorVersion,
                   (long)version.minorVersion,
                   (long)version.patchVersion);
             return;
         }
 
-        NSLog(@"[XLiquidGlass] 1.0.1 Beta 1 loaded: iOS 26+ + NFB localization + credits + X 12.31 Search blur fix");
+        NSLog(@"[XLiquidGlass] 1.0.1 Beta 2 loaded: iOS 26+ + NFB localization + credits + X 12.31 2.0.2 Search blur fixes");
 
         XLGInstallHooks();
         XLGScheduleRetry(0.00);
