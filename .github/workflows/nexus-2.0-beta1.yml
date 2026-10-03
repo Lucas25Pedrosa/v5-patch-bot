@@ -1,0 +1,125 @@
+name: Build Nexus 2.0 Beta 1
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nexus2/**"
+      - "nexus/NexusAvatarFix.m"
+      - "nexus/prepare_cache.py"
+      - "nexus/prepare_icons.py"
+      - "nexus/prepare_oled.py"
+      - "iqface-cache/**"
+      - "iqface-icons/**"
+      - "iqface-oled/**"
+      - "iqface-4in1/Makefile"
+      - ".github/workflows/nexus-2.0-beta1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Prepare Nexus 2.0 Beta 1
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          WORK="$RUNNER_TEMP/nexus-2.0-beta1"
+          rm -rf "$WORK"
+          mkdir -p "$WORK"
+
+          python3 nexus/prepare_cache.py iqface-cache/Tweak.m "$WORK/CacheTweak.m"
+          python3 nexus2/patch_cache_v2.py "$WORK/CacheTweak.m"
+
+          python3 nexus/prepare_icons.py iqface-icons/Tweak.m "$WORK/IconsTweak.m"
+          cp iqface-icons/IconPicker.m "$WORK/IconsPicker.m"
+          python3 nexus2/patch_icon_picker_v2.py "$WORK/IconsPicker.m"
+
+          cp iqface-oled/Tweak.m "$WORK/Tweak.m"
+          (
+            cd "$WORK"
+            python3 "$ROOT/iqface-oled/prepare_oled.py"
+            python3 "$ROOT/iqface-oled/prepare_separator.py"
+            python3 "$ROOT/iqface-oled/finalize_020.py"
+            python3 "$ROOT/iqface-oled/adapt_iqface11.py"
+            python3 "$ROOT/iqface-oled/adapt_iqface11_native_icon_switches.py"
+          )
+          python3 nexus/prepare_oled.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
+          python3 nexus2/prepare_oled_v2.py "$WORK/OLEDTweak.m"
+          rm "$WORK/Tweak.m"
+
+          cp nexus2/Nexus2.m "$WORK/Nexus2.m"
+          python3 nexus2/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
+
+          ! grep -F 'Translation.m' "$WORK/Makefile"
+          ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
+          ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
+          grep -F 'Nexus2.m' "$WORK/Makefile"
+          grep -F 'NexusVersion = @"2.0 Beta 1"' "$WORK/Nexus2.m"
+          grep -F 'NexusHideThreadsPromotions' "$WORK/Nexus2.m"
+          grep -F 'NexusHideSuggestedPages' "$WORK/Nexus2.m"
+          grep -F 'NexusHideStoryPeopleSuggestions' "$WORK/Nexus2.m"
+          grep -F 'FBNavigationBar' "$WORK/Nexus2.m"
+          grep -F 'IQFResolvedLanguage' "$WORK/Nexus2.m"
+          grep -F 'Nexus2TargetBackgroundColor' "$WORK/OLEDTweak.m"
+
+      - name: Build Nexus 2.0 Beta 1
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          WORK="$RUNNER_TEMP/nexus-2.0-beta1"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+
+          mkdir -p "$ROOT/nexus2/artifacts-beta1"
+          rm -f "$ROOT/nexus2/artifacts-beta1"/*
+          DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
+          test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib"
+
+          cd "$ROOT"
+          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
+          file nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/file.txt
+          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/strings.txt || true
+          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/install-name.txt
+
+          grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
+          grep -F 'arm64' nexus2/artifacts-beta1/file.txt
+          grep -F '@rpath/Nexus.dylib' nexus2/artifacts-beta1/install-name.txt
+          grep -F '2.0 Beta 1' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusHideThreadsPromotions' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusHideSuggestedPages' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusHideStoryPeopleSuggestions' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusActivationMode' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusBackgroundMode' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusCustomBackgroundColor' nexus2/artifacts-beta1/strings.txt
+          grep -F 'IQFResolvedLanguage' nexus2/artifacts-beta1/strings.txt
+          grep -F 'FBNavigationBar' nexus2/artifacts-beta1/strings.txt
+          grep -F 'FBMemModelObject' nexus2/artifacts-beta1/strings.txt
+          grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
+
+          if grep -F 'IQFEnhancerLocalizationVersion' nexus2/artifacts-beta1/strings.txt; then
+            echo "Legacy translation enhancer unexpectedly present"
+            exit 1
+          fi
+
+      - name: Upload Nexus 2.0 Beta 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-2.0-Beta1-arm64
+          path: nexus2/artifacts-beta1/
+          if-no-files-found: error
+          retention-days: 90
