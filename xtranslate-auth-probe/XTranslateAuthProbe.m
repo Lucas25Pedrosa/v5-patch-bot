@@ -4,8 +4,8 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateGrokEndpointFix.log";
-static const NSTimeInterval kWindow = 12.0;
+static NSString *const kLogName = @"XTranslateGrokSessionDiffProbe.log";
+static const NSTimeInterval kWindow = 20.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
 static IMP gOrigDataTask = NULL;
@@ -13,11 +13,6 @@ static IMP gOrigDataTaskCompletion = NULL;
 static IMP gOrigUploadData = NULL;
 static IMP gOrigUploadFile = NULL;
 static IMP gOrigResume = NULL;
-static IMP gOrigConcreteDataTask = NULL;
-static IMP gOrigConcreteDataTaskCompletion = NULL;
-static Class gConcreteSessionClass = Nil;
-static NSString *gObservedNativeBearer = nil;
-static NSString *gObservedWebBearer = nil;
 static IMP gOrigNFBSetup = NULL;
 static IMP gOrigNFBAppear = NULL;
 
@@ -111,21 +106,18 @@ static NSString *MaskUID(NSString *uid) {
     return [NSString stringWithFormat:@"…%@", [uid substringFromIndex:uid.length - 4]];
 }
 
-static NSString *OAuthUIDFull(NSURLRequest *r) {
+static NSString *OAuthUID(NSURLRequest *r) {
     NSString *a = Header(r, @"Authorization");
-    if (!a.length) return nil;
+    if (!a.length) return @"-";
     NSRange m = [a rangeOfString:@"oauth_token=\""];
-    if (m.location == NSNotFound) return nil;
+    if (m.location == NSNotFound) return @"-";
     NSString *rest = [a substringFromIndex:NSMaxRange(m)];
     NSRange q = [rest rangeOfString:@"\""];
-    if (q.location == NSNotFound) return nil;
+    if (q.location == NSNotFound) return @"-";
     NSString *token = [rest substringToIndex:q.location];
     NSRange dash = [token rangeOfString:@"-"];
-    return dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
-}
-
-static NSString *OAuthUID(NSURLRequest *r) {
-    return MaskUID(OAuthUIDFull(r));
+    NSString *uid = dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
+    return MaskUID(uid);
 }
 
 static NSString *CookieUID(NSURLRequest *r) {
@@ -189,75 +181,11 @@ static NSString *Operation(NSURLRequest *r) {
     return last.length ? last : path;
 }
 
-static void ObserveBearer(NSURLRequest *r) {
-    NSString *auth=Header(r,@"Authorization");
-    if (![auth hasPrefix:@"Bearer "]) return;
-    NSString *authType=Header(r,@"x-twitter-auth-type");
-    if ([authType isEqualToString:@"OAuth2Session"]) gObservedWebBearer=[auth copy];
-    else if (Header(r,@"Cookie").length || Header(r,@"x-csrf-token").length) gObservedNativeBearer=[auth copy];
-}
-
-static BOOL IsGrokSpecialEndpoint(NSURLRequest *r) {
-    NSString *host=r.URL.host.lowercaseString ?: @"";
-    NSString *path=r.URL.path ?: @"";
-    return ([host isEqualToString:@"grok.x.com"] && [path hasSuffix:@"/2/grok/pass_through_jwt.json"]) ||
-           ([host isEqualToString:@"api.x.com"] && [path hasSuffix:@"/2/grok/translation.json"]);
-}
-
-static BOOL IsCookieLoginUIDFull(NSString *uid) {
-    if (!uid.length) return NO;
-    NSArray *uids=[[NSUserDefaults standardUserDefaults] arrayForKey:@"nfb_cookie_login_userids"];
-    return [uids isKindOfClass:NSArray.class] && [uids containsObject:uid];
-}
-
-static NSDictionary *WebPairForUID(NSString *uid) {
-    if (!uid.length) return nil;
-    NSDictionary *all=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"nfb_web_account_cookies"];
-    id pair=[all isKindOfClass:NSDictionary.class] ? all[uid] : nil;
-    return [pair isKindOfClass:NSDictionary.class] ? pair : nil;
-}
-
-static NSURLRequest *RewriteGrokSpecialIfNeeded(NSURLRequest *request) {
-    if (!IsGrokSpecialEndpoint(request)) return request;
-    NSString *uid=OAuthUIDFull(request);
-    if (!uid.length || !IsCookieLoginUIDFull(uid)) {
-        Log(@"GROK_FIX skip op=%@ uid=%@ reason=not-cookie-login",Operation(request),MaskUID(uid));
-        return request;
-    }
-    NSDictionary *pair=WebPairForUID(uid);
-    NSString *authToken=[pair[@"auth_token"] isKindOfClass:NSString.class] ? pair[@"auth_token"] : nil;
-    NSString *ct0=[pair[@"ct0"] isKindOfClass:NSString.class] ? pair[@"ct0"] : nil;
-    NSString *bearer=gObservedWebBearer ?: gObservedNativeBearer;
-    if (!authToken.length || !ct0.length || !bearer.length) {
-        Log(@"GROK_FIX skip op=%@ uid=%@ reason=missing-context auth=%d ct0=%d bearer=%d",
-            Operation(request),MaskUID(uid),authToken.length>0,ct0.length>0,bearer.length>0);
-        return request;
-    }
-
-    NSMutableURLRequest *out=[request mutableCopy];
-    out.HTTPShouldHandleCookies=NO;
-    [out setValue:nil forHTTPHeaderField:@"Authorization"];
-    [out setValue:nil forHTTPHeaderField:@"authorization"];
-    [out setValue:nil forHTTPHeaderField:@"X-B3-TraceId"];
-    [out setValue:nil forHTTPHeaderField:@"Host"];
-    [out setValue:bearer forHTTPHeaderField:@"authorization"];
-    [out setValue:@"OAuth2Session" forHTTPHeaderField:@"x-twitter-auth-type"];
-    [out setValue:@"yes" forHTTPHeaderField:@"x-twitter-active-user"];
-    [out setValue:ct0 forHTTPHeaderField:@"x-csrf-token"];
-    [out setValue:[NSString stringWithFormat:@"auth_token=%@; ct0=%@; twid=u%%3D%@",
-                   authToken,ct0,uid] forHTTPHeaderField:@"Cookie"];
-
-    Log(@"GROK_FIX rewrite op=%@ uid=%@ host=%@ path=%@ bearerKind=%@ csrf=%d cookies=%@",
-        Operation(out),MaskUID(uid),out.URL.host ?: @"-",out.URL.path ?: @"-",
-        gObservedWebBearer.length?@"web":@"native-fallback",
-        Header(out,@"x-csrf-token").length>0,CookieShape(out));
-    return out;
-}
-
 static NSString *BootstrapTag(NSURLRequest *r) {
     NSString *op=Operation(r);
     if ([op isEqualToString:@"GrokAccountJwt"]) return @"GROK_JWT";
     if ([op isEqualToString:@"ViewerUser"]) return @"VIEWER_USER";
+    if ([op isEqualToString:@"pass_through_jwt.json"]) return @"GROK_PASS_THROUGH";
     return nil;
 }
 
@@ -283,6 +211,19 @@ static NSString *JoinedSortedStrings(NSArray *values) {
     if (!clean.count) return @"-";
     [clean sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
     return [clean componentsJoinedByString:@","];
+}
+
+static void LogDefaultsSnapshot(NSString *phase) {
+    NSDictionary *all=[[NSUserDefaults standardUserDefaults] dictionaryRepresentation];
+    NSMutableArray *keys=[NSMutableArray array];
+    for (NSString *key in all.allKeys) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        NSString *l=key.lowercaseString;
+        if ([l containsString:@"grok"] || [l containsString:@"xai"] || [l containsString:@"jwt"]) {
+            [keys addObject:key];
+        }
+    }
+    Log(@"DEFAULT_KEYS %@ [%@]",phase ?: @"-",JoinedSortedStrings(keys));
 }
 
 static NSString *HeaderNames(NSURLRequest *r) {
@@ -329,17 +270,19 @@ static void LogTaskShape(NSString *phase, NSUInteger seq, NSURLSessionTask *task
 
 static void LogExternalRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
     if (!r) { Log(@"EXT %@ #%lu nil", phase, (unsigned long)seq); return; }
-    Log(@"EXT %@ #%lu label=%@ method=%@ host=%@ path=%@ body=%lu hint=%@",
+    NSString *host=r.URL.host.lowercaseString ?: @"";
+    BOOL grokHost=[host hasSuffix:@"grok.com"] || [host hasSuffix:@"x.ai"];
+    BOOL xaiToken=Header(r,@"x-xai-token-auth").length>0 || Header(r,@"X-XAI-Token-Auth").length>0;
+    Log(@"EXT %@ #%lu label=%@ method=%@ host=%@ path=%@ body=%lu hint=%@ grokHost=%d xaiToken=%d headers=[%@]",
         phase, (unsigned long)seq, gLabel ?: @"-",
         r.HTTPMethod ?: @"GET",
         r.URL.host ?: @"-",
         r.URL.path ?: @"-",
         (unsigned long)r.HTTPBody.length,
-        KeywordHint(r));
+        KeywordHint(r),grokHost,xaiToken,grokHost?HeaderNames(r):@"-");
 }
 
 static void LogRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
-    if (r) ObserveBearer(r);
     if (!r) { Log(@"REQ %@ #%lu nil", phase, (unsigned long)seq); return; }
     if (!IsXHost(r)) { LogExternalRequest(phase, seq, r); return; }
     Log(@"REQ %@ #%lu label=%@ method=%@ host=%@ op=%@ path=%@ auth=%@ oauthUID=%@ authTypeHdr=%@ csrf=%d cookies=%@ cookieUID=%@ xtid=%d body=%lu hint=%@",
@@ -486,50 +429,6 @@ static NSURLSessionUploadTask *ProbeUploadFile(NSURLSession *self, SEL _cmd, NSU
     return task;
 }
 
-static NSURLSessionDataTask *ConcreteDataTask(NSURLSession *self, SEL _cmd, NSURLRequest *request) {
-    if (!gOrigConcreteDataTask) return nil;
-    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
-    if (effective != request) {
-        NSUInteger seq=++gReqSeq;
-        LogRequest(@"GROK_FIX_IN",seq,request);
-        LogRequest(@"GROK_FIX_OUT",seq,effective);
-        NSURLSessionDataTask *task=((id(*)(id,SEL,id))gOrigConcreteDataTask)(self,_cmd,effective);
-        AttachTask(task,seq);
-        return task;
-    }
-    return ((id(*)(id,SEL,id))gOrigConcreteDataTask)(self,_cmd,request);
-}
-
-static NSURLSessionDataTask *ConcreteDataTaskCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id completion) {
-    if (!gOrigConcreteDataTaskCompletion) return nil;
-    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
-    if (effective != request) {
-        NSUInteger seq=++gReqSeq;
-        LogRequest(@"GROK_FIX_IN",seq,request);
-        LogRequest(@"GROK_FIX_OUT",seq,effective);
-        NSURLSessionDataTask *task=((id(*)(id,SEL,id,id))gOrigConcreteDataTaskCompletion)(self,_cmd,effective,completion);
-        AttachTask(task,seq);
-        return task;
-    }
-    return ((id(*)(id,SEL,id,id))gOrigConcreteDataTaskCompletion)(self,_cmd,request,completion);
-}
-
-static void InstallConcreteSessionHooks(void) {
-    if (gConcreteSessionClass) return;
-    for (NSString *name in @[@"__NSURLSessionLocal",@"__NSCFURLSession"]) {
-        Class c=NSClassFromString(name);
-        if (!c) continue;
-        BOOL a=Hook(c,@selector(dataTaskWithRequest:),(IMP)ConcreteDataTask,&gOrigConcreteDataTask);
-        BOOL b=Hook(c,@selector(dataTaskWithRequest:completionHandler:),(IMP)ConcreteDataTaskCompletion,&gOrigConcreteDataTaskCompletion);
-        if (a || b) {
-            gConcreteSessionClass=c;
-            Log(@"HOOKS concreteSession=1 class=%@ data=%d completion=%d",name,a,b);
-            return;
-        }
-    }
-    Log(@"HOOKS concreteSession=0");
-}
-
 static void ProbeResume(NSURLSessionTask *self, SEL _cmd) {
     NSDictionary *m=MetaForTask(self);
     NSURLRequest *r=self.currentRequest ?: self.originalRequest;
@@ -563,8 +462,10 @@ static void Arm(NSString *label) {
     gArmedUntil=NSDate.date.timeIntervalSince1970+kWindow;
     Log(@"========== CAPTURE %@ BEGIN %.0fs ==========",gLabel,kWindow);
     LogAccountState();
+    LogDefaultsSnapshot([NSString stringWithFormat:@"%@_BEGIN",gLabel]);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(kWindow*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         if ([gLabel isEqualToString:label] && !Armed()) {
+            LogDefaultsSnapshot([NSString stringWithFormat:@"%@_END",label]);
             Log(@"========== CAPTURE %@ END ==========",label);
         }
     });
@@ -573,32 +474,32 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Endpoint Fix"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Session Diff"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
-- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Tap Diff":@"Relatório"; }
+- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Sessão Grok":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Beta 1 reescreve somente pass_through_jwt.json e translation.json de contas Web Login. Teste WEB_FAIL em um post novo.";
-    return @"O restante do tráfego não é alterado. O log não expõe valores de tokens, cookies ou texto do post.";
+    if (s==0) return @"Use a MESMA conta Web Login. Primeiro capture ANTES, tente abrir o Grok/traduzir. Depois faça o login interno do Grok, capture DEPOIS e abra o Grok novamente. Cada janela dura 20 s.";
+    return @"Read-only. Registra status do bootstrap, presença (não o valor) do header de sessão XAI e nomes de chaves locais relacionadas a Grok/XAI/JWT.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
     static NSString *rid=@"XTAPCell";
     UITableViewCell *c=[t dequeueReusableCellWithIdentifier:rid];
     if (!c) c=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:rid];
     c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar LEGACY_OK"; c.detailTextLabel.text=@"12 s — conta antiga onde funciona"; }
-    else if (i.section==0) { c.textLabel.text=@"Capturar WEB_FAIL"; c.detailTextLabel.text=@"12 s — conta Web Login onde falha"; }
-    else if (i.row==0) { c.textLabel.text=@"Copiar Tap Diff"; c.detailTextLabel.text=kLogName; }
+    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar ANTES"; c.detailTextLabel.text=@"20 s — Web Login com Grok ainda quebrado"; }
+    else if (i.section==0) { c.textLabel.text=@"Capturar DEPOIS"; c.detailTextLabel.text=@"20 s — após o login interno do Grok"; }
+    else if (i.row==0) { c.textLabel.text=@"Copiar Session Diff"; c.detailTextLabel.text=kLogName; }
     else { c.textLabel.text=@"Limpar relatório"; c.detailTextLabel.text=@"Apaga as capturas anteriores"; }
     return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)i {
     [t deselectRowAtIndexPath:i animated:YES];
     if (i.section==0) {
-        NSString *label=i.row==0?@"LEGACY_OK":@"WEB_FAIL";
+        NSString *label=i.row==0?@"ANTES_LOGIN_GROK":@"DEPOIS_LOGIN_GROK";
         Arm(label);
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Endpoint Fix"
-            message:[NSString stringWithFormat:@"%@ armado por 12 segundos. Feche este aviso e toque imediatamente em “Traduzir post” no MESMO post.",label]
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Session Diff"
+            message:[NSString stringWithFormat:@"%@ armado por 20 segundos. Feche o aviso e use o Grok normalmente durante a janela.",label]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
@@ -607,7 +508,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Endpoint Fix"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Session Diff"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -629,7 +530,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Grok Endpoint Fix",@"subtitle":@"Beta 1: corrigir os dois endpoints Grok do Web Login.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Session Diff",@"subtitle":@"Comparar a sessão antes/depois do login interno do Grok.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -658,7 +559,7 @@ static void InstallNFB(void) {
     gNFBHooked=a||b;
     Log(@"HOOKS nfb=%d",gNFBHooked);
 }
-static void InstallAll(void) { InstallNetworkHooks(); InstallConcreteSessionHooks(); InstallNFB(); }
+static void InstallAll(void) { InstallNetworkHooks(); InstallNFB(); }
 static void Retry(NSTimeInterval d) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(d*NSEC_PER_SEC)),dispatch_get_main_queue(),^{ InstallAll(); });
 }
@@ -666,8 +567,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Endpoint Fix 0.9.0 Beta 1 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-endpoint-webauth-beta1 no-secrets",
+        Log(@"========== Grok Session Diff Probe 0.10.0 Beta 1 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-session-before-after-read-only no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
@@ -675,5 +576,3 @@ static void Init(void) {
         for (NSNumber *n in @[@0.05,@0.2,@0.5,@1.0,@2.0,@4.0]) Retry(n.doubleValue);
     }
 }
-
-// Build trigger: Grok Endpoint Fix 0.9 Beta 1
