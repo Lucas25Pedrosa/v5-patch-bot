@@ -542,8 +542,12 @@ static void NXTryInstallIQFaceOLEDCompatibility(void) {
     NXIQFaceOLEDCompatAttempts++;
 
     NXMSHookFunctionType hookFunction =
-        (NXMSHookFunctionType)dlsym(RTLD_DEFAULT, "MSHookFunction");
+        (NXMSHookFunctionType)NXFindSymbol("MSHookFunction");
     NXIQFaceOLEDHookFunctionAvailable = hookFunction != NULL;
+
+    // Disable the original iQFace OLED preference as early as possible.
+    // This is intentionally separate from the Nexus OLED preference.
+    NXSetIQFBool(NXIQFaceOLEDPreferenceKey(), NO);
 
     void *enabled = NXFindSymbol("IQFOLEDEnabled");
     void *refresh = NXFindSymbol("IQFRefreshOLED");
@@ -2060,8 +2064,12 @@ static void Nexus2Initialize(void) {
         NXEvents=[NSMutableArray array];
         NXEvent(@"Nexus 2.0 Beta 4 loaded");
 
+        // Try immediately in the constructor. If iQFace is already mapped this
+        // neutralizes its OLED functions before normal UI startup. The helper
+        // schedules retries when iQFace/ElleKit is not available yet.
+        NXTryInstallIQFaceOLEDCompatibility();
+
         dispatch_async(dispatch_get_main_queue(), ^{
-            NXTryInstallIQFaceOLEDCompatibility();
             NXTryInstallSettingsHooks();
 
             if (NXLogoModeSelected()) {
