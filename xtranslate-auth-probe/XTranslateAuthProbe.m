@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateGrokPassThroughProbe.log";
+static NSString *const kLogName = @"XTranslateGrokPrivateFactoryProbe.log";
 static const NSTimeInterval kWindow = 15.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
@@ -13,6 +13,9 @@ static IMP gOrigDataTaskCompletion = NULL;
 static IMP gOrigUploadData = NULL;
 static IMP gOrigUploadFile = NULL;
 static IMP gOrigResume = NULL;
+static IMP gOrigPrivateDataTaskDelegate = NULL;
+static IMP gOrigPrivateDataTaskDelegateCompletion = NULL;
+static IMP gOrigDataTaskUniqueIdentifier = NULL;
 static IMP gOrigNFBSetup = NULL;
 static IMP gOrigNFBAppear = NULL;
 
@@ -412,6 +415,37 @@ static NSURLSessionUploadTask *ProbeUploadFile(NSURLSession *self, SEL _cmd, NSU
     return task;
 }
 
+static BOOL IsGrokRESTRequest(NSURLRequest *r) {
+    NSString *host=r.URL.host.lowercaseString ?: @"";
+    NSString *path=r.URL.path ?: @"";
+    return ([host isEqualToString:@"api.x.com"] || [host isEqualToString:@"grok.x.com"]) &&
+           [path hasPrefix:@"/2/grok/"];
+}
+
+static NSURLSessionDataTask *PrivateDataTaskDelegate(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate) {
+    if (IsGrokRESTRequest(request)) {
+        Log(@"PRIVATE_FACTORY selector=_dataTaskWithRequest:delegate: op=%@ sessionClass=%@ delegateClass=%@",
+            Operation(request),NSStringFromClass(self.class),delegate?NSStringFromClass([delegate class]):@"nil");
+    }
+    return ((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,request,delegate);
+}
+
+static NSURLSessionDataTask *PrivateDataTaskDelegateCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate, id completion) {
+    if (IsGrokRESTRequest(request)) {
+        Log(@"PRIVATE_FACTORY selector=_dataTaskWithRequest:delegate:completionHandler: op=%@ sessionClass=%@ delegateClass=%@ completion=%d",
+            Operation(request),NSStringFromClass(self.class),delegate?NSStringFromClass([delegate class]):@"nil",completion!=nil);
+    }
+    return ((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,request,delegate,completion);
+}
+
+static NSURLSessionDataTask *DataTaskUniqueIdentifier(NSURLSession *self, SEL _cmd, NSURLRequest *request, id identifier) {
+    if (IsGrokRESTRequest(request)) {
+        Log(@"PRIVATE_FACTORY selector=dataTaskWithRequest:uniqueIdentifier: op=%@ sessionClass=%@ identifierClass=%@",
+            Operation(request),NSStringFromClass(self.class),identifier?NSStringFromClass([identifier class]):@"nil");
+    }
+    return ((id(*)(id,SEL,id,id))gOrigDataTaskUniqueIdentifier)(self,_cmd,request,identifier);
+}
+
 static void ProbeResume(NSURLSessionTask *self, SEL _cmd) {
     NSDictionary *m=MetaForTask(self);
     NSURLRequest *r=self.currentRequest ?: self.originalRequest;
@@ -473,6 +507,9 @@ static void InstallNetworkHooks(void) {
     any |= Hook(NSURLSession.class,@selector(uploadTaskWithRequest:fromData:),(IMP)ProbeUploadData,&gOrigUploadData);
     any |= Hook(NSURLSession.class,@selector(uploadTaskWithRequest:fromFile:),(IMP)ProbeUploadFile,&gOrigUploadFile);
     any |= Hook(NSURLSessionTask.class,@selector(resume),(IMP)ProbeResume,&gOrigResume);
+    any |= Hook(NSURLSession.class,NSSelectorFromString(@"_dataTaskWithRequest:delegate:"),(IMP)PrivateDataTaskDelegate,&gOrigPrivateDataTaskDelegate);
+    any |= Hook(NSURLSession.class,NSSelectorFromString(@"_dataTaskWithRequest:delegate:completionHandler:"),(IMP)PrivateDataTaskDelegateCompletion,&gOrigPrivateDataTaskDelegateCompletion);
+    any |= Hook(NSURLSession.class,NSSelectorFromString(@"dataTaskWithRequest:uniqueIdentifier:"),(IMP)DataTaskUniqueIdentifier,&gOrigDataTaskUniqueIdentifier);
     gHooked=any;
     Log(@"HOOKS network=%d",gHooked);
 }
@@ -492,12 +529,12 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Pass-Through Probe"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Private Factory Probe"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?1:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Grok":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Arme na conta Web Login e abra o Grok/Traduzir post. A probe também lista apenas os seletores task/request das três classes de NSURLSession envolvidas.";
+    if (s==0) return @"Arme na conta Web Login e toque em Traduzir post. A probe marca somente qual factory privado criou a task Grok e a classe do delegate.";
     return @"Read-only. Sem valores de tokens/cookies e sem varredura global de classes.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
@@ -515,7 +552,7 @@ static void Arm(NSString *label) {
     if (i.section==0) {
         NSString *label=@"WEB_GROK";
         Arm(label);
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Pass-Through Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Probe"
             message:@"WEB_GROK armado por 15 segundos. Feche e abra o Grok ou toque em “Traduzir post” em um post novo."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -525,7 +562,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Pass-Through Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Probe"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -547,7 +584,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Grok Pass-Through Probe",@"subtitle":@"Descobrir a porta de criação das tasks Grok que escapam do NFB.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Private Factory Probe",@"subtitle":@"Identificar o selector privado exato usado pelas tasks Grok.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -584,8 +621,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Pass-Through Probe 0.10.0 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-passthrough-factory-read-only no-secrets",
+        Log(@"========== Grok Private Factory Probe 0.11.0 Beta 1 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-private-factory-confirmation-read-only no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
