@@ -4,8 +4,8 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateTapDiffProbe.log";
-static const NSTimeInterval kWindow = 12.0;
+static NSString *const kLogName = @"XTranslateGrokPassThroughProbe.log";
+static const NSTimeInterval kWindow = 15.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
 static IMP gOrigDataTask = NULL;
@@ -428,6 +428,43 @@ static void ProbeResume(NSURLSessionTask *self, SEL _cmd) {
     if (gOrigResume) ((void(*)(id,SEL))gOrigResume)(self,_cmd);
 }
 
+static BOOL SelectorLooksRelevant(NSString *name) {
+    NSString *n=name.lowercaseString ?: @"";
+    return [n containsString:@"task"] || [n containsString:@"request"] ||
+           [n containsString:@"resume"] || [n containsString:@"session"];
+}
+
+static void DumpRelevantMethodsForClassName(NSString *className) {
+    Class c=NSClassFromString(className);
+    if (!c) {
+        Log(@"FACTORY class=%@ missing",className);
+        return;
+    }
+    for (Class k=c; k && k!=NSObject.class; k=class_getSuperclass(k)) {
+        unsigned int count=0;
+        Method *methods=class_copyMethodList(k,&count);
+        NSMutableArray *rows=[NSMutableArray array];
+        for (unsigned int i=0;i<count;i++) {
+            SEL sel=method_getName(methods[i]);
+            NSString *name=NSStringFromSelector(sel);
+            if (!SelectorLooksRelevant(name)) continue;
+            const char *enc=method_getTypeEncoding(methods[i]);
+            [rows addObject:[NSString stringWithFormat:@"%@|%@",name,enc?@(enc):@"?"]];
+        }
+        if (methods) free(methods);
+        [rows sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+        Log(@"FACTORY class=%@ owner=%@ count=%lu",className,NSStringFromClass(k),(unsigned long)rows.count);
+        for (NSString *row in rows) Log(@"FACTORY_METHOD class=%@ owner=%@ %@",className,NSStringFromClass(k),row);
+    }
+}
+
+static void DumpFocusedTaskFactories(void) {
+    Log(@"========== FOCUSED TASK FACTORIES ==========");
+    for (NSString *name in @[@"__NSURLSessionLocal",@"__NSCFURLSession",@"__NSCFLocalDataTask"]) {
+        DumpRelevantMethodsForClassName(name);
+    }
+}
+
 static void InstallNetworkHooks(void) {
     if (gHooked) return;
     BOOL any=NO;
@@ -455,32 +492,31 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Translate Tap Diff"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Pass-Through Probe"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
-- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
-- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Tap Diff":@"Relatório"; }
+- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?1:2; }
+- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Grok":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Em cada conta, arme a captura, feche o aviso e toque imediatamente em “Traduzir post”. São 12 s. Faça LEGACY_OK e WEB_FAIL no mesmo post.";
-    return @"Read-only. Registra endpoint, status, classe da NSURLSessionTask e somente NOMES de headers/parâmetros/chaves; nunca valores de tokens, cookies ou texto do post.";
+    if (s==0) return @"Arme na conta Web Login e abra o Grok/Traduzir post. A probe também lista apenas os seletores task/request das três classes de NSURLSession envolvidas.";
+    return @"Read-only. Sem valores de tokens/cookies e sem varredura global de classes.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
     static NSString *rid=@"XTAPCell";
     UITableViewCell *c=[t dequeueReusableCellWithIdentifier:rid];
     if (!c) c=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:rid];
     c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar LEGACY_OK"; c.detailTextLabel.text=@"12 s — conta antiga onde funciona"; }
-    else if (i.section==0) { c.textLabel.text=@"Capturar WEB_FAIL"; c.detailTextLabel.text=@"12 s — conta Web Login onde falha"; }
-    else if (i.row==0) { c.textLabel.text=@"Copiar Tap Diff"; c.detailTextLabel.text=kLogName; }
+    if (i.section==0) { c.textLabel.text=@"Capturar WEB_GROK"; c.detailTextLabel.text=@"15 s — abra Grok ou toque em Traduzir post"; }
+    else if (i.row==0) { c.textLabel.text=@"Copiar relatório"; c.detailTextLabel.text=kLogName; }
     else { c.textLabel.text=@"Limpar relatório"; c.detailTextLabel.text=@"Apaga as capturas anteriores"; }
     return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)i {
     [t deselectRowAtIndexPath:i animated:YES];
     if (i.section==0) {
-        NSString *label=i.row==0?@"LEGACY_OK":@"WEB_FAIL";
+        NSString *label=@"WEB_GROK";
         Arm(label);
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Translate Tap Diff"
-            message:[NSString stringWithFormat:@"%@ armado por 12 segundos. Feche este aviso e toque imediatamente em “Traduzir post” no MESMO post.",label]
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Pass-Through Probe"
+            message:@"WEB_GROK armado por 15 segundos. Feche e abra o Grok ou toque em “Traduzir post” em um post novo."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
@@ -489,7 +525,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Translate Tap Diff"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Pass-Through Probe"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -511,7 +547,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Translate Tap Diff",@"subtitle":@"Comparar o tráfego exato do toque em Traduzir post.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Pass-Through Probe",@"subtitle":@"Descobrir a porta de criação das tasks Grok que escapam do NFB.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -548,12 +584,13 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Translate Tap Diff 0.8.0 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=tap-diff-read-only no-secrets",
+        Log(@"========== Grok Pass-Through Probe 0.10.0 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-passthrough-factory-read-only no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
         InstallAll();
+        DumpFocusedTaskFactories();
         for (NSNumber *n in @[@0.05,@0.2,@0.5,@1.0,@2.0,@4.0]) Retry(n.doubleValue);
     }
 }
