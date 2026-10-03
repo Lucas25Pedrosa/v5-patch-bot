@@ -5,13 +5,14 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.1";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.1 Beta 2";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
 static NSString * const NXKeyStoryPeople = @"NexusHideStoryPeopleSuggestions";
 static NSString * const NXKeyActivation = @"NexusActivationMode";
 static NSString * const NXKeyOLED = @"iQFaceOLEDEnabled";
+static NSString * const NXKeyIOSFallback = @"NexusOLEDUseIOSFallback";
 static NSString * const NXSettingsChangedNotification = @"NexusSettingsDidChange";
 
 typedef NSString *(*NXResolvedLanguageFunction)(void);
@@ -88,6 +89,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Copied": @"Copiado",
                 @"Change Icon": @"Alterar ícone",
                 @"Feed separators": @"Separadores no feed",
+                @"Use iOS fallback": @"Usar fallback do iOS",
+                @"iOS fallback subtitle": @"Usa o tema do sistema quando o Facebook não permite identificar o modo claro ou escuro.",
                 @"Clear cache": @"Limpar cache",
                 @"Automatic cache clearing": @"Limpar cache automaticamente",
                 @"Disabled": @"Desativado",
@@ -125,6 +128,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Copy diagnostics": @"Copier le diagnostic", @"Refresh": @"Actualiser",
                 @"Capture UI": @"Capturer l’interface", @"Copied": @"Copié",
                 @"Change Icon": @"Changer l’icône", @"Feed separators": @"Séparateurs du fil",
+                @"Use iOS fallback": @"Utiliser le secours iOS",
+                @"iOS fallback subtitle": @"Utilise le thème du système lorsque Facebook ne permet pas d’identifier le mode clair ou sombre.",
                 @"Clear cache": @"Vider le cache", @"Automatic cache clearing": @"Nettoyage automatique du cache",
                 @"Disabled": @"Désactivé", @"Daily": @"Tous les jours", @"Weekly": @"Chaque semaine",
                 @"Monthly": @"Chaque mois", @"Close": @"Fermer", @"Default": @"Par défaut",
@@ -153,6 +158,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Diagnostics": @"Диагностика", @"Copy diagnostics": @"Копировать диагностику",
                 @"Refresh": @"Обновить", @"Capture UI": @"Снять структуру интерфейса", @"Copied": @"Скопировано",
                 @"Change Icon": @"Изменить значок", @"Feed separators": @"Разделители в ленте",
+                @"Use iOS fallback": @"Использовать резерв iOS",
+                @"iOS fallback subtitle": @"Использует системную тему, когда Facebook не позволяет определить светлый или тёмный режим.",
                 @"Clear cache": @"Очистить кэш", @"Automatic cache clearing": @"Автоочистка кэша",
                 @"Disabled": @"Выключено", @"Daily": @"Ежедневно", @"Weekly": @"Еженедельно",
                 @"Monthly": @"Ежемесячно", @"Close": @"Закрыть", @"Default": @"По умолчанию",
@@ -205,6 +212,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Diagnostics": @"Chẩn đoán", @"Copy diagnostics": @"Sao chép chẩn đoán", @"Refresh": @"Làm mới",
                 @"Capture UI": @"Chụp cấu trúc giao diện", @"Copied": @"Đã sao chép",
                 @"Change Icon": @"Đổi biểu tượng", @"Feed separators": @"Dấu phân cách bảng tin",
+                @"Use iOS fallback": @"Dùng dự phòng iOS",
+                @"iOS fallback subtitle": @"Dùng giao diện hệ thống khi Facebook không xác định được chế độ sáng hoặc tối.",
                 @"Clear cache": @"Xóa bộ nhớ đệm", @"Automatic cache clearing": @"Tự động xóa bộ nhớ đệm",
                 @"Disabled": @"Tắt", @"Daily": @"Hàng ngày", @"Weekly": @"Hàng tuần", @"Monthly": @"Hàng tháng",
                 @"Close": @"Đóng", @"Default": @"Mặc định", @"Could not change icon": @"Không thể đổi biểu tượng.",
@@ -258,7 +267,9 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cancel": @"لغو", @"Import completed": @"ورود انجام شد", @"Invalid backup": @"نسخه پشتیبان نامعتبر",
                 @"Diagnostics": @"عیب‌یابی", @"Copy diagnostics": @"کپی عیب‌یابی", @"Refresh": @"تازه‌سازی",
                 @"Capture UI": @"ثبت رابط", @"Copied": @"کپی شد", @"Change Icon": @"تغییر آیکن",
-                @"Feed separators": @"جداکننده‌های فید", @"Clear cache": @"پاک کردن کش",
+                @"Feed separators": @"جداکننده‌های فید",
+                @"Use iOS fallback": @"استفاده از حالت پشتیبان iOS",
+                @"iOS fallback subtitle": @"وقتی Facebook نتواند حالت روشن یا تیره را تشخیص دهد از تم سیستم استفاده می‌کند.", @"Clear cache": @"پاک کردن کش",
                 @"Automatic cache clearing": @"پاک‌سازی خودکار کش", @"Disabled": @"غیرفعال",
                 @"Daily": @"روزانه", @"Weekly": @"هفتگی", @"Monthly": @"ماهانه", @"Close": @"بستن",
                 @"Default": @"پیش‌فرض", @"Could not change icon": @"تغییر آیکن ممکن نشد.",
@@ -286,7 +297,9 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Invalid backup": @"پاڵپشتی نادروست", @"Diagnostics": @"پشکنین",
                 @"Copy diagnostics": @"کۆپیکردنی پشکنین", @"Refresh": @"نوێکردنەوە",
                 @"Capture UI": @"تۆمارکردنی ڕووکار", @"Copied": @"کۆپی کرا", @"Change Icon": @"گۆڕینی ئایکۆن",
-                @"Feed separators": @"جیاکەرەوەکانی فید", @"Clear cache": @"پاککردنەوەی کاش",
+                @"Feed separators": @"جیاکەرەوەکانی فید",
+                @"Use iOS fallback": @"بەکارهێنانی fallbackی iOS",
+                @"iOS fallback subtitle": @"کاتێک Facebook ناتوانێت دۆخی ڕوون یان تاریک بناسێت، ڕووکاری سیستەم بەکاردێنێت.", @"Clear cache": @"پاککردنەوەی کاش",
                 @"Automatic cache clearing": @"پاککردنەوەی خۆکارانەی کاش", @"Disabled": @"ناچالاک",
                 @"Daily": @"ڕۆژانە", @"Weekly": @"هەفتانە", @"Monthly": @"مانگانە", @"Close": @"داخستن",
                 @"Default": @"بنەڕەتی", @"Could not change icon": @"نەتوانرا ئایکۆن بگۆڕدرێت.",
@@ -486,7 +499,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.1\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.1 Beta 2\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -503,9 +516,10 @@ NSString *Nexus2DiagnosticsText(void) {
      NXStatus(NXSettingsSectionsHook), NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeABICompatible), NXStatus(NXFeedTreeHookInstalled),
      NXStatus(NXFeedPandoABICompatible), NXStatus(NXFeedPandoHookInstalled),
      NXBool(NXKeyThreads, NO), NXBool(NXKeyPages, NO), NXBool(NXKeyStoryPeople, NO)];
-    [report appendFormat:@"[Appearance]\nOLED enabled: %@\nfeed separators: %@\nengine: run52 legacy OLED\n\n",
+    [report appendFormat:@"[Appearance]\nOLED enabled: %@\nfeed separators: %@\nengine: run52 legacy OLED\niOS fallback: %@\n\n",
      NXStatus(NXOLEDEnabled()),
-     NXStatus(NXIQFBool(@"iQFaceOLEDFeedSeparatorsEnabled", NO))];
+     NXStatus(NXIQFBool(@"iQFaceOLEDFeedSeparatorsEnabled", NO)),
+     NXStatus(NXIQFBool(NXKeyIOSFallback, NO))];
     [report appendString:@"[Events]\n"];
     for (NSString *event in NXEvents ?: @[]) [report appendFormat:@"%@\n", event];
     if (NXCapturedUI.length) [report appendString:NXCapturedUI];
@@ -935,7 +949,7 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
     (void)tableView;
-    return 2;
+    return 3;
 }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView; (void)section;
@@ -959,11 +973,19 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
         cell.imageView.image = [UIImage systemImageNamed:@"circle.lefthalf.filled"];
         toggle.on = NXOLEDEnabled();
         [toggle addTarget:self action:@selector(nx_oledChanged:) forControlEvents:UIControlEventValueChanged];
-    } else {
+    } else if (indexPath.section == 1) {
         cell.textLabel.text = Nexus2Localized(@"Feed separators");
         cell.imageView.image = [UIImage systemImageNamed:@"line.3.horizontal"];
         toggle.on = NXIQFBool(@"iQFaceOLEDFeedSeparatorsEnabled", NO);
         [toggle addTarget:self action:@selector(nx_separatorsChanged:) forControlEvents:UIControlEventValueChanged];
+    } else {
+        cell.textLabel.text = Nexus2Localized(@"Use iOS fallback");
+        cell.detailTextLabel.text = Nexus2Localized(@"iOS fallback subtitle");
+        cell.textLabel.adjustsFontSizeToFitWidth = YES;
+        cell.textLabel.minimumScaleFactor = 0.82;
+        cell.imageView.image = [UIImage systemImageNamed:@"iphone"];
+        toggle.on = NXIQFBool(NXKeyIOSFallback, NO);
+        [toggle addTarget:self action:@selector(nx_iosFallbackChanged:) forControlEvents:UIControlEventValueChanged];
     }
     cell.accessoryView = toggle;
     return cell;
@@ -973,6 +995,9 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 }
 - (void)nx_separatorsChanged:(UISwitch *)sender {
     NXSetIQFBool(@"iQFaceOLEDFeedSeparatorsEnabled", sender.isOn);
+}
+- (void)nx_iosFallbackChanged:(UISwitch *)sender {
+    NXSetIQFBool(NXKeyIOSFallback, sender.isOn);
 }
 @end
 
@@ -1108,7 +1133,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.1",
+             @"nexusVersion": @"2.1 Beta 2",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1511,7 +1536,7 @@ static id NXCreateVersionSetting(void) {
     id setting = NXStaticSetting(@"Nexus", nil, @"point.3.connected.trianglepath.dotted");
     if (!setting) return nil;
     @try {
-        [setting setValue:@"v2.1" forKey:@"valueText"];
+        [setting setValue:@"v2.1 Beta 2" forKey:@"valueText"];
     } @catch (__unused NSException *exception) {
     }
     return setting;
@@ -1780,7 +1805,7 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.1 loaded");
+        NXEvent(@"Nexus 2.1 Beta 2 loaded");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
