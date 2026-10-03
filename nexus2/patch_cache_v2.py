@@ -25,6 +25,12 @@ s, n = re.subn(
     if ([english isEqualToString:@"Clear cache automatically"]) {
         return Nexus2Localized(@"Automatic cache clearing");
     }
+    if ([english isEqualToString:@"✓ Cache cleared"]) {
+        return Nexus2Localized(@"Cache cleared");
+    }
+    if ([english isEqualToString:@"%@ freed"]) {
+        return [NSString stringWithFormat:@"%%@ %@", Nexus2Localized(@"freed")];
+    }
     return Nexus2Localized(english);
 }''',
     s, count=1, flags=re.S
