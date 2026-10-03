@@ -57,7 +57,7 @@ jobs:
             python3 "$ROOT/iqface-oled/adapt_iqface11.py"
             python3 "$ROOT/iqface-oled/adapt_iqface11_native_icon_switches.py"
           )
-          python3 nexus/prepare_oled_102.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
+          python3 nexus2/prepare_oled_102_compat.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
           python3 nexus2/adapt_oled_102_modes.py "$WORK/OLEDTweak.m"
           rm "$WORK/Tweak.m"
 
