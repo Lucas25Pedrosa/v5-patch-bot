@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 2 R6";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -67,7 +67,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"OLED": @"OLED",
                 @"Custom color": @"Cor personalizada",
                 @"Background color": @"Cor do fundo",
-                @"Dark mode required": @"Requer o Modo Escuro do Facebook ativado.",
+                @"Dark mode required": @"O modo OLED do Nexus só funcionará se o Modo Escuro estiver definido como Sistema nas configurações do Facebook.",
                 @"Light color warning": @"Esta cor pode reduzir o contraste de textos e ícones no Modo Escuro.",
                 @"Feed filters": @"Filtros do feed",
                 @"Hide Threads promotion": @"Ocultar promoção do Threads",
@@ -118,7 +118,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Appearance": @"Apparence", @"Background appearance": @"Arrière-plan",
                 @"Standard": @"Standard", @"OLED": @"OLED", @"Custom color": @"Couleur personnalisée",
                 @"Background color": @"Couleur d’arrière-plan",
-                @"Dark mode required": @"Nécessite le mode sombre de Facebook.",
+                @"Dark mode required": @"Le mode OLED de Nexus fonctionne uniquement si le mode sombre est réglé sur Système dans les paramètres de Facebook.",
                 @"Light color warning": @"Cette couleur peut réduire le contraste du texte et des icônes en mode sombre.",
                 @"Feed filters": @"Filtres du fil", @"Hide Threads promotion": @"Masquer la promotion Threads",
                 @"Hide suggested pages": @"Masquer les pages suggérées",
@@ -151,7 +151,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
             @"ru": @{
                 @"Appearance": @"Оформление", @"Background appearance": @"Фон",
                 @"Standard": @"Стандартный", @"OLED": @"OLED", @"Custom color": @"Свой цвет",
-                @"Background color": @"Цвет фона", @"Dark mode required": @"Требуется тёмный режим Facebook.",
+                @"Background color": @"Цвет фона", @"Dark mode required": @"OLED-режим Nexus работает только если тёмная тема в настройках Facebook установлена на «Системная».",
                 @"Light color warning": @"Светлый цвет может снизить контраст текста и значков.",
                 @"Feed filters": @"Фильтры ленты", @"Hide Threads promotion": @"Скрывать рекламу Threads",
                 @"Hide suggested pages": @"Скрывать рекомендуемые страницы",
@@ -182,7 +182,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
             @"zh": @{
                 @"Appearance": @"外观", @"Background appearance": @"背景外观",
                 @"Standard": @"标准", @"OLED": @"OLED", @"Custom color": @"自定义颜色",
-                @"Background color": @"背景颜色", @"Dark mode required": @"需要启用 Facebook 深色模式。",
+                @"Background color": @"背景颜色", @"Dark mode required": @"仅当 Facebook 设置中的深色模式设为“跟随系统”时，Nexus OLED 模式才会生效。",
                 @"Light color warning": @"此颜色可能会降低深色模式下文字和图标的对比度。",
                 @"Feed filters": @"动态筛选", @"Hide Threads promotion": @"隐藏 Threads 推广",
                 @"Hide suggested pages": @"隐藏推荐主页", @"Hide people suggestions in Stories": @"隐藏 Stories 中的好友推荐",
@@ -209,7 +209,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
             @"vi": @{
                 @"Appearance": @"Giao diện", @"Background appearance": @"Giao diện nền",
                 @"Standard": @"Mặc định", @"OLED": @"OLED", @"Custom color": @"Màu tùy chỉnh",
-                @"Background color": @"Màu nền", @"Dark mode required": @"Yêu cầu bật Chế độ tối của Facebook.",
+                @"Background color": @"Màu nền", @"Dark mode required": @"Chế độ OLED của Nexus chỉ hoạt động khi Chế độ tối trong cài đặt Facebook được đặt thành Hệ thống.",
                 @"Light color warning": @"Màu này có thể làm giảm độ tương phản của chữ và biểu tượng.",
                 @"Feed filters": @"Bộ lọc bảng tin", @"Hide Threads promotion": @"Ẩn quảng bá Threads",
                 @"Hide suggested pages": @"Ẩn Trang được đề xuất",
@@ -239,7 +239,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
             @"ar": @{
                 @"Appearance": @"المظهر", @"Background appearance": @"مظهر الخلفية",
                 @"Standard": @"افتراضي", @"OLED": @"OLED", @"Custom color": @"لون مخصص",
-                @"Background color": @"لون الخلفية", @"Dark mode required": @"يتطلب تفعيل الوضع الداكن في Facebook.",
+                @"Background color": @"لون الخلفية", @"Dark mode required": @"يعمل وضع OLED في Nexus فقط عند ضبط الوضع الداكن على «النظام» في إعدادات Facebook.",
                 @"Light color warning": @"قد يقلل هذا اللون من تباين النصوص والأيقونات في الوضع الداكن.",
                 @"Feed filters": @"مرشحات الموجز", @"Hide Threads promotion": @"إخفاء ترويج Threads",
                 @"Hide suggested pages": @"إخفاء الصفحات المقترحة",
@@ -269,7 +269,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
             @"fa": @{
                 @"Appearance": @"ظاهر", @"Background appearance": @"ظاهر پس‌زمینه",
                 @"Standard": @"استاندارد", @"OLED": @"OLED", @"Custom color": @"رنگ دلخواه",
-                @"Background color": @"رنگ پس‌زمینه", @"Dark mode required": @"نیازمند فعال بودن حالت تاریک Facebook است.",
+                @"Background color": @"رنگ پس‌زمینه", @"Dark mode required": @"حالت OLED نکسوس فقط زمانی کار می‌کند که حالت تاریک در تنظیمات Facebook روی «سیستم» باشد.",
                 @"Light color warning": @"این رنگ ممکن است کنتراست متن و نمادها را کاهش دهد.",
                 @"Feed filters": @"فیلترهای فید", @"Hide Threads promotion": @"مخفی کردن تبلیغ Threads",
                 @"Hide suggested pages": @"مخفی کردن صفحات پیشنهادی",
@@ -299,7 +299,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
             @"ckb": @{
                 @"Appearance": @"ڕووکار", @"Background appearance": @"ڕووکاری پاشبنەما",
                 @"Standard": @"بنەڕەتی", @"OLED": @"OLED", @"Custom color": @"ڕەنگی تایبەت",
-                @"Background color": @"ڕەنگی پاشبنەما", @"Dark mode required": @"پێویستی بە چالاکبوونی دۆخی تاریکی Facebook هەیە.",
+                @"Background color": @"ڕەنگی پاشبنەما", @"Dark mode required": @"دۆخی OLEDی Nexus تەنها کاتێک کار دەکات کە دۆخی تاریک لە ڕێکخستنەکانی Facebook لەسەر «سیستەم» بێت.",
                 @"Light color warning": @"ئەم ڕەنگە لەوانەیە کۆنتراستی دەق و ئایکۆن کەم بکات.",
                 @"Feed filters": @"پاڵێوەرەکانی فید", @"Hide Threads promotion": @"شاردنەوەی بانگەشەی Threads",
                 @"Hide suggested pages": @"شاردنەوەی پەڕە پێشنیارکراوەکان",
@@ -484,7 +484,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 2 R6\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -1137,7 +1137,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.0 Beta 2 R6",
+             @"nexusVersion": @"2.0",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1537,7 +1537,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0 Beta 2 R6", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1803,7 +1803,7 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 2 R6 loaded");
+        NXEvent(@"Nexus 2.0 loaded");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
