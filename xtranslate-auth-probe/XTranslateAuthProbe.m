@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateGrokPrivateFactoryProbe.log";
+static NSString *const kLogName = @"XTranslateGrokPrivateFactoryFix.log";
 static const NSTimeInterval kWindow = 15.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
@@ -24,6 +24,7 @@ static BOOL gNFBHooked = NO;
 static NSTimeInterval gArmedUntil = 0;
 static NSString *gLabel = nil;
 static NSUInteger gReqSeq = 0;
+static NSString *gCapturedNativeBearer = nil;
 static char kTaskMetaKey;
 
 static NSString *MaskedUID(id account);
@@ -109,18 +110,42 @@ static NSString *MaskUID(NSString *uid) {
     return [NSString stringWithFormat:@"…%@", [uid substringFromIndex:uid.length - 4]];
 }
 
-static NSString *OAuthUID(NSURLRequest *r) {
+static NSString *OAuthUIDFull(NSURLRequest *r) {
     NSString *a = Header(r, @"Authorization");
-    if (!a.length) return @"-";
+    if (!a.length) return nil;
     NSRange m = [a rangeOfString:@"oauth_token=\""];
-    if (m.location == NSNotFound) return @"-";
+    if (m.location == NSNotFound) return nil;
     NSString *rest = [a substringFromIndex:NSMaxRange(m)];
     NSRange q = [rest rangeOfString:@"\""];
-    if (q.location == NSNotFound) return @"-";
+    if (q.location == NSNotFound) return nil;
     NSString *token = [rest substringToIndex:q.location];
     NSRange dash = [token rangeOfString:@"-"];
-    NSString *uid = dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
-    return MaskUID(uid);
+    return dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
+}
+
+static NSString *OAuthUID(NSURLRequest *r) {
+    return MaskUID(OAuthUIDFull(r));
+}
+
+static BOOL IsCookieLoginUID(NSString *uid) {
+    if (!uid.length) return NO;
+    NSArray *uids = [[NSUserDefaults standardUserDefaults] arrayForKey:@"nfb_cookie_login_userids"];
+    return [uids isKindOfClass:NSArray.class] && [uids containsObject:uid];
+}
+
+static NSDictionary *CachedWebPair(NSString *uid) {
+    if (!uid.length) return nil;
+    NSDictionary *all = [[NSUserDefaults standardUserDefaults] dictionaryForKey:@"nfb_web_account_cookies"];
+    id pair = [all isKindOfClass:NSDictionary.class] ? all[uid] : nil;
+    return [pair isKindOfClass:NSDictionary.class] ? pair : nil;
+}
+
+static void ObserveNativeBearer(NSURLRequest *r) {
+    NSString *auth = Header(r, @"Authorization");
+    if (!auth.length) return;
+    if (![auth.lowercaseString hasPrefix:@"bearer "]) return;
+    if (Header(r, @"x-twitter-auth-type").length) return;
+    gCapturedNativeBearer = [auth copy];
 }
 
 static NSString *CookieUID(NSURLRequest *r) {
@@ -363,6 +388,7 @@ static void AttachTask(NSURLSessionTask *task, NSUInteger seq) {
 
 static NSURLSessionDataTask *ProbeDataTask(NSURLSession *self, SEL _cmd, NSURLRequest *request) {
     if (!gOrigDataTask) return nil;
+    ObserveNativeBearer(request);
     BOOL special=BootstrapTag(request).length > 0;
     if (!Armed() && !special)
         return ((id(*)(id,SEL,id))gOrigDataTask)(self,_cmd,request);
@@ -378,6 +404,7 @@ static NSURLSessionDataTask *ProbeDataTask(NSURLSession *self, SEL _cmd, NSURLRe
 
 static NSURLSessionDataTask *ProbeDataTaskCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id completion) {
     if (!gOrigDataTaskCompletion) return nil;
+    ObserveNativeBearer(request);
     BOOL special=BootstrapTag(request).length > 0;
     if (!Armed() && !special)
         return ((id(*)(id,SEL,id,id))gOrigDataTaskCompletion)(self,_cmd,request,completion);
@@ -416,33 +443,81 @@ static NSURLSessionUploadTask *ProbeUploadFile(NSURLSession *self, SEL _cmd, NSU
 }
 
 static BOOL IsGrokRESTRequest(NSURLRequest *r) {
-    NSString *host=r.URL.host.lowercaseString ?: @"";
-    NSString *path=r.URL.path ?: @"";
-    return ([host isEqualToString:@"api.x.com"] || [host isEqualToString:@"grok.x.com"]) &&
-           [path hasPrefix:@"/2/grok/"];
+    NSString *path = r.URL.path ?: @"";
+    return [path hasPrefix:@"/2/grok/"];
+}
+
+static NSURLRequest *RewritePrivateGrokRequestIfNeeded(NSURLRequest *request) {
+    if (!IsGrokRESTRequest(request)) return request;
+
+    NSString *uid = OAuthUIDFull(request);
+    if (!uid.length || !IsCookieLoginUID(uid)) {
+        Log(@"GROK_PRIVATE_FIX skip op=%@ uid=%@ reason=not-web-login",
+            Operation(request), MaskUID(uid));
+        return request;
+    }
+
+    NSDictionary *pair = CachedWebPair(uid);
+    NSString *authToken = [pair[@"auth_token"] isKindOfClass:NSString.class] ? pair[@"auth_token"] : nil;
+    NSString *ct0 = [pair[@"ct0"] isKindOfClass:NSString.class] ? pair[@"ct0"] : nil;
+    if (!authToken.length || !ct0.length || !gCapturedNativeBearer.length) {
+        Log(@"GROK_PRIVATE_FIX skip op=%@ uid=%@ reason=missing-context auth=%d ct0=%d bearer=%d",
+            Operation(request), MaskUID(uid), authToken.length>0, ct0.length>0, gCapturedNativeBearer.length>0);
+        return request;
+    }
+
+    NSMutableURLRequest *out = [request mutableCopy];
+    out.HTTPShouldHandleCookies = NO;
+    [out setValue:nil forHTTPHeaderField:@"Authorization"];
+    [out setValue:nil forHTTPHeaderField:@"authorization"];
+    [out setValue:nil forHTTPHeaderField:@"X-B3-TraceId"];
+    [out setValue:nil forHTTPHeaderField:@"Host"];
+    [out setValue:gCapturedNativeBearer forHTTPHeaderField:@"authorization"];
+    [out setValue:ct0 forHTTPHeaderField:@"x-csrf-token"];
+    [out setValue:[NSString stringWithFormat:@"auth_token=%@; ct0=%@; twid=u%%3D%@",
+                   authToken, ct0, uid]
+forHTTPHeaderField:@"Cookie"];
+
+    Log(@"GROK_PRIVATE_FIX rewrite op=%@ uid=%@ path=%@ auth=%@ csrf=%d cookies=%@",
+        Operation(out), MaskUID(uid), out.URL.path ?: @"-",
+        AuthShape(out), Header(out, @"x-csrf-token").length>0, CookieShape(out));
+    return out;
 }
 
 static NSURLSessionDataTask *PrivateDataTaskDelegate(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate) {
+    ObserveNativeBearer(request);
+    NSURLRequest *effective = RewritePrivateGrokRequestIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq = ++gReqSeq;
+        LogRequest(@"PRIVATE_IN", seq, request);
+        LogRequest(@"PRIVATE_OUT", seq, effective);
+        NSURLSessionDataTask *task = ((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,effective,delegate);
+        AttachTask(task, seq);
+        return task;
+    }
     if (IsGrokRESTRequest(request)) {
-        Log(@"PRIVATE_FACTORY selector=_dataTaskWithRequest:delegate: op=%@ sessionClass=%@ delegateClass=%@",
+        Log(@"PRIVATE_FACTORY pass op=%@ sessionClass=%@ delegateClass=%@",
             Operation(request),NSStringFromClass(self.class),delegate?NSStringFromClass([delegate class]):@"nil");
     }
     return ((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,request,delegate);
 }
 
 static NSURLSessionDataTask *PrivateDataTaskDelegateCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate, id completion) {
-    if (IsGrokRESTRequest(request)) {
-        Log(@"PRIVATE_FACTORY selector=_dataTaskWithRequest:delegate:completionHandler: op=%@ sessionClass=%@ delegateClass=%@ completion=%d",
-            Operation(request),NSStringFromClass(self.class),delegate?NSStringFromClass([delegate class]):@"nil",completion!=nil);
+    ObserveNativeBearer(request);
+    NSURLRequest *effective = RewritePrivateGrokRequestIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq = ++gReqSeq;
+        LogRequest(@"PRIVATE_COMPLETION_IN", seq, request);
+        LogRequest(@"PRIVATE_COMPLETION_OUT", seq, effective);
+        NSURLSessionDataTask *task = ((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,effective,delegate,completion);
+        AttachTask(task, seq);
+        return task;
     }
     return ((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,request,delegate,completion);
 }
 
 static NSURLSessionDataTask *DataTaskUniqueIdentifier(NSURLSession *self, SEL _cmd, NSURLRequest *request, id identifier) {
-    if (IsGrokRESTRequest(request)) {
-        Log(@"PRIVATE_FACTORY selector=dataTaskWithRequest:uniqueIdentifier: op=%@ sessionClass=%@ identifierClass=%@",
-            Operation(request),NSStringFromClass(self.class),identifier?NSStringFromClass([identifier class]):@"nil");
-    }
+    ObserveNativeBearer(request);
     return ((id(*)(id,SEL,id,id))gOrigDataTaskUniqueIdentifier)(self,_cmd,request,identifier);
 }
 
@@ -529,13 +604,13 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Private Factory Probe"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Private Factory Fix"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?1:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Grok":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Arme na conta Web Login e toque em Traduzir post. A probe marca somente qual factory privado criou a task Grok e a classe do delegate.";
-    return @"Read-only. Sem valores de tokens/cookies e sem varredura global de classes.";
+    if (s==0) return @"Arme na conta Web Login e toque em Traduzir post. O fix atua no factory privado antes de __NSURLSessionLocal criar a task.";
+    return @"Reescreve somente /2/grok/ de contas Web Login no factory privado; o log não mostra valores de credenciais.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
     static NSString *rid=@"XTAPCell";
@@ -552,7 +627,7 @@ static void Arm(NSString *label) {
     if (i.section==0) {
         NSString *label=@"WEB_GROK";
         Arm(label);
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Fix"
             message:@"WEB_GROK armado por 15 segundos. Feche e abra o Grok ou toque em “Traduzir post” em um post novo."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -562,7 +637,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Fix"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -584,7 +659,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Grok Private Factory Probe",@"subtitle":@"Identificar o selector privado exato usado pelas tasks Grok.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Private Factory Fix",@"subtitle":@"Corrigir o OAuth placeholder do Grok antes da criação da task.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -621,8 +696,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Private Factory Probe 0.11.0 Beta 1 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-private-factory-confirmation-read-only no-secrets",
+        Log(@"========== Grok Private Factory Fix 0.12.0 Beta 1 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-private-factory-weblogin-fix no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
