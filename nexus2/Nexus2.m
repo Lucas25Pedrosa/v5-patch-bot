@@ -679,7 +679,8 @@ static NSString *NXModelTokens(id object) {
     NSMutableArray<NSString *> *values = [NSMutableArray array];
     [values addObject:NSStringFromClass([object class]) ?: @""];
     NSArray *keys = @[@"category", @"storyBucketType", @"identifier", @"trackingName",
-                      @"name", @"type", @"feedStoryCategory", @"renderType", @"unitType"];
+                      @"name", @"type", @"feedStoryCategory", @"renderType",
+                      @"feedUnitType", @"feed_unit_type", @"inlineUnitType", @"unitType"];
     for (NSString *key in keys) {
         @try {
             id value = [object valueForKey:key];
@@ -904,7 +905,8 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 #pragma mark - Settings manager
 
 static BOOL NXAllowedPreferenceKey(NSString *key) {
-    return [key hasPrefix:@"IQF"] || [key hasPrefix:@"iQFace"] || [key hasPrefix:@"Nexus"] ||
+    return [key hasPrefix:@"_IQFKey"] || [key hasPrefix:@"IQF"] ||
+           [key hasPrefix:@"iQFace"] || [key hasPrefix:@"Nexus"] ||
            [key hasPrefix:@"com.lucas.iqface"];
 }
 
@@ -930,9 +932,12 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
         if (!NXAllowedPreferenceKey(key)) return;
         if ([NSJSONSerialization isValidJSONObject:@[value]]) settings[key] = value;
     }];
-    return @{@"schemaVersion": @1, @"nexusVersion": @"2.0 Beta 1",
+    return @{@"format": @"nexus-settings",
+             @"schemaVersion": @1,
+             @"nexusVersion": @"2.0 Beta 1 R2",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
-             @"createdAt": @([[NSDate date] timeIntervalSince1970]), @"settings": settings};
+             @"createdAt": @([[NSDate date] timeIntervalSince1970]),
+             @"settings": settings};
 }
 - (void)nx_export {
     NSDictionary *payload = [self nx_exportedSettings];
@@ -955,8 +960,15 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     NSURL *url = urls.firstObject; if (!url) return;
     NSData *data = [NSData dataWithContentsOfURL:url];
     NSDictionary *root = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    NSString *format = [root isKindOfClass:NSDictionary.class] && [root[@"format"] isKindOfClass:NSString.class] ? root[@"format"] : nil;
+    NSNumber *schema = [root isKindOfClass:NSDictionary.class] && [root[@"schemaVersion"] isKindOfClass:NSNumber.class] ? root[@"schemaVersion"] : nil;
     NSDictionary *settings = [root isKindOfClass:NSDictionary.class] ? root[@"settings"] : nil;
-    if (![settings isKindOfClass:NSDictionary.class]) { NXShowMessage(self, Nexus2Localized(@"Settings manager"), Nexus2Localized(@"Invalid backup")); return; }
+    BOOL validFormat = format == nil || [format isEqualToString:@"nexus-settings"];
+    BOOL validSchema = schema != nil && schema.integerValue == 1;
+    if (!validFormat || !validSchema || ![settings isKindOfClass:NSDictionary.class]) {
+        NXShowMessage(self, Nexus2Localized(@"Settings manager"), Nexus2Localized(@"Invalid backup"));
+        return;
+    }
     [settings enumerateKeysAndObjectsUsingBlock:^(NSString *key, id value, BOOL *stop) {
         (void)stop; if (NXAllowedPreferenceKey(key)) [NSUserDefaults.standardUserDefaults setObject:value forKey:key];
     }];
@@ -1036,6 +1048,34 @@ static id NXCreateSeparatorSetting(void) {
     return ((Factory)(void *)objc_msgSend)(settingClass, selector, Nexus2Localized(@"Feed separators"), nil, @"iQFaceOLEDFeedSeparatorsEnabled", NO);
 }
 
+static id NXCreateDeveloperCredit(void) {
+    Class settingClass = NSClassFromString(@"IQFSetting");
+    SEL selector = NSSelectorFromString(@"buttonCellWithTitle:subtitle:icon:action:");
+    if (!settingClass || ![settingClass respondsToSelector:selector]) return nil;
+    void (^action)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSURL *url = [NSURL URLWithString:@"https://t.me/lucaspedrosa"];
+            if (url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+        });
+    };
+    typedef id (*Factory)(id, SEL, id, id, id, id);
+    return ((Factory)(void *)objc_msgSend)(settingClass, selector,
+        @"Lucas", Nexus2Localized(@"Nexus developer"), @"paperplane.fill", [action copy]);
+}
+
+static BOOL NXIsInfoHeader(NSString *header) {
+    if (![header isKindOfClass:NSString.class]) return NO;
+    NSString *value = header.lowercaseString;
+    NSArray<NSString *> *tokens = @[
+        @"developer", @"dev", @"desenvolvedor", @"développeur", @"разработ",
+        @"开发", @"nhà phát triển", @"المطور", @"مطو", @"توسعه", @"گەشەپێدەر",
+        @"about", @"sobre", @"à propos", @"о программе", @"关于", @"giới thiệu",
+        @"حول", @"درباره", @"دەربارە"
+    ];
+    for (NSString *token in tokens) if ([value containsString:token]) return YES;
+    return NO;
+}
+
 static NSArray *NXOwnedRows(void) {
     NSMutableArray *rows = [NSMutableArray array];
     NSArray *controllers = @[
@@ -1052,6 +1092,7 @@ static NSArray *NXOwnedRows(void) {
     id separators = NXCreateSeparatorSetting(); if (separators) [rows addObject:separators];
     id cache = NexusCacheCreateManualSetting(); if (cache) [rows addObject:cache];
     id autoCache = NexusCacheCreateAutomaticSetting(); if (autoCache) [rows addObject:autoCache];
+    id credit = NXCreateDeveloperCredit(); if (credit) [rows addObject:credit];
     id version = NXStaticSetting(@"Nexus 2.0 Beta 1 R2", nil, @"point.3.connected.trianglepath.dotted"); if (version) [rows addObject:version];
     return rows.copy;
 }
@@ -1059,8 +1100,6 @@ static NSArray *NXOwnedRows(void) {
 static id (*NXOrigInitBuilder)(id, SEL, id, id) = NULL;
 static id (*NXOrigInitSections)(id, SEL, id, id) = NULL;
 typedef NSArray * _Nullable (^NXSectionsBuilder)(void);
-static BOOL NXSettingsBuilderHook = NO;
-static BOOL NXSettingsSectionsHook = NO;
 static NSInteger NXSettingsHookAttempts = 0;
 
 static BOOL NXLooksLikeIQFaceTitle(id title) {
@@ -1079,8 +1118,7 @@ static NSArray *NXSectionsAddingNexus(NSArray *sections) {
     NSUInteger index=result.count;
     for(NSUInteger i=0;i<result.count;i++){
         NSString *h=[result[i][@"header"] isKindOfClass:NSString.class]?result[i][@"header"]:nil;
-        NSString *l=h.lowercaseString;
-        if([l containsString:@"developer"]||[l isEqualToString:@"dev"]||[l containsString:@"about"]||[l containsString:@"sobre"]){ index=i; break; }
+        if (NXIsInfoHeader(h)) { index=i; break; }
     }
     [result insertObject:section atIndex:MIN(index,result.count)];
     return result.copy;
