@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R2";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R3";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -371,6 +371,8 @@ static BOOL NXLauncherCurrentlyHidden = NO;
 static BOOL NXSettingsBuilderHook = NO;
 static BOOL NXSettingsSectionsHook = NO;
 static BOOL NXFeedClassFound = NO;
+static BOOL NXFeedTreeABICompatible = NO;
+static BOOL NXFeedPandoABICompatible = NO;
 static BOOL NXFeedTreeHookInstalled = NO;
 static BOOL NXFeedPandoHookInstalled = NO;
 static NSInteger NXWordmarkAttempts = 0;
@@ -427,7 +429,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 1 R2\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 1 R3\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -437,13 +439,13 @@ NSString *Nexus2DiagnosticsText(void) {
      NXStatus(NXLauncherButtonSeen), NXStatus(NXLauncherBarItemSeen),
      NXStatus(NXLauncherCurrentlyHidden),
      [NSUserDefaults.standardUserDefaults stringForKey:NXKeyActivation] ?: @"iqface"];
-    [report appendFormat:@"[Settings integration]\nIQFSettingsViewController: %@\nsectionsBuilder hook: %@\nsections hook: %@\nicon picker: %@\n\n",
-     NXStatus(NSClassFromString(@"IQFSettingsViewController") != Nil),
-     NXStatus(NXSettingsBuilderHook), NXStatus(NXSettingsSectionsHook), NXStatus(iconPicker)];
-    [report appendFormat:@"[Feed filters]\nFBMemModelObject: %@\ninitWithFBTree hook: %@\ninitWithFBPandoTree hook: %@\nThreads=%d Pages=%d StoryPYMK=%d\nkeys: feedUnitType/feed_unit_type/inlineUnitType/unitType\n\n",
-     NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeHookInstalled),
-     NXStatus(NXFeedPandoHookInstalled), NXBool(NXKeyThreads, NO), NXBool(NXKeyPages, NO),
-     NXBool(NXKeyStoryPeople, NO)];
+    [report appendFormat:@"[Settings integration]\nIQFTweakSettings: %@\nsections hook: %@\nicon picker: %@\n\n",
+     NXStatus(NSClassFromString(@"IQFTweakSettings") != Nil),
+     NXStatus(NXSettingsSectionsHook), NXStatus(iconPicker)];
+    [report appendFormat:@"[Feed filters]\nFBMemModelObject: %@\ninitWithFBTree ABI: %@ hook: %@\ninitWithFBPandoTree ABI: %@ hook: %@\nThreads=%d Pages=%d StoryPYMK=%d\nkeys: feedUnitType/feed_unit_type/inlineUnitType/unitType\n\n",
+     NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeABICompatible), NXStatus(NXFeedTreeHookInstalled),
+     NXStatus(NXFeedPandoABICompatible), NXStatus(NXFeedPandoHookInstalled),
+     NXBool(NXKeyThreads, NO), NXBool(NXKeyPages, NO), NXBool(NXKeyStoryPeople, NO)];
     [report appendFormat:@"[Appearance]\nbackground hook: %@\nmode=%ld color=%@\navatar hooks: %@\n\n",
      NXStatus(Nexus2BackgroundHookInstalled()), (long)Nexus2BackgroundCurrentMode(),
      [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF",
@@ -459,6 +461,8 @@ NSString *Nexus2DiagnosticsText(void) {
 static const void *NXWordmarkRecognizerKey = &NXWordmarkRecognizerKey;
 static IMP NXWordmarkOriginalLayoutSubviews = NULL;
 static NSTimer *NXActivationTimer = nil;
+static void NXAttachWordmark(UIView *navigationBar);
+static void NXRefreshActivationMode(void);
 
 static BOOL NXLogoModeSelected(void) {
     return [[NSUserDefaults.standardUserDefaults stringForKey:NXKeyActivation] isEqualToString:@"facebookLogo"];
@@ -513,6 +517,27 @@ static UIView *NXFindWordmark(UIView *root, UIView *navigationBar) {
         if (NXLooksLikeWordmarkContainer(child, navigationBar)) best = child;
     }
     return best;
+}
+
+static void NXProbeWordmarkInView(UIView *view) {
+    if (!view) return;
+    if ([NSStringFromClass(view.class) isEqualToString:@"FBNavigationBar"]) {
+        NXAttachWordmark(view);
+    }
+    for (UIView *child in view.subviews.copy) NXProbeWordmarkInView(child);
+}
+
+static void NXProbeVisibleWordmarks(void) {
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        NXProbeWordmarkInView(window);
+    }
+}
+
+static void NXEnsureActivationTimer(void) {
+    if (NXActivationTimer || !NXLogoModeSelected()) return;
+    NXActivationTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(__unused NSTimer *timer) {
+        NXRefreshActivationMode();
+    }];
 }
 
 static const void *NXLauncherViewStateKey = &NXLauncherViewStateKey;
@@ -645,13 +670,20 @@ static void NXRefreshActivationMode(void) {
     }
 }
 
+static BOOL NXVoidNoArgMethodCompatible(Method method) {
+    if (!method || method_getNumberOfArguments(method) != 2) return NO;
+    char ret[8] = {0};
+    method_getReturnType(method, ret, sizeof(ret));
+    return ret[0] == 'v';
+}
+
 static void NXTryInstallWordmarkHook(void) {
     NXWordmarkAttempts++;
     Class cls = NSClassFromString(@"FBNavigationBar");
     NXWordmarkClassFound = cls != Nil;
     Method method = cls ? class_getInstanceMethod(cls, @selector(layoutSubviews)) : NULL;
-    NXWordmarkSelectorFound = method != NULL;
-    if (method && !NXWordmarkHookInstalled) {
+    NXWordmarkSelectorFound = NXVoidNoArgMethodCompatible(method);
+    if (NXWordmarkSelectorFound && !NXWordmarkHookInstalled) {
         IMP current = method_getImplementation(method);
         if (current == (IMP)&NXNavigationLayoutSubviews) {
             NXWordmarkHookInstalled = YES;
@@ -662,11 +694,13 @@ static void NXTryInstallWordmarkHook(void) {
         }
         if (NXWordmarkHookInstalled) NXEvent(@"Facebook logo activation hook installed");
     }
-    if (!NXWordmarkHookInstalled && NXWordmarkAttempts < 120) {
+    if (!NXWordmarkHookInstalled && NXWordmarkAttempts < 40) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ NXTryInstallWordmarkHook(); });
     }
+    if (NXWordmarkHookInstalled) NXProbeVisibleWordmarks();
     NXRefreshActivationMode();
+    NXEnsureActivationTimer();
 }
 
 #pragma mark - Feed filters
@@ -715,13 +749,31 @@ static id NXInitPando(id self, SEL command, id tree) {
     return value;
 }
 
-static void NXTryInstallFeedHooks(void) {
-    NXFeedHookAttempts++;
+static BOOL NXObjectUnaryMethodCompatible(Method method) {
+    if (!method || method_getNumberOfArguments(method) != 3) return NO;
+    char ret[16] = {0};
+    char arg[16] = {0};
+    method_getReturnType(method, ret, sizeof(ret));
+    method_getArgumentType(method, 2, arg, sizeof(arg));
+    return ret[0] == '@' && arg[0] == '@';
+}
+
+static void NXRefreshFeedCapability(void) {
     Class cls = NSClassFromString(@"FBMemModelObject");
     NXFeedClassFound = cls != Nil;
+    Method tree = cls ? class_getInstanceMethod(cls, NSSelectorFromString(@"initWithFBTree:")) : NULL;
+    Method pando = cls ? class_getInstanceMethod(cls, NSSelectorFromString(@"initWithFBPandoTree:")) : NULL;
+    NXFeedTreeABICompatible = NXObjectUnaryMethodCompatible(tree);
+    NXFeedPandoABICompatible = NXObjectUnaryMethodCompatible(pando);
+}
+
+static void NXTryInstallFeedHooks(void) {
+    NXFeedHookAttempts++;
+    NXRefreshFeedCapability();
+    Class cls = NSClassFromString(@"FBMemModelObject");
     if (cls) {
         Method tree = class_getInstanceMethod(cls, NSSelectorFromString(@"initWithFBTree:"));
-        if (tree && !NXFeedTreeHookInstalled) {
+        if (NXFeedTreeABICompatible && !NXFeedTreeHookInstalled) {
             IMP current = method_getImplementation(tree);
             if (current == (IMP)&NXInitTree) NXFeedTreeHookInstalled = YES;
             else {
@@ -731,7 +783,7 @@ static void NXTryInstallFeedHooks(void) {
             if (NXFeedTreeHookInstalled) NXEvent(@"Feed FBTree hook installed");
         }
         Method pando = class_getInstanceMethod(cls, NSSelectorFromString(@"initWithFBPandoTree:"));
-        if (pando && !NXFeedPandoHookInstalled) {
+        if (NXFeedPandoABICompatible && !NXFeedPandoHookInstalled) {
             IMP current = method_getImplementation(pando);
             if (current == (IMP)&NXInitPando) NXFeedPandoHookInstalled = YES;
             else {
@@ -741,7 +793,9 @@ static void NXTryInstallFeedHooks(void) {
             if (NXFeedPandoHookInstalled) NXEvent(@"Feed FBPandoTree hook installed");
         }
     }
-    if ((!NXFeedTreeHookInstalled || !NXFeedPandoHookInstalled) && NXFeedHookAttempts < 120) {
+    BOOL needsTree = NXFeedTreeABICompatible && !NXFeedTreeHookInstalled;
+    BOOL needsPando = NXFeedPandoABICompatible && !NXFeedPandoHookInstalled;
+    if ((needsTree || needsPando) && NXFeedHookAttempts < 40) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ NXTryInstallFeedHooks(); });
     }
@@ -848,6 +902,11 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 @end
 @implementation Nexus2FeedController
 - (void)viewDidLoad { [super viewDidLoad]; self.title = Nexus2Localized(@"Feed filters"); self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped]; }
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    NXRefreshFeedCapability();
+    [self.tableView reloadData];
+}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView;(void)section; return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXFeed"];
@@ -862,7 +921,17 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 }
 - (void)nx_switch:(UISwitch *)sender {
     NSArray *keys = @[NXKeyThreads, NXKeyPages, NXKeyStoryPeople];
-    if (sender.tag >= 0 && sender.tag < (NSInteger)keys.count) NXSetBool(keys[(NSUInteger)sender.tag], sender.isOn);
+    if (sender.tag < 0 || sender.tag >= (NSInteger)keys.count) return;
+    if (sender.isOn) {
+        NXRefreshFeedCapability();
+        if (!NXFeedTreeABICompatible && !NXFeedPandoABICompatible) {
+            sender.on = NO;
+            NXShowMessage(self, Nexus2Localized(@"Feed filters"), Nexus2Localized(@"Unavailable on this Facebook version"));
+            return;
+        }
+        NXTryInstallFeedHooks();
+    }
+    NXSetBool(keys[(NSUInteger)sender.tag], sender.isOn);
 }
 @end
 
@@ -872,7 +941,11 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 @end
 @implementation Nexus2ActivationController
 - (void)viewDidLoad { [super viewDidLoad]; self.title = Nexus2Localized(@"Activation"); self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped]; }
-- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self.tableView reloadData]; }
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    NXTryInstallWordmarkHook();
+    [self.tableView reloadData];
+}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView;(void)section; return 2; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXActivation"];
@@ -894,10 +967,15 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row == 1 && !Nexus2LogoActivationAvailable()) return;
+    if (indexPath.row == 1) {
+        NXTryInstallWordmarkHook();
+        NXProbeVisibleWordmarks();
+        if (!Nexus2LogoActivationAvailable()) return;
+    }
     [NSUserDefaults.standardUserDefaults setObject:(indexPath.row == 1 ? @"facebookLogo" : @"iqface") forKey:NXKeyActivation];
     NXEvent(indexPath.row == 1 ? @"Activation mode changed to Facebook logo" : @"Activation mode changed to iQFace icon");
     NXRefreshActivationMode();
+    if (indexPath.row == 1) NXEnsureActivationTimer();
     [tableView reloadData];
 }
 @end
@@ -934,7 +1012,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.0 Beta 1 R2",
+             @"nexusVersion": @"2.0 Beta 1 R3",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1093,68 +1171,42 @@ static NSArray *NXOwnedRows(void) {
     id cache = NexusCacheCreateManualSetting(); if (cache) [rows addObject:cache];
     id autoCache = NexusCacheCreateAutomaticSetting(); if (autoCache) [rows addObject:autoCache];
     id credit = NXCreateDeveloperCredit(); if (credit) [rows addObject:credit];
-    id version = NXStaticSetting(@"Nexus 2.0 Beta 1 R2", nil, @"point.3.connected.trianglepath.dotted"); if (version) [rows addObject:version];
+    id version = NXStaticSetting(@"Nexus 2.0 Beta 1 R3", nil, @"point.3.connected.trianglepath.dotted"); if (version) [rows addObject:version];
     return rows.copy;
 }
 
-static id (*NXOrigInitBuilder)(id, SEL, id, id) = NULL;
-static id (*NXOrigInitSections)(id, SEL, id, id) = NULL;
-typedef NSArray * _Nullable (^NXSectionsBuilder)(void);
+static NSArray *(*NXOrigTweakSections)(id, SEL) = NULL;
+static BOOL NXSettingsSectionsHook = NO;
 static NSInteger NXSettingsHookAttempts = 0;
 
-static BOOL NXLooksLikeIQFaceTitle(id title) {
-    return [title isKindOfClass:NSString.class] && [[(NSString *)title lowercaseString] containsString:@"iqface"];
-}
-
-static NSArray *NXSectionsAddingNexus(NSArray *sections) {
-    if (![sections isKindOfClass:NSArray.class]) return sections;
-    NSMutableArray *result = sections.mutableCopy;
-    for (NSInteger i=(NSInteger)result.count-1;i>=0;i--) {
-        id raw=result[(NSUInteger)i]; if (![raw isKindOfClass:NSDictionary.class]) continue;
-        NSString *header=[raw[@"header"] isKindOfClass:NSString.class] ? raw[@"header"] : nil;
-        if ([[header lowercaseString] containsString:@"nexus"]) [result removeObjectAtIndex:(NSUInteger)i];
-    }
-    NSDictionary *section = @{@"header": @"NEXUS 2.0", @"rows": NXOwnedRows()};
-    NSUInteger index=result.count;
-    for(NSUInteger i=0;i<result.count;i++){
-        NSString *h=[result[i][@"header"] isKindOfClass:NSString.class]?result[i][@"header"]:nil;
-        if (NXIsInfoHeader(h)) { index=i; break; }
-    }
-    [result insertObject:section atIndex:MIN(index,result.count)];
-    return result.copy;
-}
-
-static id NXInitSections(id self, SEL cmd, id title, id sections) {
-    if (!NXOrigInitSections) return nil;
-    id adjusted = NXLooksLikeIQFaceTitle(title) && [sections isKindOfClass:NSArray.class] ? NXSectionsAddingNexus(sections) : sections;
-    return NXOrigInitSections(self, cmd, title, adjusted);
-}
-
-static id NXInitBuilder(id self, SEL cmd, id title, id builder) {
-    if (!NXOrigInitBuilder) return nil;
-    if (!NXLooksLikeIQFaceTitle(title) || !builder) return NXOrigInitBuilder(self,cmd,title,builder);
-    NXSectionsBuilder original=[builder copy];
-    NXSectionsBuilder wrapped=[^NSArray *{ return NXSectionsAddingNexus(original ? original() : nil); } copy];
-    return NXOrigInitBuilder(self,cmd,title,wrapped);
+static NSArray *NXTweakSections(id self, SEL command) {
+    NSArray *sections = NXOrigTweakSections ? NXOrigTweakSections(self, command) : nil;
+    return NXSectionsAddingNexus(sections);
 }
 
 static void NXTryInstallSettingsHooks(void) {
+    if (NXSettingsSectionsHook) return;
     NXSettingsHookAttempts++;
-    Class cls=NSClassFromString(@"IQFSettingsViewController");
-    if(cls){
-        Method m=class_getInstanceMethod(cls,NSSelectorFromString(@"initWithTitle:sectionsBuilder:"));
-        if(m&&!NXSettingsBuilderHook){
-            NXOrigInitBuilder=(id(*)(id,SEL,id,id))method_setImplementation(m,(IMP)&NXInitBuilder);
-            NXSettingsBuilderHook=NXOrigInitBuilder!=NULL;
+
+    Class target = NSClassFromString(@"IQFTweakSettings");
+    SEL selector = NSSelectorFromString(@"sections");
+    Method method = target != Nil ? class_getClassMethod(target, selector) : NULL;
+
+    if (method != NULL) {
+        IMP current = method_getImplementation(method);
+        if (current == (IMP)&NXTweakSections) {
+            NXSettingsSectionsHook = YES;
+        } else {
+            NXOrigTweakSections = (NSArray *(*)(id, SEL))method_setImplementation(method, (IMP)&NXTweakSections);
+            NXSettingsSectionsHook = NXOrigTweakSections != NULL;
         }
-        m=class_getInstanceMethod(cls,NSSelectorFromString(@"initWithTitle:sections:"));
-        if(m&&!NXSettingsSectionsHook){
-            NXOrigInitSections=(id(*)(id,SEL,id,id))method_setImplementation(m,(IMP)&NXInitSections);
-            NXSettingsSectionsHook=NXOrigInitSections!=NULL;
-        }
+        if (NXSettingsSectionsHook) NXEvent(@"IQFTweakSettings sections hook installed");
     }
-    if(!NXSettingsBuilderHook&&!NXSettingsSectionsHook&&NXSettingsHookAttempts<120)
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.25*NSEC_PER_SEC)),dispatch_get_main_queue(),^{NXTryInstallSettingsHooks();});
+
+    if (!NXSettingsSectionsHook && NXSettingsHookAttempts < 120) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ NXTryInstallSettingsHooks(); });
+    }
 }
 
 __attribute__((constructor))
@@ -1163,12 +1215,13 @@ static void Nexus2Initialize(void) {
         if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.facebook.Facebook"] ||
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 1 R2 loaded");
+        NXEvent(@"Nexus 2.0 Beta 1 R3 loaded");
+        if (NXLogoModeSelected()) {
+            [NSUserDefaults.standardUserDefaults setObject:@"iqface" forKey:NXKeyActivation];
+            NXEvent(@"Safe startup: restored iQFace icon activation");
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
-            NXTryInstallWordmarkHook();
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(2.5*NSEC_PER_SEC)),dispatch_get_main_queue(),^{NXTryInstallFeedHooks();});
-            NXActivationTimer=[NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(__unused NSTimer *timer){ NXRefreshActivationMode(); }];
         });
     }
 }
