@@ -6,6 +6,7 @@ name: Build XTranslate Fix + Probe
     branches:
       - "xtranslate-auth-probe-*"
       - "xtranslate-grok-probe-*"
+      - "xtranslate-fix-probe-*"
     paths:
       - "xtranslate-auth-probe/**"
       - ".github/workflows/xtranslate-auth-probe.yml"
