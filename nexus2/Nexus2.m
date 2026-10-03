@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R4";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R5";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -335,8 +335,10 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXExtra
     dispatch_once(&onceToken, ^{
         all = @{
             @"pt": @{@"Summary":@"Resumo", @"Technical log":@"Log técnico", @"Working":@"Funcionando",
-                     @"Waiting for feed detection":@"Aguardando detecção do feed", @"Integration with iQFace":@"Integração com iQFace",
-                     @"Icons":@"Ícones", @"Cache":@"Cache", @"Utilities":@"Utilitários",
+                     @"Ready":@"Pronto", @"Waiting for feed detection":@"Aguardando detecção do feed",
+                     @"Integration with iQFace":@"Integração com iQFace", @"Icons":@"Ícones", @"Cache":@"Cache",
+                     @"Utilities":@"Utilitários", @"Tools":@"Ferramentas", @"Activation method":@"Método de ativação",
+                     @"Backup and restore":@"Backup e restauração",
                      @"Hide suggestions in Stories":@"Ocultar sugestões nos Stories",
                      @"Feed detection pending":@"Os filtros serão aplicados assim que o Facebook carregar um modelo de feed compatível."},
             @"fr": @{@"Summary":@"Résumé", @"Technical log":@"Journal technique", @"Working":@"Fonctionne",
@@ -479,7 +481,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 1 R4\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 1 R5\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -923,8 +925,11 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
     self.title = Nexus2Localized(@"Background appearance");
     self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
 }
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { (void)tableView; return 2; }
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView; return section == 0 ? 3 : 1; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { (void)tableView; return 3; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView;
+    return section == 0 ? 3 : 1;
+}
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     return section == 0 ? Nexus2Localized(@"Dark mode required") : nil;
@@ -938,14 +943,26 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
         cell.textLabel.text = titles[(NSUInteger)indexPath.row];
         cell.accessoryType = mode == indexPath.row ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         cell.imageView.image = [UIImage systemImageNamed:indexPath.row == 0 ? @"circle" : (indexPath.row == 1 ? @"circle.fill" : @"paintpalette")];
-    } else {
+    } else if (indexPath.section == 1) {
         cell.textLabel.text = Nexus2Localized(@"Background color");
         cell.detailTextLabel.text = [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF";
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         cell.selectionStyle = mode == 2 ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
         cell.textLabel.enabled = mode == 2;
+    } else {
+        cell.textLabel.text = Nexus2Localized(@"Feed separators");
+        cell.detailTextLabel.text = nil;
+        UISwitch *toggle = [UISwitch new];
+        toggle.on = NXBool(@"iQFaceOLEDFeedSeparatorsEnabled", NO);
+        [toggle addTarget:self action:@selector(nx_separatorsChanged:) forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
     }
     return cell;
+}
+- (void)nx_separatorsChanged:(UISwitch *)sender {
+    NXSetBool(@"iQFaceOLEDFeedSeparatorsEnabled", sender.isOn);
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -954,6 +971,7 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
         [tableView reloadData];
         return;
     }
+    if (indexPath.section == 2) return;
     if (NXInteger(NXKeyBackgroundMode, 1) != 2) return;
     UIColorPickerViewController *picker = [UIColorPickerViewController new];
     picker.delegate = self;
@@ -1094,7 +1112,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
 @interface Nexus2SettingsManagerController : UITableViewController <UIDocumentPickerDelegate>
 @end
 @implementation Nexus2SettingsManagerController
-- (void)viewDidLoad { [super viewDidLoad]; self.title = Nexus2Localized(@"Settings manager"); self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped]; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title = Nexus2Localized(@"Backup and restore"); self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped]; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView;(void)section; return 3; }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXManager"];
@@ -1115,7 +1133,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.0 Beta 1 R4",
+             @"nexusVersion": @"2.0 Beta 1 R5",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1246,7 +1264,9 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     BOOL activationOK = NXSettingsSymbolAvailable();
     BOOL integrationOK = NXSettingsSectionsHook && languageOK;
     BOOL appearanceOK = Nexus2BackgroundHookInstalled() && Nexus2AvatarHooksInstalled();
-    BOOL feedOK = NXFeedTreeHookInstalled || NXFeedPandoHookInstalled;
+    BOOL feedHookOK = NXFeedTreeHookInstalled || NXFeedPandoHookInstalled;
+    BOOL feedWaiting = NXAnyFeedFilterEnabled() && !feedHookOK;
+    BOOL feedOK = !feedWaiting;
     BOOL iconOK = NSClassFromString(@"IQFIconsPickerController") != Nil;
 
     NSArray *titles = @[
@@ -1260,11 +1280,15 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     NSArray *oks = @[@(activationOK), @(integrationOK), @(appearanceOK), @(feedOK), @(iconOK), @YES];
 
     BOOL ok = [oks[(NSUInteger)indexPath.row] boolValue];
-    BOOL waiting = indexPath.row == 3 && !ok;
+    BOOL waiting = indexPath.row == 3 && feedWaiting;
     NSString *emoji = ok ? @"🟢" : (waiting ? @"🟡" : @"🔴");
     cell.textLabel.text = [NSString stringWithFormat:@"%@ %@", emoji, titles[(NSUInteger)indexPath.row]];
-    cell.detailTextLabel.text = ok ? Nexus2Localized(@"Working") :
-        (waiting ? Nexus2Localized(@"Waiting for feed detection") : Nexus2Localized(@"Unavailable on this Facebook version"));
+    if (indexPath.row == 3 && ok && !NXAnyFeedFilterEnabled()) {
+        cell.detailTextLabel.text = Nexus2Localized(@"Ready");
+    } else {
+        cell.detailTextLabel.text = ok ? Nexus2Localized(@"Working") :
+            (waiting ? Nexus2Localized(@"Waiting for feed detection") : Nexus2Localized(@"Unavailable on this Facebook version"));
+    }
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     cell.accessoryType = UITableViewCellAccessoryNone;
     return cell;
@@ -1297,6 +1321,116 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
 - (void)nx_copy {
     UIPasteboard.generalPasteboard.string = Nexus2DiagnosticsText();
     NXShowMessage(self, Nexus2Localized(@"Diagnostics"), Nexus2Localized(@"Copied"));
+}
+@end
+
+#pragma mark - Nexus utilities / tools
+
+@interface Nexus2UtilitiesController : UITableViewController
+@end
+
+@implementation Nexus2UtilitiesController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = Nexus2Localized(@"Utilities");
+    self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
+}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView; (void)section; return 3;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXUtilities"];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"NXUtilities"];
+    cell.imageView.image = nil;
+    cell.accessoryView = nil;
+    cell.detailTextLabel.text = nil;
+    if (indexPath.row == 0) {
+        cell.textLabel.text = Nexus2Localized(@"Change Icon");
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else if (indexPath.row == 1) {
+        cell.textLabel.text = Nexus2Localized(@"Clear cache");
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    } else {
+        cell.textLabel.text = Nexus2Localized(@"Automatic cache clearing");
+        NSInteger value = [NSUserDefaults.standardUserDefaults integerForKey:@"iQFaceCacheAutoFrequency"];
+        NSArray *labels = @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"];
+        if (![NXLanguageCode() isEqualToString:@"pt"]) labels = @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];
+        cell.detailTextLabel.text = labels[(NSUInteger)MAX(0, MIN(3, value))];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    }
+    return cell;
+}
+- (void)nx_runCacheSetting:(id)setting {
+    if (!setting) return;
+    id action = nil;
+    @try { action = [setting valueForKey:@"action"]; } @catch (__unused NSException *e) {}
+    if (action) {
+        void (^block)(void) = action;
+        block();
+    }
+}
+- (void)nx_chooseCacheFrequency {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:Nexus2Localized(@"Automatic cache clearing")
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray *labels = [NXLanguageCode() isEqualToString:@"pt"]
+        ? @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"]
+        : @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];
+    for (NSInteger i=0;i<4;i++) {
+        [alert addAction:[UIAlertAction actionWithTitle:labels[(NSUInteger)i] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
+            Class prefs = NSClassFromString(@"IQFPrefs");
+            SEL sel = NSSelectorFromString(@"setInteger:forKey:");
+            if (prefs && [prefs respondsToSelector:sel]) {
+                typedef void (*Setter)(id, SEL, NSInteger, id);
+                ((Setter)(void *)objc_msgSend)(prefs, sel, i, @"iQFaceCacheAutoFrequency");
+            } else {
+                [NSUserDefaults.standardUserDefaults setInteger:i forKey:@"iQFaceCacheAutoFrequency"];
+            }
+            [self.tableView reloadData];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:Nexus2Localized(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    if (alert.popoverPresentationController) alert.popoverPresentationController.sourceView = self.view;
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row == 0) {
+        Class pickerClass = NSClassFromString(@"IQFIconsPickerController");
+        UIViewController *picker = pickerClass ? [pickerClass new] : nil;
+        if (picker) [self.navigationController pushViewController:picker animated:YES];
+    } else if (indexPath.row == 1) {
+        [self nx_runCacheSetting:NexusCacheCreateManualSetting()];
+    } else {
+        [self nx_chooseCacheFrequency];
+    }
+}
+@end
+
+@interface Nexus2ToolsController : UITableViewController
+@end
+
+@implementation Nexus2ToolsController
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = Nexus2Localized(@"Tools");
+    self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
+}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView; (void)section; return 2;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXTools"];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"NXTools"];
+    cell.imageView.image = nil;
+    cell.textLabel.text = indexPath.row == 0 ? Nexus2Localized(@"Backup and restore") : Nexus2Localized(@"Diagnostics");
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    UIViewController *controller = indexPath.row == 0 ? [Nexus2SettingsManagerController new] : [Nexus2DiagnosticsController new];
+    [self.navigationController pushViewController:controller animated:YES];
 }
 @end
 
@@ -1349,7 +1483,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0 Beta 1 R4", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0 Beta 1 R5", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1374,9 +1508,9 @@ static NSArray *NXCoreRows(void) {
     NSArray *controllers = @[
         @[Nexus2Localized(@"Appearance"), @"paintpalette", [Nexus2AppearanceController new]],
         @[Nexus2Localized(@"Feed filters"), @"line.3.horizontal.decrease.circle", [Nexus2FeedController new]],
-        @[Nexus2Localized(@"Activation"), @"hand.tap", [Nexus2ActivationController new]],
-        @[Nexus2Localized(@"Settings manager"), @"arrow.up.arrow.down.square", [Nexus2SettingsManagerController new]],
-        @[Nexus2Localized(@"Diagnostics"), @"stethoscope", [Nexus2DiagnosticsController new]]
+        @[Nexus2Localized(@"Activation method"), @"hand.tap", [Nexus2ActivationController new]],
+        @[Nexus2Localized(@"Utilities"), @"wrench.and.screwdriver", [Nexus2UtilitiesController new]],
+        @[Nexus2Localized(@"Tools"), @"hammer", [Nexus2ToolsController new]]
     ];
     for (NSArray *entry in controllers) {
         id row = NXNavigationSetting(entry[0], nil, entry[1], entry[2]);
@@ -1385,36 +1519,15 @@ static NSArray *NXCoreRows(void) {
     return [rows copy];
 }
 
-static NSArray *NXUtilityRows(void) {
-    NSMutableArray *rows = [NSMutableArray array];
-    id icon = NXCreateLocalizedIconSetting(); if (icon) [rows addObject:icon];
-    id separators = NXCreateSeparatorSetting(); if (separators) [rows addObject:separators];
-    id cache = NexusCacheCreateManualSetting(); if (cache) [rows addObject:cache];
-    id autoCache = NexusCacheCreateAutomaticSetting(); if (autoCache) [rows addObject:autoCache];
-    return [rows copy];
-}
+static NSArray *NXUtilityRows(void) { return @[]; }
 
 static UIColor *NXIconColorForTitle(NSString *title, NSString **symbolOut) {
     if (!title.length) return nil;
-    NSString *appearance = Nexus2Localized(@"Appearance");
-    NSString *filters = Nexus2Localized(@"Feed filters");
-    NSString *activation = Nexus2Localized(@"Activation");
-    NSString *manager = Nexus2Localized(@"Settings manager");
-    NSString *diagnostics = Nexus2Localized(@"Diagnostics");
-    NSString *changeIcon = Nexus2Localized(@"Change Icon");
-    NSString *separators = Nexus2Localized(@"Feed separators");
-    NSString *clearCache = Nexus2Localized(@"Clear cache");
-    NSString *autoCache = Nexus2Localized(@"Automatic cache clearing");
-
-    if ([title isEqualToString:appearance]) { if(symbolOut)*symbolOut=@"paintpalette.fill"; return UIColor.systemPurpleColor; }
-    if ([title isEqualToString:filters]) { if(symbolOut)*symbolOut=@"line.3.horizontal.decrease.circle.fill"; return UIColor.systemCyanColor; }
-    if ([title isEqualToString:activation]) { if(symbolOut)*symbolOut=@"hand.tap.fill"; return UIColor.systemOrangeColor; }
-    if ([title isEqualToString:manager]) { if(symbolOut)*symbolOut=@"arrow.up.arrow.down.square.fill"; return UIColor.systemBlueColor; }
-    if ([title isEqualToString:diagnostics]) { if(symbolOut)*symbolOut=@"stethoscope"; return UIColor.systemGreenColor; }
-    if ([title isEqualToString:changeIcon]) { if(symbolOut)*symbolOut=@"square.grid.2x2.fill"; return UIColor.systemPurpleColor; }
-    if ([title isEqualToString:separators]) { if(symbolOut)*symbolOut=@"line.3.horizontal"; return UIColor.systemGrayColor; }
-    if ([title isEqualToString:clearCache]) { if(symbolOut)*symbolOut=@"trash.fill"; return UIColor.systemRedColor; }
-    if ([title isEqualToString:autoCache]) { if(symbolOut)*symbolOut=@"clock.arrow.circlepath"; return UIColor.systemOrangeColor; }
+    if ([title isEqualToString:Nexus2Localized(@"Appearance")]) { if(symbolOut)*symbolOut=@"paintpalette.fill"; return UIColor.systemPurpleColor; }
+    if ([title isEqualToString:Nexus2Localized(@"Feed filters")]) { if(symbolOut)*symbolOut=@"line.3.horizontal.decrease.circle.fill"; return UIColor.systemCyanColor; }
+    if ([title isEqualToString:Nexus2Localized(@"Activation method")]) { if(symbolOut)*symbolOut=@"hand.tap.fill"; return UIColor.systemOrangeColor; }
+    if ([title isEqualToString:Nexus2Localized(@"Utilities")]) { if(symbolOut)*symbolOut=@"wrench.and.screwdriver.fill"; return UIColor.systemBlueColor; }
+    if ([title isEqualToString:Nexus2Localized(@"Tools")]) { if(symbolOut)*symbolOut=@"hammer.fill"; return UIColor.systemGreenColor; }
     if ([title isEqualToString:@"Lucas"]) { if(symbolOut)*symbolOut=@"paperplane.fill"; return UIColor.systemBlueColor; }
     if ([title isEqualToString:@"Nexus"]) { if(symbolOut)*symbolOut=@"point.3.connected.trianglepath.dotted"; return UIColor.systemIndigoColor; }
     return nil;
@@ -1446,6 +1559,39 @@ static UIImage *NXColoredIcon(NSString *symbolName, UIColor *background) {
 static UITableViewCell *(*NXOrigSettingsCell)(id, SEL, UITableView *, NSIndexPath *) = NULL;
 static BOOL NXSettingsCellStyleHookInstalled = NO;
 
+static UIImageView *NXFindLeadingIconView(UIView *root, UITableViewCell *cell) {
+    if (!root) return nil;
+    UIImageView *best = nil;
+    for (UIView *child in root.subviews) {
+        if ([child isKindOfClass:UIImageView.class]) {
+            CGRect rect = [child convertRect:child.bounds toView:cell.contentView];
+            CGFloat w = CGRectGetWidth(rect), h = CGRectGetHeight(rect);
+            if (rect.origin.x < 90.0 && w >= 24.0 && w <= 55.0 && h >= 24.0 && h <= 55.0) {
+                best = (UIImageView *)child;
+                break;
+            }
+        }
+        UIImageView *nested = NXFindLeadingIconView(child, cell);
+        if (nested) { best = nested; break; }
+    }
+    return best;
+}
+
+static void NXApplyColoredIconToCell(UITableViewCell *cell, NSString *title) {
+    NSString *symbol = nil;
+    UIColor *color = NXIconColorForTitle(title, &symbol);
+    if (!color || !symbol.length) return;
+    UIImage *image = NXColoredIcon(symbol, color);
+    if (!image) return;
+
+    [cell layoutIfNeeded];
+    UIImageView *target = NXFindLeadingIconView(cell.contentView, cell);
+    if (!target) target = cell.imageView;
+    target.image = image;
+    target.tintColor = UIColor.clearColor;
+    target.contentMode = UIViewContentModeScaleAspectFit;
+}
+
 static UITableViewCell *NXStyledSettingsCell(id self, SEL command, UITableView *tableView, NSIndexPath *indexPath) {
     UITableViewCell *cell = NXOrigSettingsCell ? NXOrigSettingsCell(self, command, tableView, indexPath) : nil;
     if (!cell) return cell;
@@ -1459,12 +1605,10 @@ static UITableViewCell *NXStyledSettingsCell(id self, SEL command, UITableView *
         if (settingTitle.length) title = settingTitle;
     }
 
-    NSString *symbol = nil;
-    UIColor *color = NXIconColorForTitle(title, &symbol);
-    if (color && symbol.length) {
-        cell.imageView.image = NXColoredIcon(symbol, color);
-        cell.imageView.tintColor = UIColor.whiteColor;
-    }
+    NXApplyColoredIconToCell(cell, title);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NXApplyColoredIconToCell(cell, title);
+    });
     return cell;
 }
 
@@ -1509,7 +1653,7 @@ static NSArray *NXTweakSections(id self, SEL command) {
         NSMutableDictionary *section = [raw mutableCopy];
         NSString *header = [section[@"header"] isKindOfClass:NSString.class] ? section[@"header"] : nil;
         NSString *lower = header.lowercaseString ?: @"";
-        if ([lower containsString:@"nexus"] || [header isEqualToString:Nexus2Localized(@"Utilities")]) continue;
+        if ([lower containsString:@"nexus"]) continue;
         NXRemoveOwnedRowsFromSection(section);
         [result addObject:[section copy]];
     }
@@ -1527,9 +1671,7 @@ static NSArray *NXTweakSections(id self, SEL command) {
     NSUInteger insertIndex = devIndex != NSNotFound ? (NSUInteger)devIndex :
         (aboutIndex != NSNotFound ? (NSUInteger)aboutIndex : result.count);
     NSDictionary *nexusSection = @{@"header": @"Nexus", @"rows": NXCoreRows()};
-    NSDictionary *utilitySection = @{@"header": Nexus2Localized(@"Utilities"), @"rows": NXUtilityRows()};
     [result insertObject:nexusSection atIndex:MIN(insertIndex, result.count)];
-    [result insertObject:utilitySection atIndex:MIN(insertIndex + 1, result.count)];
 
     // Re-find Dev/About after inserting the two Nexus sections.
     devIndex = NSNotFound; aboutIndex = NSNotFound;
@@ -1607,18 +1749,15 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 1 R4 loaded");
+        NXEvent(@"Nexus 2.0 Beta 1 R5 loaded");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
 
             if (NXLogoModeSelected()) {
-                NXEvent(@"Restoring saved Facebook logo activation");
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)),
-                               dispatch_get_main_queue(), ^{
-                    NXTryInstallWordmarkHook();
-                    NXEnsureActivationTimer();
-                });
+                NXEvent(@"Restoring saved Facebook logo activation immediately");
+                NXTryInstallWordmarkHook();
+                NXEnsureActivationTimer();
             }
 
             if (NXAnyFeedFilterEnabled()) {
