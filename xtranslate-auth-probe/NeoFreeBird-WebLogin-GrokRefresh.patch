@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] WebLogin: refresh native account before switching
+
+Mirror the account finalization used by LegacyLogin. Web login registers a
+placeholder TFNTwitterAccount for cookie-backed sessions, but did not invoke
+-refreshForced:source:. Refresh it once before switching so account-scoped
+services (including Grok translation bootstrap) can initialize normally.
+
+diff --git a/src/WebLogin/WebLoginViewController.m b/src/WebLogin/WebLoginViewController.m
+--- a/src/WebLogin/WebLoginViewController.m
++++ b/src/WebLogin/WebLoginViewController.m
+@@ -285,6 +285,16 @@ - (void)finishWithUserID:(NSString*)userID
+     webLoginDidCaptureCookies(userID, username, pairs);
+ 
+     id account = [self registerNativeAccountForUserID:userID username:username authToken:authToken];
++
++    // Keep WebLogin account finalization aligned with LegacyLogin.
++    if ([account respondsToSelector:@selector(refreshForced:source:)]) {
++        @try {
++            ((void (*)(id, SEL, BOOL, unsigned long long))objc_msgSend)(
++                account, @selector(refreshForced:source:), NO, 0);
++        } @catch (__unused NSException* exception) {
++        }
++    }
+ 
+     void (^switchAndDismiss)(void) = ^{
+         [self switchToAccount:account];
