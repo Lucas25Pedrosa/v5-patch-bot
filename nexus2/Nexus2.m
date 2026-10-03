@@ -1179,6 +1179,8 @@ static NSArray *NXOwnedRows(void) {
     return rows.copy;
 }
 
+static NSArray *NXSectionsAddingNexus(NSArray *sections);
+
 static NSArray *(*NXOrigTweakSections)(id, SEL) = NULL;
 static NSInteger NXSettingsHookAttempts = 0;
 
