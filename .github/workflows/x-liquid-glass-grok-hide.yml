@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Grok Hide Beta
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-grok-hide/**"
+      - ".github/workflows/x-liquid-glass-grok-hide.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-grok-hide
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Grok hide companion
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassGrokHide.dylib ! -path '*/XLiquidGlassGrokHide.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassGrokHide.dylib
+          file artifacts/XLiquidGlassGrokHide.dylib
+          shasum -a 256 artifacts/XLiquidGlassGrokHide.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass-2.0.3-Beta1-GrokHide-X12.31.1-arm64
+          path: x-liquid-glass-grok-hide/artifacts/
+          if-no-files-found: error
