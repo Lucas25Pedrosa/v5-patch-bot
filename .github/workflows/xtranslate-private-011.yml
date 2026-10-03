@@ -1,0 +1,46 @@
+name: Build Grok Private Factory Probe 0.11
+
+"on":
+  push:
+    branches:
+      - "main"
+    paths:
+      - "xtranslate-private-011/TRIGGER"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: xtranslate-private-011
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Build and validate
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XTranslateAuthProbe.dylib ! -path '*/XTranslateAuthProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
+          file artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
+          lipo -info artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
+          shasum -a 256 artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
+          zip -j artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.zip artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib artifacts/SHA256SUMS.txt
+          mkdir -p ../xtranslate-builds/0.11-beta1
+          cp artifacts/* ../xtranslate-builds/0.11-beta1/
+      - name: Commit build output
+        uses: stefanzweifel/git-auto-commit-action@v6
+        with:
+          commit_message: "build: Grok Private Factory Probe 0.11 Beta 1"
+          file_pattern: "xtranslate-builds/0.11-beta1/*"
