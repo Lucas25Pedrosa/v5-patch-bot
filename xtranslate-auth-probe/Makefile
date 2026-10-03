@@ -10,3 +10,5 @@ XTranslateAuthProbe_FRAMEWORKS := Foundation UIKit
 XTranslateAuthProbe_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+# CI PR trigger 0.11 Beta 1
