@@ -101,6 +101,8 @@ jobs:
           grep -F 'Technical log' "$WORK/Nexus2.m"
           grep -F 'NXColoredIcon' "$WORK/Nexus2.m"
           grep -F 'NXCreateVersionSetting' "$WORK/Nexus2.m"
+          grep -F '[setting setValue:@"v2.0" forKey:@"valueText"]' "$WORK/Nexus2.m"
+          grep -F 'NXStaticSetting(@"Nexus", nil' "$WORK/Nexus2.m"
           grep -F 'NXCreateDeveloperCredit' "$WORK/Nexus2.m"
           grep -F 'NXEnsureFeedDetectionTimer' "$WORK/Nexus2.m"
           grep -F 'Nexus2UtilitiesController' "$WORK/Nexus2.m"
@@ -136,14 +138,14 @@ jobs:
           rm -f "$ROOT/nexus2/artifacts-beta1"/*
           DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
           test -n "$DYLIB_PATH"
-          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Stable.dylib"
+          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus.dylib"
 
           cd "$ROOT"
-          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Stable.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
-          file nexus2/artifacts-beta1/Nexus-2.0-Stable.dylib > nexus2/artifacts-beta1/file.txt
-          strings -a nexus2/artifacts-beta1/Nexus-2.0-Stable.dylib > nexus2/artifacts-beta1/strings.txt || true
-          otool -D nexus2/artifacts-beta1/Nexus-2.0-Stable.dylib > nexus2/artifacts-beta1/install-name.txt
-          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Stable.dylib > nexus2/artifacts-beta1/symbols.txt
+          shasum -a 256 nexus2/artifacts-beta1/Nexus.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
+          file nexus2/artifacts-beta1/Nexus.dylib > nexus2/artifacts-beta1/file.txt
+          strings -a nexus2/artifacts-beta1/Nexus.dylib > nexus2/artifacts-beta1/strings.txt || true
+          otool -D nexus2/artifacts-beta1/Nexus.dylib > nexus2/artifacts-beta1/install-name.txt
+          nm -gU nexus2/artifacts-beta1/Nexus.dylib > nexus2/artifacts-beta1/symbols.txt
 
           grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
           grep -F 'arm64' nexus2/artifacts-beta1/file.txt

@@ -1537,7 +1537,13 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0", @"point.3.connected.trianglepath.dotted");
+    id setting = NXStaticSetting(@"Nexus", nil, @"point.3.connected.trianglepath.dotted");
+    if (!setting) return nil;
+    @try {
+        [setting setValue:@"v2.0" forKey:@"valueText"];
+    } @catch (__unused NSException *exception) {
+    }
+    return setting;
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
