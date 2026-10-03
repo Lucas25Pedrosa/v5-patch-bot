@@ -1,4 +1,4 @@
-name: Build Nexus 2.0 Beta 1 R2
+name: Build Nexus 2.0 Beta 1 R3
 
 "on":
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare Nexus 2.0 Beta 1 R2
+      - name: Prepare Nexus 2.0 Beta 1 R3
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -69,7 +69,7 @@ jobs:
           ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
           ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
           grep -F 'Nexus2.m' "$WORK/Makefile"
-          grep -F 'NexusVersion = @"2.0 Beta 1 R2"' "$WORK/Nexus2.m"
+          grep -F 'NexusVersion = @"2.0 Beta 1 R3"' "$WORK/Nexus2.m"
           grep -F 'NexusHideThreadsPromotions' "$WORK/Nexus2.m"
           grep -F 'NexusHideSuggestedPages' "$WORK/Nexus2.m"
           grep -F 'NexusHideStoryPeopleSuggestions' "$WORK/Nexus2.m"
@@ -84,8 +84,15 @@ jobs:
           grep -F 'inlineUnitType' "$WORK/Nexus2.m"
           grep -F 'NXWordmarkRecognizerAttached' "$WORK/Nexus2.m"
           grep -F 'Nexus developer' "$WORK/Nexus2.m"
+          grep -F 'IQFTweakSettings' "$WORK/Nexus2.m"
+          grep -F 'Safe startup: restored iQFace icon activation' "$WORK/Nexus2.m"
+          grep -F 'NXObjectUnaryMethodCompatible' "$WORK/Nexus2.m"
+          ctor_block="$(sed -n '/__attribute__((constructor))/,/^}/p' "$WORK/Nexus2.m")"
+          ! grep -F 'NXTryInstallWordmarkHook();' <<<"$ctor_block"
+          ! grep -F 'NXTryInstallFeedHooks();' <<<"$ctor_block"
+          ! grep -F 'scheduledTimerWithTimeInterval' <<<"$ctor_block"
 
-      - name: Build Nexus 2.0 Beta 1 R2
+      - name: Build Nexus 2.0 Beta 1 R3
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -97,14 +104,14 @@ jobs:
           rm -f "$ROOT/nexus2/artifacts-beta1"/*
           DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
           test -n "$DYLIB_PATH"
-          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib"
+          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1-R3.dylib"
 
           cd "$ROOT"
-          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
-          file nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/file.txt
-          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/strings.txt || true
-          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/install-name.txt
-          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/symbols.txt
+          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1-R3.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
+          file nexus2/artifacts-beta1/Nexus-2.0-Beta1-R3.dylib > nexus2/artifacts-beta1/file.txt
+          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1-R3.dylib > nexus2/artifacts-beta1/strings.txt || true
+          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1-R3.dylib > nexus2/artifacts-beta1/install-name.txt
+          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta1-R3.dylib > nexus2/artifacts-beta1/symbols.txt
 
           grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
           grep -F 'arm64' nexus2/artifacts-beta1/file.txt
@@ -119,7 +126,7 @@ jobs:
           grep -F 'IQFResolvedLanguage' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBNavigationBar' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBMemModelObject' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 1 R2' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 1 R3' nexus2/artifacts-beta1/strings.txt
           grep -F '_IQFKey' nexus2/artifacts-beta1/strings.txt
           grep -F 'feedUnitType' nexus2/artifacts-beta1/strings.txt
           grep -F 'feed_unit_type' nexus2/artifacts-beta1/strings.txt
@@ -132,6 +139,9 @@ jobs:
           grep -F '_Nexus2LogoActivationAvailable' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2DiagnosticsText' nexus2/artifacts-beta1/symbols.txt
           grep -F 'lucaspedrosa' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 1 R3' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Safe startup: restored iQFace icon activation' nexus2/artifacts-beta1/strings.txt
+          grep -F 'IQFTweakSettings' nexus2/artifacts-beta1/strings.txt
           grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
 
           if grep -F 'IQFEnhancerLocalizationVersion' nexus2/artifacts-beta1/strings.txt; then
@@ -139,10 +149,10 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Nexus 2.0 Beta 1 R2
+      - name: Upload Nexus 2.0 Beta 1 R3
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-2.0-Beta1-R2-arm64
+          name: Nexus-2.0-Beta1-R3-arm64
           path: nexus2/artifacts-beta1/
           if-no-files-found: error
           retention-days: 90
