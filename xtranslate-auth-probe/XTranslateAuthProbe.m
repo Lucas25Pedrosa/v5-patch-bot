@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateTapDiffProbe.log";
+static NSString *const kLogName = @"XTranslateGrokEndpointFix.log";
 static const NSTimeInterval kWindow = 12.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
@@ -13,6 +13,11 @@ static IMP gOrigDataTaskCompletion = NULL;
 static IMP gOrigUploadData = NULL;
 static IMP gOrigUploadFile = NULL;
 static IMP gOrigResume = NULL;
+static IMP gOrigConcreteDataTask = NULL;
+static IMP gOrigConcreteDataTaskCompletion = NULL;
+static Class gConcreteSessionClass = Nil;
+static NSString *gObservedNativeBearer = nil;
+static NSString *gObservedWebBearer = nil;
 static IMP gOrigNFBSetup = NULL;
 static IMP gOrigNFBAppear = NULL;
 
@@ -106,18 +111,21 @@ static NSString *MaskUID(NSString *uid) {
     return [NSString stringWithFormat:@"…%@", [uid substringFromIndex:uid.length - 4]];
 }
 
-static NSString *OAuthUID(NSURLRequest *r) {
+static NSString *OAuthUIDFull(NSURLRequest *r) {
     NSString *a = Header(r, @"Authorization");
-    if (!a.length) return @"-";
+    if (!a.length) return nil;
     NSRange m = [a rangeOfString:@"oauth_token=\""];
-    if (m.location == NSNotFound) return @"-";
+    if (m.location == NSNotFound) return nil;
     NSString *rest = [a substringFromIndex:NSMaxRange(m)];
     NSRange q = [rest rangeOfString:@"\""];
-    if (q.location == NSNotFound) return @"-";
+    if (q.location == NSNotFound) return nil;
     NSString *token = [rest substringToIndex:q.location];
     NSRange dash = [token rangeOfString:@"-"];
-    NSString *uid = dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
-    return MaskUID(uid);
+    return dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
+}
+
+static NSString *OAuthUID(NSURLRequest *r) {
+    return MaskUID(OAuthUIDFull(r));
 }
 
 static NSString *CookieUID(NSURLRequest *r) {
@@ -179,6 +187,71 @@ static NSString *Operation(NSURLRequest *r) {
     if ([path containsString:@"/graphql/"] && parts.count) return parts.lastObject ?: @"-";
     NSString *last = [parts.lastObject isKindOfClass:NSString.class] ? (NSString *)parts.lastObject : nil;
     return last.length ? last : path;
+}
+
+static void ObserveBearer(NSURLRequest *r) {
+    NSString *auth=Header(r,@"Authorization");
+    if (![auth hasPrefix:@"Bearer "]) return;
+    NSString *authType=Header(r,@"x-twitter-auth-type");
+    if ([authType isEqualToString:@"OAuth2Session"]) gObservedWebBearer=[auth copy];
+    else if (Header(r,@"Cookie").length || Header(r,@"x-csrf-token").length) gObservedNativeBearer=[auth copy];
+}
+
+static BOOL IsGrokSpecialEndpoint(NSURLRequest *r) {
+    NSString *host=r.URL.host.lowercaseString ?: @"";
+    NSString *path=r.URL.path ?: @"";
+    return ([host isEqualToString:@"grok.x.com"] && [path hasSuffix:@"/2/grok/pass_through_jwt.json"]) ||
+           ([host isEqualToString:@"api.x.com"] && [path hasSuffix:@"/2/grok/translation.json"]);
+}
+
+static BOOL IsCookieLoginUIDFull(NSString *uid) {
+    if (!uid.length) return NO;
+    NSArray *uids=[[NSUserDefaults standardUserDefaults] arrayForKey:@"nfb_cookie_login_userids"];
+    return [uids isKindOfClass:NSArray.class] && [uids containsObject:uid];
+}
+
+static NSDictionary *WebPairForUID(NSString *uid) {
+    if (!uid.length) return nil;
+    NSDictionary *all=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"nfb_web_account_cookies"];
+    id pair=[all isKindOfClass:NSDictionary.class] ? all[uid] : nil;
+    return [pair isKindOfClass:NSDictionary.class] ? pair : nil;
+}
+
+static NSURLRequest *RewriteGrokSpecialIfNeeded(NSURLRequest *request) {
+    if (!IsGrokSpecialEndpoint(request)) return request;
+    NSString *uid=OAuthUIDFull(request);
+    if (!uid.length || !IsCookieLoginUIDFull(uid)) {
+        Log(@"GROK_FIX skip op=%@ uid=%@ reason=not-cookie-login",Operation(request),MaskUID(uid));
+        return request;
+    }
+    NSDictionary *pair=WebPairForUID(uid);
+    NSString *authToken=[pair[@"auth_token"] isKindOfClass:NSString.class] ? pair[@"auth_token"] : nil;
+    NSString *ct0=[pair[@"ct0"] isKindOfClass:NSString.class] ? pair[@"ct0"] : nil;
+    NSString *bearer=gObservedWebBearer ?: gObservedNativeBearer;
+    if (!authToken.length || !ct0.length || !bearer.length) {
+        Log(@"GROK_FIX skip op=%@ uid=%@ reason=missing-context auth=%d ct0=%d bearer=%d",
+            Operation(request),MaskUID(uid),authToken.length>0,ct0.length>0,bearer.length>0);
+        return request;
+    }
+
+    NSMutableURLRequest *out=[request mutableCopy];
+    out.HTTPShouldHandleCookies=NO;
+    [out setValue:nil forHTTPHeaderField:@"Authorization"];
+    [out setValue:nil forHTTPHeaderField:@"authorization"];
+    [out setValue:nil forHTTPHeaderField:@"X-B3-TraceId"];
+    [out setValue:nil forHTTPHeaderField:@"Host"];
+    [out setValue:bearer forHTTPHeaderField:@"authorization"];
+    [out setValue:@"OAuth2Session" forHTTPHeaderField:@"x-twitter-auth-type"];
+    [out setValue:@"yes" forHTTPHeaderField:@"x-twitter-active-user"];
+    [out setValue:ct0 forHTTPHeaderField:@"x-csrf-token"];
+    [out setValue:[NSString stringWithFormat:@"auth_token=%@; ct0=%@; twid=u%%3D%@",
+                   authToken,ct0,uid] forHTTPHeaderField:@"Cookie"];
+
+    Log(@"GROK_FIX rewrite op=%@ uid=%@ host=%@ path=%@ bearerKind=%@ csrf=%d cookies=%@",
+        Operation(out),MaskUID(uid),out.URL.host ?: @"-",out.URL.path ?: @"-",
+        gObservedWebBearer.length?@"web":@"native-fallback",
+        Header(out,@"x-csrf-token").length>0,CookieShape(out));
+    return out;
 }
 
 static NSString *BootstrapTag(NSURLRequest *r) {
@@ -266,6 +339,7 @@ static void LogExternalRequest(NSString *phase, NSUInteger seq, NSURLRequest *r)
 }
 
 static void LogRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
+    if (r) ObserveBearer(r);
     if (!r) { Log(@"REQ %@ #%lu nil", phase, (unsigned long)seq); return; }
     if (!IsXHost(r)) { LogExternalRequest(phase, seq, r); return; }
     Log(@"REQ %@ #%lu label=%@ method=%@ host=%@ op=%@ path=%@ auth=%@ oauthUID=%@ authTypeHdr=%@ csrf=%d cookies=%@ cookieUID=%@ xtid=%d body=%lu hint=%@",
@@ -412,6 +486,50 @@ static NSURLSessionUploadTask *ProbeUploadFile(NSURLSession *self, SEL _cmd, NSU
     return task;
 }
 
+static NSURLSessionDataTask *ConcreteDataTask(NSURLSession *self, SEL _cmd, NSURLRequest *request) {
+    if (!gOrigConcreteDataTask) return nil;
+    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"GROK_FIX_IN",seq,request);
+        LogRequest(@"GROK_FIX_OUT",seq,effective);
+        NSURLSessionDataTask *task=((id(*)(id,SEL,id))gOrigConcreteDataTask)(self,_cmd,effective);
+        AttachTask(task,seq);
+        return task;
+    }
+    return ((id(*)(id,SEL,id))gOrigConcreteDataTask)(self,_cmd,request);
+}
+
+static NSURLSessionDataTask *ConcreteDataTaskCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id completion) {
+    if (!gOrigConcreteDataTaskCompletion) return nil;
+    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"GROK_FIX_IN",seq,request);
+        LogRequest(@"GROK_FIX_OUT",seq,effective);
+        NSURLSessionDataTask *task=((id(*)(id,SEL,id,id))gOrigConcreteDataTaskCompletion)(self,_cmd,effective,completion);
+        AttachTask(task,seq);
+        return task;
+    }
+    return ((id(*)(id,SEL,id,id))gOrigConcreteDataTaskCompletion)(self,_cmd,request,completion);
+}
+
+static void InstallConcreteSessionHooks(void) {
+    if (gConcreteSessionClass) return;
+    for (NSString *name in @[@"__NSURLSessionLocal",@"__NSCFURLSession"]) {
+        Class c=NSClassFromString(name);
+        if (!c) continue;
+        BOOL a=Hook(c,@selector(dataTaskWithRequest:),(IMP)ConcreteDataTask,&gOrigConcreteDataTask);
+        BOOL b=Hook(c,@selector(dataTaskWithRequest:completionHandler:),(IMP)ConcreteDataTaskCompletion,&gOrigConcreteDataTaskCompletion);
+        if (a || b) {
+            gConcreteSessionClass=c;
+            Log(@"HOOKS concreteSession=1 class=%@ data=%d completion=%d",name,a,b);
+            return;
+        }
+    }
+    Log(@"HOOKS concreteSession=0");
+}
+
 static void ProbeResume(NSURLSessionTask *self, SEL _cmd) {
     NSDictionary *m=MetaForTask(self);
     NSURLRequest *r=self.currentRequest ?: self.originalRequest;
@@ -455,13 +573,13 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Translate Tap Diff"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Endpoint Fix"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Tap Diff":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Em cada conta, arme a captura, feche o aviso e toque imediatamente em “Traduzir post”. São 12 s. Faça LEGACY_OK e WEB_FAIL no mesmo post.";
-    return @"Read-only. Registra endpoint, status, classe da NSURLSessionTask e somente NOMES de headers/parâmetros/chaves; nunca valores de tokens, cookies ou texto do post.";
+    if (s==0) return @"Beta 1 reescreve somente pass_through_jwt.json e translation.json de contas Web Login. Teste WEB_FAIL em um post novo.";
+    return @"O restante do tráfego não é alterado. O log não expõe valores de tokens, cookies ou texto do post.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
     static NSString *rid=@"XTAPCell";
@@ -479,7 +597,7 @@ static void Arm(NSString *label) {
     if (i.section==0) {
         NSString *label=i.row==0?@"LEGACY_OK":@"WEB_FAIL";
         Arm(label);
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Translate Tap Diff"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Endpoint Fix"
             message:[NSString stringWithFormat:@"%@ armado por 12 segundos. Feche este aviso e toque imediatamente em “Traduzir post” no MESMO post.",label]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -489,7 +607,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Translate Tap Diff"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Endpoint Fix"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -511,7 +629,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Translate Tap Diff",@"subtitle":@"Comparar o tráfego exato do toque em Traduzir post.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Endpoint Fix",@"subtitle":@"Beta 1: corrigir os dois endpoints Grok do Web Login.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -540,7 +658,7 @@ static void InstallNFB(void) {
     gNFBHooked=a||b;
     Log(@"HOOKS nfb=%d",gNFBHooked);
 }
-static void InstallAll(void) { InstallNetworkHooks(); InstallNFB(); }
+static void InstallAll(void) { InstallNetworkHooks(); InstallConcreteSessionHooks(); InstallNFB(); }
 static void Retry(NSTimeInterval d) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(d*NSEC_PER_SEC)),dispatch_get_main_queue(),^{ InstallAll(); });
 }
@@ -548,8 +666,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Translate Tap Diff 0.8.0 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=tap-diff-read-only no-secrets",
+        Log(@"========== Grok Endpoint Fix 0.9.0 Beta 1 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-endpoint-webauth-beta1 no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
