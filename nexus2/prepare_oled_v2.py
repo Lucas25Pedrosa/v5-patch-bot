@@ -81,32 +81,35 @@ s, n = re.subn(
 if n < 2:
     raise SystemExit(f"expected constructor + live refresh replacements, found {n}")
 
-# Never infer Facebook Dark Mode from the iOS system appearance.
-# OLED/custom backgrounds are allowed only after Facebook-specific theme anchors
-# positively identify the app as dark. Unknown/tied state is treated as light-safe.
-old_fallback = '''    } else if (!gIQFOLEDModeKnown) {
-        for (UIWindow *window in windows) {
-            if (window.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                gIQFOLEDDarkMode = YES;
-                gIQFOLEDModeKnown = YES;
-                break;
-            }
-        }
-    }'''
-new_fallback = '''    } else {
-        gIQFOLEDDarkMode = NO;
-        gIQFOLEDModeKnown = NO;
-    }'''
-if old_fallback not in s:
-    raise SystemExit("theme fallback marker not found")
-s = s.replace(old_fallback, new_fallback, 1)
-
-# Instant setter must follow the new mode even before the first periodic pass.
+# Nexus OLED is intentionally theme-agnostic.
+# It never decides or forces Light/Dark. It only transforms the exact Facebook
+# dark-background colors when they are observed on screen.
 s = s.replace(
     'if (gIQFOLEDEnabled && IQFOLEDIsMappedDark(rgba)) {',
-    'if (Nexus2BackgroundMode() != 0 && gIQFOLEDModeKnown && gIQFOLEDDarkMode && IQFOLEDIsMappedDark(rgba)) {',
+    'if (Nexus2BackgroundMode() != 0 && IQFOLEDIsMappedDark(rgba)) {',
     1,
 )
+
+# The periodic tree pass follows the same rule: exact mapped color only.
+s = s.replace(
+    'if (gIQFOLEDEnabled && gIQFOLEDDarkMode) {',
+    'if (Nexus2BackgroundMode() != 0) {',
+)
+s = s.replace(
+    'if (gIQFOLEDEnabled && gIQFOLEDDarkMode) {',
+    'if (Nexus2BackgroundMode() != 0) {',
+)
+
+# Do not gate the tree pass on a separately inferred theme state.
+old_resolve_gate = '''            if (gIQFOLEDEnabled) {
+                IQFOLEDResolveMode(windows);
+                if (!gIQFOLEDModeKnown) return;
+            }
+
+'''
+if old_resolve_gate not in s:
+    raise SystemExit("resolve-mode gate not found")
+s = s.replace(old_resolve_gate, '', 1)
 
 # Expose the real background hook state to Nexus Diagnostics.
 setter_marker = 'static void IQFOLEDInstallInstantSetter(void) {'
@@ -128,7 +131,7 @@ NSInteger Nexus2BackgroundCurrentMode(void) {
 
 __attribute__((used, visibility("default")))
 BOOL Nexus2BackgroundEffectActive(void) {
-    return Nexus2BackgroundMode() != 0 && gIQFOLEDModeKnown && gIQFOLEDDarkMode;
+    return Nexus2BackgroundMode() != 0;
 }
 
 static void IQFOLEDInstallInstantSetter(void) {''',
@@ -166,7 +169,7 @@ required = [
     'Nexus2BackgroundHookInstalled',
     'Nexus2BackgroundCurrentMode',
     'Nexus2BackgroundEffectActive',
-    'gIQFOLEDModeKnown && gIQFOLEDDarkMode',
+    'Nexus2BackgroundMode() != 0 && IQFOLEDIsMappedDark(rgba)',
 ]
 for marker in required:
     if marker not in s:
