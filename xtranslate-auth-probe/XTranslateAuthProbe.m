@@ -4,8 +4,8 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateGrokProbe.log";
-static const NSTimeInterval kWindow = 45.0;
+static NSString *const kLogName = @"XTranslateFixProbe.log";
+static const NSTimeInterval kWindow = 60.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
 static IMP gOrigDataTask = NULL;
@@ -15,13 +15,17 @@ static IMP gOrigUploadFile = NULL;
 static IMP gOrigResume = NULL;
 static IMP gOrigNFBSetup = NULL;
 static IMP gOrigNFBAppear = NULL;
+static IMP gOrigWebSwitch = NULL;
 
 static BOOL gHooked = NO;
 static BOOL gNFBHooked = NO;
+static BOOL gWebFixHooked = NO;
 static NSTimeInterval gArmedUntil = 0;
 static NSString *gLabel = nil;
 static NSUInteger gReqSeq = 0;
 static char kTaskMetaKey;
+
+static void Arm(NSString *label);
 
 static NSString *LogPath(void) {
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -227,6 +231,47 @@ static id CurrentAccount(void) {
     return nil;
 }
 
+static BOOL RefreshAccountForGrok(id account, NSString *reason) {
+    if (!account) {
+        Log(@"FIX refresh reason=%@ result=no-account", reason ?: @"-");
+        return NO;
+    }
+    SEL refresh=NSSelectorFromString(@"refreshForced:source:");
+    BOOL supported=[account respondsToSelector:refresh];
+    Log(@"FIX refresh reason=%@ uid=%@ supportsRefresh=%d",
+        reason ?: @"-", MaskedUID(account), supported);
+    if (!supported) return NO;
+    @try {
+        ((void(*)(id,SEL,BOOL,unsigned long long))objc_msgSend)(account,refresh,NO,0);
+        Log(@"FIX refresh reason=%@ uid=%@ result=invoked",
+            reason ?: @"-", MaskedUID(account));
+        return YES;
+    } @catch (NSException *e) {
+        Log(@"FIX refresh reason=%@ uid=%@ result=exception name=%@",
+            reason ?: @"-", MaskedUID(account), e.name ?: @"-");
+        return NO;
+    }
+}
+
+static void PatchedWebSwitchToAccount(id self, SEL _cmd, id account) {
+    Log(@"FIX webLogin switchToAccount uid=%@ begin", MaskedUID(account));
+    Arm(@"WEB_LOGIN_FIX");
+    RefreshAccountForGrok(account, @"web-login");
+    if (gOrigWebSwitch) {
+        ((void(*)(id,SEL,id))gOrigWebSwitch)(self,_cmd,account);
+    }
+    Log(@"FIX webLogin switchToAccount uid=%@ end", MaskedUID(account));
+}
+
+static void InstallWebLoginFix(void) {
+    if (gWebFixHooked) return;
+    Class c=NSClassFromString(@"WebLoginViewController");
+    if (!c) return;
+    gWebFixHooked=Hook(c,NSSelectorFromString(@"switchToAccount:"),
+                       (IMP)PatchedWebSwitchToAccount,&gOrigWebSwitch);
+    Log(@"HOOKS webLoginFix=%d",gWebFixHooked);
+}
+
 static void LogAccountState(void) {
     id acct=CurrentAccount();
     NSString *uidFull=@"";
@@ -367,31 +412,59 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"XTranslate Grok Probe"; }
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
-- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
-- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Comparação":@"Relatório"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"XTranslate Fix + Probe"; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 3; }
+- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?1:(s==1?2:2); }
+- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s {
+    if (s==0) return @"Correção";
+    if (s==1) return @"Probe";
+    return @"Relatório";
+}
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Ative primeiro a conta correspondente. Depois toque no botão, volte ao MESMO post e use “Traduzir post” uma vez. A captura dura 45 s e não modifica nenhuma requisição.";
-    return @"Não registra tokens nem valores de cookies: apenas tipo de autenticação, presença de cabeçalhos, endpoint e status HTTP.";
+    if (s==0) return @"Aplica agora o mesmo refreshForced:source: usado pelo login legado e arma 60 s de diagnóstico.";
+    if (s==1) return @"A correção também é aplicada automaticamente quando o Web Login executa switchToAccount:. As capturas abaixo são apenas para comparação.";
+    return @"Não registra valores de tokens ou cookies. A correção altera somente o refresh da TFNTwitterAccount; as requisições continuam sendo tratadas pelo NFB.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
     static NSString *rid=@"XTAPCell";
     UITableViewCell *c=[t dequeueReusableCellWithIdentifier:rid];
     if (!c) c=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:rid];
     c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar conta antiga (funciona)"; c.detailTextLabel.text=@"45 s — referência"; }
-    else if (i.section==0) { c.textLabel.text=@"Capturar conta nova (falha)"; c.detailTextLabel.text=@"45 s — login web/cookies"; }
-    else if (i.row==0) { c.textLabel.text=@"Copiar comparação"; c.detailTextLabel.text=kLogName; }
-    else { c.textLabel.text=@"Limpar relatório"; c.detailTextLabel.text=@"Apaga as capturas anteriores"; }
+    if (i.section==0) {
+        c.textLabel.text=@"Aplicar correção + capturar";
+        c.detailTextLabel.text=@"refreshForced + 60 s de probe na conta atual";
+    } else if (i.section==1 && i.row==0) {
+        c.textLabel.text=@"Capturar conta antiga";
+        c.detailTextLabel.text=@"60 s — OAuth legado";
+    } else if (i.section==1) {
+        c.textLabel.text=@"Capturar conta nova";
+        c.detailTextLabel.text=@"60 s — Web Login/cookies";
+    } else if (i.row==0) {
+        c.textLabel.text=@"Copiar relatório";
+        c.detailTextLabel.text=kLogName;
+    } else {
+        c.textLabel.text=@"Limpar relatório";
+        c.detailTextLabel.text=@"Apaga as capturas anteriores";
+    }
     return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)i {
     [t deselectRowAtIndexPath:i animated:YES];
     if (i.section==0) {
-        Arm(i.row==0?@"OLD_OK":@"NEW_FAIL");
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Grok Probe"
-            message:@"Captura armada por 45 segundos. Volte ao mesmo post e toque uma vez em “Traduzir post”."
+        Arm(@"MANUAL_FIX");
+        BOOL ok=RefreshAccountForGrok(CurrentAccount(), @"manual-settings");
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Fix + Probe"
+            message:ok ? @"Refresh aplicado. A captura ficou armada por 60 segundos; volte ao mesmo post e use “Traduzir post” uma vez."
+                       : @"Não foi possível aplicar o refresh à conta atual. O relatório registrou o motivo."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:a animated:YES completion:nil];
+        return;
+    }
+    if (i.section==1) {
+        Arm(i.row==0?@"OLD_REFERENCE":@"WEB_REFERENCE");
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Fix + Probe"
+            message:@"Captura armada por 60 segundos. Volte ao mesmo post e toque uma vez em “Traduzir post”."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
@@ -400,7 +473,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Grok Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Fix + Probe"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -422,7 +495,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"XTranslate Grok Probe",@"subtitle":@"Rastrear o caminho completo da tradução.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"XTranslate Fix + Probe",@"subtitle":@"Corrigir o refresh do Web Login e diagnosticar o bootstrap do Grok.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -451,7 +524,7 @@ static void InstallNFB(void) {
     gNFBHooked=a||b;
     Log(@"HOOKS nfb=%d",gNFBHooked);
 }
-static void InstallAll(void) { InstallNetworkHooks(); InstallNFB(); }
+static void InstallAll(void) { InstallNetworkHooks(); InstallWebLoginFix(); InstallNFB(); }
 static void Retry(NSTimeInterval d) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(d*NSEC_PER_SEC)),dispatch_get_main_queue(),^{ InstallAll(); });
 }
@@ -459,8 +532,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== XTranslate Grok Probe 0.4.0 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=read-only no-secrets",
+        Log(@"========== XTranslate Fix + Probe 0.4.0 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=fix+probe no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
