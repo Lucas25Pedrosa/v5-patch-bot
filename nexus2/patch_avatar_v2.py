@@ -16,11 +16,10 @@ old_pref = '''static BOOL NexusAvatarOLEDEnabled(void) {
     if ([defaults objectForKey:@"iQFaceOLEDEnabled"] == nil) return YES;
     return [defaults boolForKey:@"iQFaceOLEDEnabled"];
 }'''
-new_pref = '''static BOOL NexusAvatarOLEDEnabled(void) {
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    id value = [defaults objectForKey:@"NexusBackgroundMode"];
-    NSInteger mode = value == nil ? 1 : [value integerValue];
-    return mode != 0;
+new_pref = '''extern BOOL Nexus2BackgroundEffectActive(void);
+
+static BOOL NexusAvatarOLEDEnabled(void) {
+    return Nexus2BackgroundEffectActive();
 }'''
 if old_pref not in s:
     raise SystemExit("avatar preference function not found")
@@ -70,7 +69,7 @@ if n != 1:
     raise SystemExit(f"avatar hook function replacement count={n}")
 
 for marker in [
-    "NexusBackgroundMode",
+    "Nexus2BackgroundEffectActive",
     "Nexus2AvatarHooksInstalled",
     "gNexus2AvatarHooksInstalled = addSubviewReady && setImageReady",
 ]:
