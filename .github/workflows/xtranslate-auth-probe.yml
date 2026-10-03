@@ -1,4 +1,4 @@
-name: Build Grok Endpoint Fix
+name: Build Grok Session Diff Probe
 
 "on":
   workflow_dispatch:
@@ -9,6 +9,7 @@ name: Build Grok Endpoint Fix
       - "xtranslate-grok-bootstrap-probe-*"
       - "xtranslate-tap-diff-probe-*"
       - "xtranslate-grok-endpoint-fix-*"
+      - "xtranslate-grok-bootstrap-fix-*"
     paths:
       - "xtranslate-auth-probe/**"
       - ".github/workflows/xtranslate-auth-probe.yml"
@@ -38,13 +39,13 @@ jobs:
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name XTranslateAuthProbe.dylib ! -path '*/XTranslateAuthProbe.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/XTranslateGrokEndpointFix-0.9.0-Beta1-X12.31.1-arm64.dylib
-          file artifacts/XTranslateGrokEndpointFix-0.9.0-Beta1-X12.31.1-arm64.dylib
-          lipo -info artifacts/XTranslateGrokEndpointFix-0.9.0-Beta1-X12.31.1-arm64.dylib
-          shasum -a 256 artifacts/XTranslateGrokEndpointFix-0.9.0-Beta1-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib
+          file artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib
+          lipo -info artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib
+          shasum -a 256 artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XTranslateGrokEndpointFix-0.9.0-Beta1-X12.31.1-arm64
+          name: XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64
           path: xtranslate-auth-probe/artifacts/
           if-no-files-found: error
