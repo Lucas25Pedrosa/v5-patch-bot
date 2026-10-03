@@ -5,7 +5,7 @@
 #import <dispatch/dispatch.h>
 
 static NSString *const kLogName = @"XTranslateAuthProbe.log";
-static const NSTimeInterval kWindow = 20.0;
+static const NSTimeInterval kWindow = 45.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
 static IMP gOrigDataTask = NULL;
@@ -97,6 +97,40 @@ static NSString *Header(NSURLRequest *r, NSString *name) {
     return v ?: @"";
 }
 
+static NSString *MaskUID(NSString *uid) {
+    if (!uid.length) return @"-";
+    if (uid.length <= 4) return uid;
+    return [NSString stringWithFormat:@"…%@", [uid substringFromIndex:uid.length - 4]];
+}
+
+static NSString *OAuthUID(NSURLRequest *r) {
+    NSString *a = Header(r, @"Authorization");
+    if (!a.length) return @"-";
+    NSRange m = [a rangeOfString:@"oauth_token=\""];
+    if (m.location == NSNotFound) return @"-";
+    NSString *rest = [a substringFromIndex:NSMaxRange(m)];
+    NSRange q = [rest rangeOfString:@"\""];
+    if (q.location == NSNotFound) return @"-";
+    NSString *token = [rest substringToIndex:q.location];
+    NSRange dash = [token rangeOfString:@"-"];
+    NSString *uid = dash.location != NSNotFound ? [token substringToIndex:dash.location] : token;
+    return MaskUID(uid);
+}
+
+static NSString *CookieUID(NSURLRequest *r) {
+    NSString *c = Header(r, @"Cookie");
+    if (!c.length) return @"-";
+    NSRange m = [c rangeOfString:@"twid=" options:NSCaseInsensitiveSearch];
+    if (m.location == NSNotFound) return @"-";
+    NSString *rest = [c substringFromIndex:NSMaxRange(m)];
+    NSRange semi = [rest rangeOfString:@";"];
+    NSString *twid = semi.location == NSNotFound ? rest : [rest substringToIndex:semi.location];
+    NSString *decoded = [twid stringByRemovingPercentEncoding] ?: twid;
+    NSCharacterSet *nonDigits = [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+    NSString *uid = [[decoded componentsSeparatedByCharactersInSet:nonDigits] componentsJoinedByString:@""];
+    return MaskUID(uid);
+}
+
 static NSString *AuthShape(NSURLRequest *r) {
     NSString *a = Header(r, @"Authorization");
     if (!a.length) return @"none";
@@ -146,16 +180,18 @@ static NSString *Operation(NSURLRequest *r) {
 
 static void LogRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
     if (!r) { Log(@"REQ %@ #%lu nil", phase, (unsigned long)seq); return; }
-    Log(@"REQ %@ #%lu label=%@ method=%@ host=%@ op=%@ path=%@ auth=%@ authTypeHdr=%@ csrf=%d cookies=%@ xtid=%d body=%lu hint=%@",
+    Log(@"REQ %@ #%lu label=%@ method=%@ host=%@ op=%@ path=%@ auth=%@ oauthUID=%@ authTypeHdr=%@ csrf=%d cookies=%@ cookieUID=%@ xtid=%d body=%lu hint=%@",
         phase, (unsigned long)seq, gLabel ?: @"-",
         r.HTTPMethod ?: @"GET",
         r.URL.host ?: @"-",
         Operation(r),
         r.URL.path ?: @"-",
         AuthShape(r),
+        OAuthUID(r),
         Header(r, @"x-twitter-auth-type").length ? Header(r, @"x-twitter-auth-type") : @"-",
         Header(r, @"x-csrf-token").length > 0,
         CookieShape(r),
+        CookieUID(r),
         Header(r, @"x-client-transaction-id").length > 0,
         (unsigned long)r.HTTPBody.length,
         KeywordHint(r));
@@ -324,7 +360,7 @@ static void Arm(NSString *label) {
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Comparação":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Ative primeiro a conta correspondente. Depois toque no botão, volte ao MESMO post e use “Traduzir post” uma vez. A captura dura 20 s e não modifica nenhuma requisição.";
+    if (s==0) return @"Ative primeiro a conta correspondente. Depois toque no botão, volte ao MESMO post e use “Traduzir post” uma vez. A captura dura 45 s e não modifica nenhuma requisição.";
     return @"Não registra tokens nem valores de cookies: apenas tipo de autenticação, presença de cabeçalhos, endpoint e status HTTP.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
@@ -332,8 +368,8 @@ static void Arm(NSString *label) {
     UITableViewCell *c=[t dequeueReusableCellWithIdentifier:rid];
     if (!c) c=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:rid];
     c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar conta antiga (funciona)"; c.detailTextLabel.text=@"20 s — referência"; }
-    else if (i.section==0) { c.textLabel.text=@"Capturar conta nova (falha)"; c.detailTextLabel.text=@"20 s — login web/cookies"; }
+    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar conta antiga (funciona)"; c.detailTextLabel.text=@"45 s — referência"; }
+    else if (i.section==0) { c.textLabel.text=@"Capturar conta nova (falha)"; c.detailTextLabel.text=@"45 s — login web/cookies"; }
     else if (i.row==0) { c.textLabel.text=@"Copiar comparação"; c.detailTextLabel.text=kLogName; }
     else { c.textLabel.text=@"Limpar relatório"; c.detailTextLabel.text=@"Apaga as capturas anteriores"; }
     return c;
@@ -343,7 +379,7 @@ static void Arm(NSString *label) {
     if (i.section==0) {
         Arm(i.row==0?@"OLD_OK":@"NEW_FAIL");
         UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Auth Probe"
-            message:@"Captura armada por 20 segundos. Volte ao mesmo post e toque uma vez em “Traduzir post”."
+            message:@"Captura armada por 45 segundos. Volte ao mesmo post e toque uma vez em “Traduzir post”."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
@@ -411,7 +447,7 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== XTranslate Auth Probe 0.2.0 loaded ==========");
+        Log(@"========== XTranslate Auth Probe 0.3.0 loaded ==========");
         Log(@"ENV appVersion=%@ build=%@ os=%@ mode=read-only no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
