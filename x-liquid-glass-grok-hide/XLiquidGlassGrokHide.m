@@ -16,6 +16,7 @@ static BOOL gLegacyNavigationHookInstalled = NO;
 static BOOL gSettingsHookInstalled = NO;
 
 static char kXLGOriginalVisibleTabEntriesKey;
+static char kXLGOriginalShouldShowGrokIMPKey;
 
 static BOOL XLGHideGrokEnabled(void) {
     id stored = [[NSUserDefaults standardUserDefaults] objectForKey:kXLGHideGrokKey];
@@ -238,9 +239,17 @@ static UITableViewCell *XLGSettingsCell(id self,
 }
 
 static BOOL XLGForceNoGrok(id self, SEL _cmd) {
-    (void)self;
-    (void)_cmd;
-    return XLGHideGrokEnabled() ? NO : YES;
+    if (XLGHideGrokEnabled()) return NO;
+
+    NSValue *boxed =
+        objc_getAssociatedObject([self class], &kXLGOriginalShouldShowGrokIMPKey);
+    IMP original = boxed.pointerValue;
+
+    if (original && original != (IMP)XLGForceNoGrok) {
+        return ((BOOL (*)(id, SEL))original)(self, _cmd);
+    }
+
+    return YES;
 }
 
 static void XLGInstallShouldShowGrokGate(void) {
@@ -269,6 +278,11 @@ static void XLGInstallShouldShowGrokGate(void) {
 
         IMP current = class_getMethodImplementation(cls, gateSEL);
         if (current != (IMP)XLGForceNoGrok) {
+            objc_setAssociatedObject(
+                cls,
+                &kXLGOriginalShouldShowGrokIMPKey,
+                [NSValue valueWithPointer:current],
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             class_replaceMethod(cls, gateSEL, (IMP)XLGForceNoGrok, types);
             NSLog(@"[XLiquidGlass] Grok gate hooked on %@", name);
         }
