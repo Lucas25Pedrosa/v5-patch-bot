@@ -104,6 +104,7 @@ jobs:
           file nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/file.txt
           strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/strings.txt || true
           otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/install-name.txt
+          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/symbols.txt
 
           grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
           grep -F 'arm64' nexus2/artifacts-beta1/file.txt
@@ -125,8 +126,11 @@ jobs:
           grep -F 'inlineUnitType' nexus2/artifacts-beta1/strings.txt
           grep -F 'wordmark target found' nexus2/artifacts-beta1/strings.txt
           grep -F 'recognizer attached' nexus2/artifacts-beta1/strings.txt
-          grep -F 'Nexus2BackgroundHookInstalled' nexus2/artifacts-beta1/strings.txt
-          grep -F 'Nexus2AvatarHooksInstalled' nexus2/artifacts-beta1/strings.txt
+          grep -F '_Nexus2BackgroundHookInstalled' nexus2/artifacts-beta1/symbols.txt
+          grep -F '_Nexus2BackgroundCurrentMode' nexus2/artifacts-beta1/symbols.txt
+          grep -F '_Nexus2AvatarHooksInstalled' nexus2/artifacts-beta1/symbols.txt
+          grep -F '_Nexus2LogoActivationAvailable' nexus2/artifacts-beta1/symbols.txt
+          grep -F '_Nexus2DiagnosticsText' nexus2/artifacts-beta1/symbols.txt
           grep -F 'lucaspedrosa' nexus2/artifacts-beta1/strings.txt
           grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
 
