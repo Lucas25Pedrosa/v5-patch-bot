@@ -1,4 +1,4 @@
-name: Build Nexus 2.1 Run52 OLED
+name: Build Nexus 2.1 Beta 2
 
 "on":
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare Nexus 2.1 with frozen run52 OLED
+      - name: Prepare Nexus 2.1 Beta 2
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -65,6 +65,7 @@ jobs:
             python3 "$ROOT/nexus21/run52-oled/adapt_iqface11_native_icon_switches.py"
           )
           python3 nexus21/run52-oled/nexus_prepare_oled.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
+          python3 nexus21/patch_ios_fallback_beta2.py "$WORK/OLEDTweak.m"
           rm "$WORK/Tweak.m"
 
           cp nexus2/Nexus2.m "$WORK/Nexus2.m"
@@ -75,7 +76,11 @@ jobs:
           ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
           ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
 
-          grep -F 'NexusVersion = @"2.1"' "$WORK/Nexus2.m"
+          grep -F 'NexusVersion = @"2.1 Beta 2"' "$WORK/Nexus2.m"
+          grep -F 'NXKeyIOSFallback = @"NexusOLEDUseIOSFallback"' "$WORK/Nexus2.m"
+          grep -F 'Use iOS fallback' "$WORK/Nexus2.m"
+          grep -F 'iOS fallback subtitle' "$WORK/Nexus2.m"
+          grep -F 'NXIQFBool(NXKeyIOSFallback, NO)' "$WORK/Nexus2.m"
           grep -F 'NXKeyOLED = @"iQFaceOLEDEnabled"' "$WORK/Nexus2.m"
           grep -F 'iQFaceOLEDFeedSeparatorsEnabled' "$WORK/Nexus2.m"
           ! grep -F 'NexusCustomBackgroundColor' "$WORK/Nexus2.m"
@@ -84,6 +89,10 @@ jobs:
 
           grep -F 'IQFOLEDPreferenceKey = @"iQFaceOLEDEnabled"' "$WORK/OLEDTweak.m"
           grep -F 'IQFOLEDSeparatorsPreferenceKey = @"iQFaceOLEDFeedSeparatorsEnabled"' "$WORK/OLEDTweak.m"
+          grep -F 'IQFOLEDIOSFallbackPreferenceKey = @"NexusOLEDUseIOSFallback"' "$WORK/OLEDTweak.m"
+          grep -F 'IQFOLEDLoadIOSFallbackPreference' "$WORK/OLEDTweak.m"
+          grep -F 'else if (!IQFOLEDLoadIOSFallbackPreference())' "$WORK/OLEDTweak.m"
+          grep -F 'window.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark' "$WORK/OLEDTweak.m"
           grep -F 'IQFOLEDIsMappedDark' "$WORK/OLEDTweak.m"
           grep -F 'FBLineComponentInternalView' "$WORK/OLEDTweak.m"
           grep -F 'NexusOLEDCreateModeSetting' "$WORK/OLEDTweak.m"
@@ -92,7 +101,7 @@ jobs:
           ! grep -F 'Nexus2Background' "$WORK/OLEDTweak.m"
           ! grep -F 'NexusCustomBackgroundColor' "$WORK/OLEDTweak.m"
 
-      - name: Build Nexus 2.1
+      - name: Build Nexus 2.1 Beta 2
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -117,7 +126,9 @@ jobs:
           grep -F 'Mach-O 64-bit' nexus21/artifacts/file.txt
           grep -F 'arm64' nexus21/artifacts/file.txt
           grep -F '@rpath/Nexus.dylib' nexus21/artifacts/install-name.txt
-          grep -F 'Nexus 2.1 loaded' nexus21/artifacts/strings.txt
+          grep -F 'Nexus 2.1 Beta 2 loaded' nexus21/artifacts/strings.txt
+          grep -F 'NexusOLEDUseIOSFallback' nexus21/artifacts/strings.txt
+          grep -F 'Use iOS fallback' nexus21/artifacts/strings.txt
           grep -F 'iQFaceOLEDEnabled' nexus21/artifacts/strings.txt
           grep -F 'iQFaceOLEDFeedSeparatorsEnabled' nexus21/artifacts/strings.txt
           grep -F 'Modo OLED' nexus21/artifacts/strings.txt
@@ -132,10 +143,10 @@ jobs:
           ! grep -F 'Custom color' nexus21/artifacts/strings.txt
           ! grep -F 'Nexus2BackgroundModeKey' nexus21/artifacts/strings.txt
 
-      - name: Upload Nexus 2.1
+      - name: Upload Nexus 2.1 Beta 2
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-2.1-Run52-OLED-arm64
+          name: Nexus-2.1-Beta2-arm64
           path: nexus21/artifacts/
           if-no-files-found: error
           retention-days: 90
