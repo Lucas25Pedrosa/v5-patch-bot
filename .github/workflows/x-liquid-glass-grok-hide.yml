@@ -1,4 +1,4 @@
-name: Build XLiquidGlass Grok Hide Beta
+name: Build XLiquidGlass Grok Hide Beta 2
 
 "on":
   workflow_dispatch:
@@ -43,6 +43,6 @@ jobs:
       - name: Upload dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass-2.0.3-Beta1-GrokHide-X12.31.1-arm64
+          name: XLiquidGlass-2.0.3-Beta2-GrokHide-X12.31.1-arm64
           path: x-liquid-glass-grok-hide/artifacts/
           if-no-files-found: error
