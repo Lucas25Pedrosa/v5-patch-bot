@@ -88,6 +88,37 @@ s = s.replace(
     1,
 )
 
+# Expose the real background hook state to Nexus Diagnostics.
+setter_marker = 'static void IQFOLEDInstallInstantSetter(void) {'
+if setter_marker not in s:
+    raise SystemExit("instant setter marker not found")
+s = s.replace(
+    setter_marker,
+    '''static BOOL gNexus2BackgroundHookInstalled = NO;
+
+__attribute__((used, visibility("default")))
+BOOL Nexus2BackgroundHookInstalled(void) {
+    return gNexus2BackgroundHookInstalled;
+}
+
+__attribute__((used, visibility("default")))
+NSInteger Nexus2BackgroundCurrentMode(void) {
+    return Nexus2BackgroundMode();
+}
+
+static void IQFOLEDInstallInstantSetter(void) {''',
+    1,
+)
+
+exchange_marker = 'method_exchangeImplementations(original, replacement);'
+if exchange_marker not in s:
+    raise SystemExit("background exchange marker not found")
+s = s.replace(
+    exchange_marker,
+    exchange_marker + '\n            gNexus2BackgroundHookInstalled = YES;',
+    1,
+)
+
 # Localize the retained separator control for every iQFace 1.2 language.
 s = s.replace(
     'return [title isEqualToString:@"Separadores no feed"] ||\n           [title isEqualToString:@"Feed separators"];',
@@ -107,6 +138,8 @@ required = [
     'Nexus2TargetBackgroundColor',
     'Nexus2Localized(@"Feed separators")',
     'gIQFOLEDEnabled = (Nexus2BackgroundMode() != 0);',
+    'Nexus2BackgroundHookInstalled',
+    'Nexus2BackgroundCurrentMode',
 ]
 for marker in required:
     if marker not in s:
