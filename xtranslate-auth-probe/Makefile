@@ -11,4 +11,4 @@ XTranslateAuthProbe_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-# CI PR trigger 0.11 Beta 1
+# CI PR trigger Grok Private Bridge Fix 0.12 Beta 1
