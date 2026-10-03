@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 3";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 4";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -447,6 +447,140 @@ static void NXSetOLEDEnabled(BOOL enabled) {
     Nexus2BackgroundRefreshNow();
 }
 
+
+#pragma mark - iQFace OLED compatibility
+
+typedef void (*NXMSHookFunctionType)(void *symbol, void *replacement, void **original);
+
+static BOOL NXIQFaceOLEDCompatInstalled = NO;
+static BOOL NXIQFaceOLEDSymbolsFound = NO;
+static BOOL NXIQFaceOLEDRowHidden = NO;
+static BOOL NXIQFaceOLEDHookFunctionAvailable = NO;
+static NSInteger NXIQFaceOLEDCompatAttempts = 0;
+
+static NSString *NXIQFaceOLEDPreferenceKey(void) {
+    void *symbol = NXFindSymbol("IQFKeyOLEDDarkMode");
+    if (symbol != NULL) {
+        @try {
+            id value = *((__unsafe_unretained id *)symbol);
+            if ([value isKindOfClass:NSString.class] && [value length] > 0) {
+                return value;
+            }
+        } @catch (__unused NSException *exception) {
+        }
+    }
+    return @"IQFOLEDDarkMode";
+}
+
+static BOOL NXIQFaceOLEDDisabledStub(void) {
+    return NO;
+}
+
+static void NXIQFaceOLEDNoopStub(void) {
+}
+
+static void NXResetControllerAppearance(UIViewController *controller, NSHashTable *visited) {
+    if (!controller || [visited containsObject:controller]) return;
+    [visited addObject:controller];
+
+    @try {
+        if (controller.overrideUserInterfaceStyle != UIUserInterfaceStyleUnspecified) {
+            controller.overrideUserInterfaceStyle = UIUserInterfaceStyleUnspecified;
+        }
+    } @catch (__unused NSException *exception) {
+    }
+
+    if (controller.presentedViewController) {
+        NXResetControllerAppearance(controller.presentedViewController, visited);
+    }
+    if ([controller isKindOfClass:UINavigationController.class]) {
+        for (UIViewController *child in ((UINavigationController *)controller).viewControllers) {
+            NXResetControllerAppearance(child, visited);
+        }
+    } else if ([controller isKindOfClass:UITabBarController.class]) {
+        for (UIViewController *child in ((UITabBarController *)controller).viewControllers ?: @[]) {
+            NXResetControllerAppearance(child, visited);
+        }
+    } else if ([controller isKindOfClass:UISplitViewController.class]) {
+        for (UIViewController *child in ((UISplitViewController *)controller).viewControllers) {
+            NXResetControllerAppearance(child, visited);
+        }
+    }
+    for (UIViewController *child in controller.childViewControllers) {
+        NXResetControllerAppearance(child, visited);
+    }
+}
+
+static void NXResetIQFaceForcedAppearance(void) {
+    if (!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NXResetIQFaceForcedAppearance();
+        });
+        return;
+    }
+
+    NSHashTable *visited = [NSHashTable weakObjectsHashTable];
+    UIApplication *application = UIApplication.sharedApplication;
+    for (UIScene *scene in application.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
+        if (windowScene.activationState == UISceneActivationStateUnattached) continue;
+        for (UIWindow *window in windowScene.windows) {
+            @try {
+                if (window.overrideUserInterfaceStyle != UIUserInterfaceStyleUnspecified) {
+                    window.overrideUserInterfaceStyle = UIUserInterfaceStyleUnspecified;
+                }
+            } @catch (__unused NSException *exception) {
+            }
+            NXResetControllerAppearance(window.rootViewController, visited);
+        }
+    }
+}
+
+static void NXTryInstallIQFaceOLEDCompatibility(void) {
+    if (NXIQFaceOLEDCompatInstalled) return;
+    NXIQFaceOLEDCompatAttempts++;
+
+    NXMSHookFunctionType hookFunction =
+        (NXMSHookFunctionType)dlsym(RTLD_DEFAULT, "MSHookFunction");
+    NXIQFaceOLEDHookFunctionAvailable = hookFunction != NULL;
+
+    void *enabled = NXFindSymbol("IQFOLEDEnabled");
+    void *refresh = NXFindSymbol("IQFRefreshOLED");
+    void *apply = NXFindSymbol("IQFApplyForcedAppearance");
+    void *init = NXFindSymbol("IQFOLEDInit");
+    NXIQFaceOLEDSymbolsFound = enabled && refresh && apply && init;
+
+    if (hookFunction && NXIQFaceOLEDSymbolsFound) {
+        // Keep the original iQFace dylib untouched. Neutralize only its OLED module.
+        hookFunction(enabled, (void *)&NXIQFaceOLEDDisabledStub, NULL);
+        hookFunction(refresh, (void *)&NXIQFaceOLEDNoopStub, NULL);
+        hookFunction(apply, (void *)&NXIQFaceOLEDNoopStub, NULL);
+        hookFunction(init, (void *)&NXIQFaceOLEDNoopStub, NULL);
+
+        // Also persist the original iQFace OLED preference as disabled.
+        NXSetIQFBool(NXIQFaceOLEDPreferenceKey(), NO);
+
+        NXIQFaceOLEDCompatInstalled = YES;
+        NXEvent(@"iQFace OLED compatibility installed");
+
+        // If iQFace loaded first and already forced Dark, remove only that forced override.
+        NXResetIQFaceForcedAppearance();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            NXResetIQFaceForcedAppearance();
+        });
+        return;
+    }
+
+    if (NXIQFaceOLEDCompatAttempts < 160) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.20 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            NXTryInstallIQFaceOLEDCompatibility();
+        });
+    }
+}
+
 #pragma mark - Diagnostics
 
 static NSMutableArray<NSString *> *NXEvents;
@@ -519,7 +653,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 4\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -541,6 +675,10 @@ NSString *Nexus2DiagnosticsText(void) {
      NXStatus(Nexus2BackgroundCurrentMode() != 0),
      [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF",
      NXStatus(Nexus2AvatarHooksInstalled())];
+    [report appendFormat:@"[iQFace OLED compatibility]\nMSHookFunction: %@\nsymbols: %@\nhooks installed: %@\nOLED row hidden: %@\npreference key: %@\n\n",
+     NXStatus(NXIQFaceOLEDHookFunctionAvailable), NXStatus(NXIQFaceOLEDSymbolsFound),
+     NXStatus(NXIQFaceOLEDCompatInstalled), NXStatus(NXIQFaceOLEDRowHidden),
+     NXIQFaceOLEDPreferenceKey()];
     [report appendString:@"[Events]\n"];
     for (NSString *event in NXEvents ?: @[]) [report appendFormat:@"%@\n", event];
     if (NXCapturedUI.length) [report appendString:NXCapturedUI];
@@ -1564,6 +1702,62 @@ static NSString *NXSettingTitle(id setting) {
     }
 }
 
+
+static NSString *NXSettingDefaultsKey(id setting) {
+    if (!setting) return nil;
+    NSArray<NSString *> *candidateKeys = @[@"defaultsKey", @"preferenceKey", @"key"];
+    for (NSString *candidate in candidateKeys) {
+        @try {
+            id value = [setting valueForKey:candidate];
+            if ([value isKindOfClass:NSString.class] && [value length] > 0) {
+                return value;
+            }
+        } @catch (__unused NSException *exception) {
+        }
+    }
+    return nil;
+}
+
+static BOOL NXIsIQFaceOLEDSetting(id setting) {
+    NSString *defaultsKey = NXSettingDefaultsKey(setting);
+    NSString *targetKey = NXIQFaceOLEDPreferenceKey();
+    if (defaultsKey.length) {
+        if ([defaultsKey caseInsensitiveCompare:targetKey] == NSOrderedSame) return YES;
+        NSString *lowerKey = defaultsKey.lowercaseString;
+        if ([lowerKey containsString:@"oled"] && [lowerKey containsString:@"dark"]) return YES;
+    }
+
+    // Fallback for older iQFace builds where IQFSetting does not expose defaultsKey.
+    NSString *title = NXSettingTitle(setting).lowercaseString;
+    if ([title containsString:@"oled"]) {
+        return [title containsString:@"dark"] ||
+               [title containsString:@"escuro"] ||
+               [title containsString:@"sombre"] ||
+               [title containsString:@"т"] ||
+               [title containsString:@"深"] ||
+               [title containsString:@"tối"] ||
+               [title containsString:@"دا"] ||
+               [title containsString:@"تار"] ||
+               [title containsString:@"تاریک"];
+    }
+    return NO;
+}
+
+static void NXRemoveIQFaceOLEDRowFromSection(NSMutableDictionary *section) {
+    NSArray *rows = [section[@"rows"] isKindOfClass:NSArray.class] ? section[@"rows"] : @[];
+    if (rows.count == 0) return;
+
+    NSMutableArray *filtered = [NSMutableArray arrayWithCapacity:rows.count];
+    for (id row in rows) {
+        if (NXIsIQFaceOLEDSetting(row)) {
+            NXIQFaceOLEDRowHidden = YES;
+            continue;
+        }
+        [filtered addObject:row];
+    }
+    section[@"rows"] = [filtered copy];
+}
+
 static id NXCreateLocalizedIconSetting(void) {
     Class settingClass = NSClassFromString(@"IQFSetting");
     Class pickerClass = NSClassFromString(@"IQFIconsPickerController");
@@ -1597,7 +1791,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0 Beta 4", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1769,6 +1963,7 @@ static NSArray *NXTweakSections(id self, SEL command) {
         NSString *lower = header.lowercaseString ?: @"";
         if ([lower containsString:@"nexus"]) continue;
         NXRemoveOwnedRowsFromSection(section);
+        NXRemoveIQFaceOLEDRowFromSection(section);
         [result addObject:[section copy]];
     }
 
@@ -1863,9 +2058,10 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 3 loaded");
+        NXEvent(@"Nexus 2.0 Beta 4 loaded");
 
         dispatch_async(dispatch_get_main_queue(), ^{
+            NXTryInstallIQFaceOLEDCompatibility();
             NXTryInstallSettingsHooks();
 
             if (NXLogoModeSelected()) {
