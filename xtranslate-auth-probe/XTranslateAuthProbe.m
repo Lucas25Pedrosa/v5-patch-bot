@@ -15,6 +15,9 @@ static IMP gOrigUploadFile = NULL;
 static IMP gOrigResume = NULL;
 static IMP gOrigConcreteDataTask = NULL;
 static IMP gOrigConcreteDataTaskCompletion = NULL;
+static IMP gOrigPrivateDataTaskDelegate = NULL;
+static IMP gOrigPrivateDataTaskDelegateCompletion = NULL;
+static IMP gOrigPrivateUploadDataDelegateCompletion = NULL;
 static Class gConcreteSessionClass = Nil;
 static NSString *gObservedNativeBearer = nil;
 static NSString *gObservedWebBearer = nil;
@@ -514,6 +517,48 @@ static NSURLSessionDataTask *ConcreteDataTaskCompletion(NSURLSession *self, SEL 
     return ((id(*)(id,SEL,id,id))gOrigConcreteDataTaskCompletion)(self,_cmd,request,completion);
 }
 
+static id PrivateDataTaskDelegate(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate) {
+    if (!gOrigPrivateDataTaskDelegate) return nil;
+    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"GROK_FIX_PRIV_IN",seq,request);
+        LogRequest(@"GROK_FIX_PRIV_OUT",seq,effective);
+        id task=((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,effective,delegate);
+        AttachTask(task,seq);
+        return task;
+    }
+    return ((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,request,delegate);
+}
+
+static id PrivateDataTaskDelegateCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate, id completion) {
+    if (!gOrigPrivateDataTaskDelegateCompletion) return nil;
+    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"GROK_FIX_PRIV_IN",seq,request);
+        LogRequest(@"GROK_FIX_PRIV_OUT",seq,effective);
+        id task=((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,effective,delegate,completion);
+        AttachTask(task,seq);
+        return task;
+    }
+    return ((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,request,delegate,completion);
+}
+
+static id PrivateUploadDataDelegateCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, NSData *data, id delegate, id completion) {
+    if (!gOrigPrivateUploadDataDelegateCompletion) return nil;
+    NSURLRequest *effective=RewriteGrokSpecialIfNeeded(request);
+    if (effective != request) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"GROK_FIX_UPRIV_IN",seq,request);
+        LogRequest(@"GROK_FIX_UPRIV_OUT",seq,effective);
+        id task=((id(*)(id,SEL,id,id,id,id))gOrigPrivateUploadDataDelegateCompletion)(self,_cmd,effective,data,delegate,completion);
+        AttachTask(task,seq);
+        return task;
+    }
+    return ((id(*)(id,SEL,id,id,id,id))gOrigPrivateUploadDataDelegateCompletion)(self,_cmd,request,data,delegate,completion);
+}
+
 static void InstallConcreteSessionHooks(void) {
     if (gConcreteSessionClass) return;
     for (NSString *name in @[@"__NSURLSessionLocal",@"__NSCFURLSession"]) {
@@ -521,9 +566,13 @@ static void InstallConcreteSessionHooks(void) {
         if (!c) continue;
         BOOL a=Hook(c,@selector(dataTaskWithRequest:),(IMP)ConcreteDataTask,&gOrigConcreteDataTask);
         BOOL b=Hook(c,@selector(dataTaskWithRequest:completionHandler:),(IMP)ConcreteDataTaskCompletion,&gOrigConcreteDataTaskCompletion);
-        if (a || b) {
+        BOOL p1=Hook(c,NSSelectorFromString(@"_dataTaskWithRequest:delegate:"),(IMP)PrivateDataTaskDelegate,&gOrigPrivateDataTaskDelegate);
+        BOOL p2=Hook(c,NSSelectorFromString(@"_dataTaskWithRequest:delegate:completionHandler:"),(IMP)PrivateDataTaskDelegateCompletion,&gOrigPrivateDataTaskDelegateCompletion);
+        BOOL p3=Hook(c,NSSelectorFromString(@"_uploadTaskWithRequest:fromData:delegate:completionHandler:"),(IMP)PrivateUploadDataDelegateCompletion,&gOrigPrivateUploadDataDelegateCompletion);
+        if (a || b || p1 || p2 || p3) {
             gConcreteSessionClass=c;
-            Log(@"HOOKS concreteSession=1 class=%@ data=%d completion=%d",name,a,b);
+            Log(@"HOOKS concreteSession=1 class=%@ data=%d completion=%d privateData=%d privateCompletion=%d privateUpload=%d",
+                name,a,b,p1,p2,p3);
             return;
         }
     }
@@ -541,6 +590,12 @@ static void ProbeResume(NSURLSessionTask *self, SEL _cmd) {
         NSUInteger seq=++gReqSeq;
         LogRequest(@"RESUME-UNTRACKED",seq,r);
         LogTaskShape(@"RESUME-UNTRACKED",seq,self,r);
+        if (IsGrokSpecialEndpoint(r)) {
+            Log(@"========== SPECIAL RESUME STACK #%lu ==========",(unsigned long)seq);
+            NSArray<NSString*> *stack=[NSThread callStackSymbols];
+            NSUInteger limit=MIN((NSUInteger)24,stack.count);
+            for (NSUInteger i=0;i<limit;i++) Log(@"SPECIAL STACK #%lu frame=%02lu %@",(unsigned long)seq,(unsigned long)i,stack[i]);
+        }
         AttachTask(self,seq);
     }
     if (gOrigResume) ((void(*)(id,SEL))gOrigResume)(self,_cmd);
@@ -578,7 +633,7 @@ static void Arm(NSString *label) {
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Tap Diff":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Beta 1 reescreve somente pass_through_jwt.json e translation.json de contas Web Login. Teste WEB_FAIL em um post novo.";
+    if (s==0) return @"Beta 2 reescreve somente pass_through_jwt.json e translation.json de contas Web Login. Teste WEB_FAIL em um post novo.";
     return @"O restante do tráfego não é alterado. O log não expõe valores de tokens, cookies ou texto do post.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
@@ -629,7 +684,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Grok Endpoint Fix",@"subtitle":@"Beta 1: corrigir os dois endpoints Grok do Web Login.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Endpoint Fix",@"subtitle":@"Beta 2: corrigir os dois endpoints Grok do Web Login.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -666,8 +721,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Endpoint Fix 0.9.0 Beta 1 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-endpoint-webauth-beta1 no-secrets",
+        Log(@"========== Grok Endpoint Fix 0.9.0 Beta 2 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-endpoint-webauth-beta2 no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
@@ -676,4 +731,4 @@ static void Init(void) {
     }
 }
 
-// Build trigger: Grok Endpoint Fix 0.9 Beta 1
+// Build trigger: Grok Endpoint Fix 0.9 Beta 2
