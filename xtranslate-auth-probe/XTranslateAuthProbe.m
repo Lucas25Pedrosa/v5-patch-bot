@@ -696,7 +696,7 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Private Factory Fix 0.12.0 Stable loaded ==========");
+        Log(@"========== Grok Private Factory Fix 1.0.0 Stable loaded ==========");
         Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-private-factory-weblogin-fix no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
