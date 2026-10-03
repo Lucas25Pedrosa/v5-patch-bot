@@ -1,4 +1,4 @@
-name: Build Grok Bootstrap Probe
+name: Build Translate Tap Diff Probe
 
 "on":
   workflow_dispatch:
@@ -7,6 +7,7 @@ name: Build Grok Bootstrap Probe
       - "xtranslate-auth-probe-*"
       - "xtranslate-grok-probe-*"
       - "xtranslate-grok-bootstrap-probe-*"
+      - "xtranslate-tap-diff-probe-*"
     paths:
       - "xtranslate-auth-probe/**"
       - ".github/workflows/xtranslate-auth-probe.yml"
@@ -36,13 +37,13 @@ jobs:
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name XTranslateAuthProbe.dylib ! -path '*/XTranslateAuthProbe.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/GrokBootstrapProbe-0.6.0-X12.31.1-arm64.dylib
-          file artifacts/GrokBootstrapProbe-0.6.0-X12.31.1-arm64.dylib
-          lipo -info artifacts/GrokBootstrapProbe-0.6.0-X12.31.1-arm64.dylib
-          shasum -a 256 artifacts/GrokBootstrapProbe-0.6.0-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/XTranslateTapDiffProbe-0.8.0-X12.31.1-arm64.dylib
+          file artifacts/XTranslateTapDiffProbe-0.8.0-X12.31.1-arm64.dylib
+          lipo -info artifacts/XTranslateTapDiffProbe-0.8.0-X12.31.1-arm64.dylib
+          shasum -a 256 artifacts/XTranslateTapDiffProbe-0.8.0-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GrokBootstrapProbe-0.6.0-X12.31.1-arm64
+          name: XTranslateTapDiffProbe-0.8.0-X12.31.1-arm64
           path: xtranslate-auth-probe/artifacts/
           if-no-files-found: error
