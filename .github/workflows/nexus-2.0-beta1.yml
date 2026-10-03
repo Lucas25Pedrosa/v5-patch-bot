@@ -58,7 +58,7 @@ jobs:
             python3 "$ROOT/iqface-oled/adapt_iqface11_native_icon_switches.py"
           )
           python3 nexus2/prepare_oled_102_compat.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
-          python3 nexus2/adapt_oled_102_modes.py "$WORK/OLEDTweak.m"
+          python3 nexus2/adapt_oled_102_beta3.py "$WORK/OLEDTweak.m"
           rm "$WORK/Tweak.m"
 
           cp nexus2/Nexus2.m "$WORK/Nexus2.m"
@@ -84,10 +84,23 @@ jobs:
           ! grep -F 'overrideUserInterfaceStyle' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundHookInstalled' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundEffectActive' "$WORK/OLEDTweak.m"
-          grep -F 'gIQFOLEDModeKnown && gIQFOLEDDarkMode' "$WORK/OLEDTweak.m"
-          ! grep -F 'window.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark' "$WORK/OLEDTweak.m"
+          grep -F 'IQFOLEDPreferenceKey = @"iQFaceOLEDEnabled"' "$WORK/OLEDTweak.m"
+          grep -F 'gIQFOLEDEnabled = IQFOLEDLoadEnabledPreference();' "$WORK/OLEDTweak.m"
+          grep -F 'Nexus2BackgroundPrepareColorChange' "$WORK/OLEDTweak.m"
+          grep -F 'Nexus2BackgroundRefreshNow' "$WORK/OLEDTweak.m"
+          ! grep -F 'Nexus2BackgroundModeKey' "$WORK/OLEDTweak.m"
+          ! grep -F 'gIQFOLEDModeKnown' "$WORK/OLEDTweak.m"
+          grep -F 'gIQFOLEDEnabled && gIQFOLEDDarkMode' "$WORK/OLEDTweak.m"
+          grep -F 'window.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundEffectActive' "$WORK/NexusAvatarFix.m"
           grep -F 'Nexus2AvatarHooksInstalled' "$WORK/NexusAvatarFix.m"
+          grep -F 'NXKeyOLED = @"iQFaceOLEDEnabled"' "$WORK/Nexus2.m"
+          grep -F 'Nexus2Localized(@"OLED Mode")' "$WORK/Nexus2.m"
+          grep -F 'NXSetOLEDEnabled(sender.isOn)' "$WORK/Nexus2.m"
+          grep -F 'Nexus2BackgroundPrepareColorChange();' "$WORK/Nexus2.m"
+          grep -F 'NXSetIQFBool(NXKeyOLED, YES);' "$WORK/Nexus2.m"
+          ! grep -F 'NXKeyBackgroundMode' "$WORK/Nexus2.m"
+          ! grep -F 'NXInteger(NXKeyBackgroundMode' "$WORK/Nexus2.m"
           grep -F '_IQFKey' "$WORK/Nexus2.m"
           grep -F 'feedUnitType' "$WORK/Nexus2.m"
           grep -F 'feed_unit_type' "$WORK/Nexus2.m"
@@ -155,7 +168,7 @@ jobs:
           grep -F 'NexusHideSuggestedPages' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusHideStoryPeopleSuggestions' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusActivationMode' nexus2/artifacts-beta1/strings.txt
-          grep -F 'NexusBackgroundMode' nexus2/artifacts-beta1/strings.txt
+          grep -F 'iQFaceOLEDEnabled' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusCustomBackgroundColor' nexus2/artifacts-beta1/strings.txt
           grep -F 'IQFResolvedLanguage' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBNavigationBar' nexus2/artifacts-beta1/strings.txt
@@ -170,6 +183,8 @@ jobs:
           grep -F '_Nexus2BackgroundHookInstalled' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2BackgroundCurrentMode' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2BackgroundEffectActive' nexus2/artifacts-beta1/symbols.txt
+          grep -F '_Nexus2BackgroundPrepareColorChange' nexus2/artifacts-beta1/symbols.txt
+          grep -F '_Nexus2BackgroundRefreshNow' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2AvatarHooksInstalled' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2LogoActivationAvailable' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2DiagnosticsText' nexus2/artifacts-beta1/symbols.txt

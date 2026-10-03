@@ -11,7 +11,7 @@ static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
 static NSString * const NXKeyStoryPeople = @"NexusHideStoryPeopleSuggestions";
 static NSString * const NXKeyActivation = @"NexusActivationMode";
-static NSString * const NXKeyBackgroundMode = @"NexusBackgroundMode";
+static NSString * const NXKeyOLED = @"iQFaceOLEDEnabled";
 static NSString * const NXKeyBackgroundColor = @"NexusCustomBackgroundColor";
 static NSString * const NXSettingsChangedNotification = @"NexusSettingsDidChange";
 
@@ -21,6 +21,8 @@ typedef void (*NXPresentSettingsFunction)(void);
 extern BOOL Nexus2BackgroundHookInstalled(void);
 extern NSInteger Nexus2BackgroundCurrentMode(void);
 extern BOOL Nexus2BackgroundEffectActive(void);
+extern void Nexus2BackgroundPrepareColorChange(void);
+extern void Nexus2BackgroundRefreshNow(void);
 extern BOOL Nexus2AvatarHooksInstalled(void);
 
 #pragma mark - Shared helpers
@@ -340,43 +342,43 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXExtra
             @"pt": @{@"Summary":@"Resumo", @"Technical log":@"Log técnico", @"Working":@"Funcionando",
                      @"Loaded":@"Carregado", @"Ready":@"Pronto", @"Waiting for feed detection":@"Aguardando detecção do feed",
                      @"Integration with iQFace":@"Integração com iQFace", @"Icons":@"Ícones", @"Cache":@"Cache",
-                     @"Utilities":@"Utilitários", @"Tools":@"Ferramentas", @"Activation method":@"Método de ativação",
+                     @"Utilities":@"Utilitários", @"Tools":@"Ferramentas", @"Activation method":@"Método de ativação", @"OLED Mode":@"Modo OLED",
                      @"Backup and restore":@"Backup e restauração",
                      @"Hide suggestions in Stories":@"Ocultar sugestões nos Stories",
                      @"Feed detection pending":@"Os filtros serão aplicados assim que o Facebook carregar um modelo de feed compatível."},
             @"fr": @{@"Summary":@"Résumé", @"Technical log":@"Journal technique", @"Working":@"Fonctionne",
                      @"Waiting for feed detection":@"En attente de détection du fil", @"Integration with iQFace":@"Intégration avec iQFace",
-                     @"Icons":@"Icônes", @"Cache":@"Cache", @"Utilities":@"Utilitaires",
+                     @"Icons":@"Icônes", @"Cache":@"Cache", @"Utilities":@"Utilitaires", @"OLED Mode":@"Mode OLED",
                      @"Hide suggestions in Stories":@"Masquer les suggestions dans Stories",
                      @"Feed detection pending":@"Les filtres seront appliqués dès que Facebook chargera un modèle de fil compatible."},
             @"ru": @{@"Summary":@"Сводка", @"Technical log":@"Технический журнал", @"Working":@"Работает",
                      @"Waiting for feed detection":@"Ожидание обнаружения ленты", @"Integration with iQFace":@"Интеграция с iQFace",
-                     @"Icons":@"Значки", @"Cache":@"Кэш", @"Utilities":@"Инструменты",
+                     @"Icons":@"Значки", @"Cache":@"Кэш", @"Utilities":@"Инструменты", @"OLED Mode":@"Режим OLED",
                      @"Hide suggestions in Stories":@"Скрывать рекомендации в Stories",
                      @"Feed detection pending":@"Фильтры применятся, когда Facebook загрузит совместимую модель ленты."},
             @"zh": @{@"Summary":@"摘要", @"Technical log":@"技术日志", @"Working":@"正常",
                      @"Waiting for feed detection":@"等待检测动态", @"Integration with iQFace":@"与 iQFace 集成",
-                     @"Icons":@"图标", @"Cache":@"缓存", @"Utilities":@"工具",
+                     @"Icons":@"图标", @"Cache":@"缓存", @"Utilities":@"工具", @"OLED Mode":@"OLED 模式",
                      @"Hide suggestions in Stories":@"隐藏 Stories 中的推荐",
                      @"Feed detection pending":@"Facebook 加载兼容的动态模型后将自动应用筛选。"},
             @"vi": @{@"Summary":@"Tóm tắt", @"Technical log":@"Nhật ký kỹ thuật", @"Working":@"Hoạt động",
                      @"Waiting for feed detection":@"Đang chờ phát hiện bảng tin", @"Integration with iQFace":@"Tích hợp iQFace",
-                     @"Icons":@"Biểu tượng", @"Cache":@"Bộ nhớ đệm", @"Utilities":@"Tiện ích",
+                     @"Icons":@"Biểu tượng", @"Cache":@"Bộ nhớ đệm", @"Utilities":@"Tiện ích", @"OLED Mode":@"Chế độ OLED",
                      @"Hide suggestions in Stories":@"Ẩn gợi ý trong Stories",
                      @"Feed detection pending":@"Bộ lọc sẽ được áp dụng khi Facebook tải mô hình bảng tin tương thích."},
             @"ar": @{@"Summary":@"الملخص", @"Technical log":@"السجل التقني", @"Working":@"يعمل",
                      @"Waiting for feed detection":@"بانتظار اكتشاف الموجز", @"Integration with iQFace":@"التكامل مع iQFace",
-                     @"Icons":@"الأيقونات", @"Cache":@"ذاكرة التخزين المؤقت", @"Utilities":@"أدوات",
+                     @"Icons":@"الأيقونات", @"Cache":@"ذاكرة التخزين المؤقت", @"Utilities":@"أدوات", @"OLED Mode":@"وضع OLED",
                      @"Hide suggestions in Stories":@"إخفاء الاقتراحات في القصص",
                      @"Feed detection pending":@"سيتم تطبيق المرشحات عندما يحمّل Facebook نموذج موجز متوافقًا."},
             @"fa": @{@"Summary":@"خلاصه", @"Technical log":@"گزارش فنی", @"Working":@"فعال",
                      @"Waiting for feed detection":@"در انتظار شناسایی فید", @"Integration with iQFace":@"یکپارچگی با iQFace",
-                     @"Icons":@"آیکون‌ها", @"Cache":@"کش", @"Utilities":@"ابزارها",
+                     @"Icons":@"آیکون‌ها", @"Cache":@"کش", @"Utilities":@"ابزارها", @"OLED Mode":@"حالت OLED",
                      @"Hide suggestions in Stories":@"پنهان کردن پیشنهادها در Stories",
                      @"Feed detection pending":@"فیلترها پس از بارگذاری مدل فید سازگار توسط Facebook اعمال می‌شوند."},
             @"ckb": @{@"Summary":@"پوختە", @"Technical log":@"تۆماری تەکنیکی", @"Working":@"کاردەکات",
                       @"Waiting for feed detection":@"چاوەڕوانی دۆزینەوەی فید", @"Integration with iQFace":@"یەکگرتن لەگەڵ iQFace",
-                      @"Icons":@"ئایکۆنەکان", @"Cache":@"کاش", @"Utilities":@"ئامرازەکان",
+                      @"Icons":@"ئایکۆنەکان", @"Cache":@"کاش", @"Utilities":@"ئامرازەکان", @"OLED Mode":@"دۆخی OLED",
                       @"Hide suggestions in Stories":@"شاردنەوەی پێشنیارەکان لە Stories",
                       @"Feed detection pending":@"فلتەرەکان کاتێک جێبەجێ دەکرێن کە Facebook مۆدێلی فیدی گونجاو باربکات."}
         };
@@ -410,6 +412,39 @@ static NSInteger NXInteger(NSString *key, NSInteger fallback) {
 static void NXSetInteger(NSString *key, NSInteger value) {
     [NSUserDefaults.standardUserDefaults setInteger:value forKey:key];
     [NSNotificationCenter.defaultCenter postNotificationName:NXSettingsChangedNotification object:nil];
+}
+
+static BOOL NXIQFBool(NSString *key, BOOL fallback) {
+    Class prefs = NSClassFromString(@"IQFPrefs");
+    SEL selector = NSSelectorFromString(@"boolForKey:defaultValue:");
+    if (prefs != Nil && [prefs respondsToSelector:selector]) {
+        typedef BOOL (*Getter)(id, SEL, id, BOOL);
+        return ((Getter)(void *)objc_msgSend)(prefs, selector, key, fallback);
+    }
+    id value = [NSUserDefaults.standardUserDefaults objectForKey:key];
+    return value == nil ? fallback : [value boolValue];
+}
+
+static void NXSetIQFBool(NSString *key, BOOL value) {
+    Class prefs = NSClassFromString(@"IQFPrefs");
+    SEL selector = NSSelectorFromString(@"setBool:forKey:");
+    if (prefs != Nil && [prefs respondsToSelector:selector]) {
+        typedef void (*Setter)(id, SEL, BOOL, id);
+        ((Setter)(void *)objc_msgSend)(prefs, selector, value, key);
+    } else {
+        [NSUserDefaults.standardUserDefaults setBool:value forKey:key];
+        [NSUserDefaults.standardUserDefaults synchronize];
+    }
+    [NSNotificationCenter.defaultCenter postNotificationName:NXSettingsChangedNotification object:nil];
+}
+
+static BOOL NXOLEDEnabled(void) {
+    return NXIQFBool(NXKeyOLED, YES);
+}
+
+static void NXSetOLEDEnabled(BOOL enabled) {
+    NXSetIQFBool(NXKeyOLED, enabled);
+    Nexus2BackgroundRefreshNow();
 }
 
 #pragma mark - Diagnostics
@@ -501,9 +536,9 @@ NSString *Nexus2DiagnosticsText(void) {
      NXStatus(NXSettingsSectionsHook), NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeABICompatible), NXStatus(NXFeedTreeHookInstalled),
      NXStatus(NXFeedPandoABICompatible), NXStatus(NXFeedPandoHookInstalled),
      NXBool(NXKeyThreads, NO), NXBool(NXKeyPages, NO), NXBool(NXKeyStoryPeople, NO)];
-    [report appendFormat:@"[Appearance]\nbackground hook: %@\neffect active: %@\nmode=%ld color=%@\navatar hooks: %@\n\n",
+    [report appendFormat:@"[Appearance]\nbackground hook: %@\neffect active: %@\nOLED enabled: %@\ncolor=%@\navatar hooks: %@\n\n",
      NXStatus(Nexus2BackgroundHookInstalled()), NXStatus(Nexus2BackgroundEffectActive()),
-     (long)Nexus2BackgroundCurrentMode(),
+     NXStatus(Nexus2BackgroundCurrentMode() != 0),
      [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF",
      NXStatus(Nexus2AvatarHooksInstalled())];
     [report appendString:@"[Events]\n"];
@@ -929,54 +964,63 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
     self.title = Nexus2Localized(@"Background appearance");
     self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
 }
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { (void)tableView; return 3; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    (void)tableView;
-    return section == 0 ? 3 : 1;
+    (void)tableView; (void)section;
+    return 1;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     return section == 0 ? Nexus2Localized(@"Dark mode required") : nil;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXAppearance"];
-    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"NXAppearance"];
-    NSInteger mode = NXInteger(NXKeyBackgroundMode, 1);
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXAppearanceBeta3"];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"NXAppearanceBeta3"];
+    cell.accessoryView = nil;
+    cell.accessoryType = UITableViewCellAccessoryNone;
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    cell.textLabel.enabled = YES;
+    cell.detailTextLabel.text = nil;
+
     if (indexPath.section == 0) {
-        NSArray *titles = @[Nexus2Localized(@"Standard"), Nexus2Localized(@"OLED"), Nexus2Localized(@"Custom color")];
-        cell.textLabel.text = titles[(NSUInteger)indexPath.row];
-        cell.accessoryType = mode == indexPath.row ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-        cell.imageView.image = [UIImage systemImageNamed:indexPath.row == 0 ? @"circle" : (indexPath.row == 1 ? @"circle.fill" : @"paintpalette")];
+        cell.textLabel.text = Nexus2Localized(@"OLED Mode");
+        cell.imageView.image = [UIImage systemImageNamed:@"circle.lefthalf.filled"];
+        UISwitch *toggle = [UISwitch new];
+        toggle.on = NXOLEDEnabled();
+        [toggle addTarget:self action:@selector(nx_oledChanged:) forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
     } else if (indexPath.section == 1) {
-        cell.textLabel.text = Nexus2Localized(@"Background color");
+        cell.textLabel.text = Nexus2Localized(@"Custom color");
         cell.detailTextLabel.text = [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF";
+        cell.imageView.image = [UIImage systemImageNamed:@"paintpalette"];
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        cell.selectionStyle = mode == 2 ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
-        cell.textLabel.enabled = mode == 2;
     } else {
         cell.textLabel.text = Nexus2Localized(@"Feed separators");
-        cell.detailTextLabel.text = nil;
+        cell.imageView.image = [UIImage systemImageNamed:@"line.3.horizontal"];
         UISwitch *toggle = [UISwitch new];
         toggle.on = NXBool(@"iQFaceOLEDFeedSeparatorsEnabled", NO);
         [toggle addTarget:self action:@selector(nx_separatorsChanged:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = toggle;
-        cell.accessoryType = UITableViewCellAccessoryNone;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
     }
     return cell;
+}
+- (void)nx_oledChanged:(UISwitch *)sender {
+    NXSetOLEDEnabled(sender.isOn);
+    [self.tableView reloadData];
 }
 - (void)nx_separatorsChanged:(UISwitch *)sender {
     NXSetBool(@"iQFaceOLEDFeedSeparatorsEnabled", sender.isOn);
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section == 0) {
-        NXSetInteger(NXKeyBackgroundMode, indexPath.row);
-        [tableView reloadData];
-        return;
-    }
-    if (indexPath.section == 2) return;
-    if (NXInteger(NXKeyBackgroundMode, 1) != 2) return;
+    if (indexPath.section != 1) return;
+
     UIColorPickerViewController *picker = [UIColorPickerViewController new];
     picker.delegate = self;
     picker.supportsAlpha = NO;
@@ -989,7 +1033,10 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
     NSScanner *scanner = [NSScanner scannerWithString:[hex stringByReplacingOccurrencesOfString:@"#" withString:@""]];
     [scanner scanHexInt:&value];
     if (hex.length <= 7) value = (value << 8) | 0xFF;
-    return [UIColor colorWithRed:((value >> 24)&0xFF)/255.0 green:((value >> 16)&0xFF)/255.0 blue:((value >> 8)&0xFF)/255.0 alpha:1.0];
+    return [UIColor colorWithRed:((value >> 24)&0xFF)/255.0
+                           green:((value >> 16)&0xFF)/255.0
+                            blue:((value >> 8)&0xFF)/255.0
+                           alpha:1.0];
 }
 - (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController *)viewController {
     UIColor *color = viewController.selectedColor;
@@ -997,11 +1044,24 @@ static void NXShowMessage(UIViewController *controller, NSString *title, NSStrin
     [color getRed:&r green:&g blue:&b alpha:&a];
     NSString *hex = [NSString stringWithFormat:@"#%02X%02X%02XFF",
                      (int)llround(r*255), (int)llround(g*255), (int)llround(b*255)];
+
+    // Restore anything painted with the previous replacement color first.
+    Nexus2BackgroundPrepareColorChange();
+
     [NSUserDefaults.standardUserDefaults setObject:hex forKey:NXKeyBackgroundColor];
+    [NSUserDefaults.standardUserDefaults synchronize];
+
+    // Choosing a custom color is an OLED action, never a separate background mode.
+    NXSetIQFBool(NXKeyOLED, YES);
+    Nexus2BackgroundRefreshNow();
+
     [NSNotificationCenter.defaultCenter postNotificationName:NXSettingsChangedNotification object:nil];
-    CGFloat luminance = 0.2126*r + 0.7152*g + 0.0722*b;
     [self.tableView reloadData];
-    if (luminance > 0.68) NXShowMessage(self, Nexus2Localized(@"Custom color"), Nexus2Localized(@"Light color warning"));
+
+    CGFloat luminance = 0.2126*r + 0.7152*g + 0.0722*b;
+    if (luminance > 0.68) {
+        NXShowMessage(self, Nexus2Localized(@"Custom color"), Nexus2Localized(@"Light color warning"));
+    }
 }
 @end
 
