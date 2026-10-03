@@ -15,7 +15,7 @@ name: Build Grok Session Diff Probe
       - ".github/workflows/xtranslate-auth-probe.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -43,6 +43,20 @@ jobs:
           file artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib
           lipo -info artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib
           shasum -a 256 artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
+      - name: Publish branch build
+        run: |
+          set -euo pipefail
+          mkdir -p ../xtranslate-builds/0.10-beta1
+          cp artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib ../xtranslate-builds/0.10-beta1/
+          cp artifacts/SHA256SUMS.txt ../xtranslate-builds/0.10-beta1/
+          (cd artifacts && zip -j XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.zip XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.dylib SHA256SUMS.txt)
+          cp artifacts/XTranslateGrokSessionDiffProbe-0.10.0-Beta1-X12.31.1-arm64.zip ../xtranslate-builds/0.10-beta1/
+          cd ..
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add xtranslate-builds/0.10-beta1
+          git commit -m "build: publish Grok session diff 0.10 beta 1" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
