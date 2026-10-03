@@ -2,6 +2,12 @@ name: Build Grok Private Factory Probe
 
 "on":
   workflow_dispatch:
+  pull_request:
+    branches:
+      - "ci-xtranslate-011-run2-20261003"
+    paths:
+      - "xtranslate-auth-probe/**"
+      - ".github/workflows/xtranslate-auth-probe.yml"
   push:
     branches:
       - "xtranslate-auth-probe-*"
@@ -15,8 +21,7 @@ name: Build Grok Private Factory Probe
       - ".github/workflows/xtranslate-auth-probe.yml"
 
 permissions:
-  contents: write
-  statuses: write
+  contents: read
 
 jobs:
   build:
@@ -44,32 +49,6 @@ jobs:
           file artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
           lipo -info artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
           shasum -a 256 artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
-      - name: Publish run locator
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: "success",
-              context: "artifact-locator",
-              description: `run ${context.runId}`,
-              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
-            })
-      - name: Stage branch build
-        run: |
-          set -euo pipefail
-          mkdir -p ../xtranslate-builds/0.11-beta1
-          cp artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib ../xtranslate-builds/0.11-beta1/
-          cp artifacts/SHA256SUMS.txt ../xtranslate-builds/0.11-beta1/
-          (cd artifacts && zip -j XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.zip XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib SHA256SUMS.txt)
-          cp artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.zip ../xtranslate-builds/0.11-beta1/
-      - name: Commit branch build
-        uses: stefanzweifel/git-auto-commit-action@v6
-        with:
-          commit_message: build: publish Grok private factory probe 0.11 beta 1
-          file_pattern: xtranslate-builds/0.11-beta1/*
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
