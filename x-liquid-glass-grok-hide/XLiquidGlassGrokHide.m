@@ -6,11 +6,13 @@
 
 static NSString *const kXLGHideGrokKey = @"XLiquidGlassHideGrokTabEnabled";
 
-static IMP gOrigSetVisibleTabEntries = NULL;
+static IMP gOrigSetVisibleTabEntriesSwift = NULL;
+static IMP gOrigSetVisibleTabEntriesLegacy = NULL;
 static IMP gOrigSettingsRows = NULL;
 static IMP gOrigSettingsCell = NULL;
 
-static BOOL gNavigationHookInstalled = NO;
+static BOOL gSwiftNavigationHookInstalled = NO;
+static BOOL gLegacyNavigationHookInstalled = NO;
 static BOOL gSettingsHookInstalled = NO;
 
 static char kXLGOriginalVisibleTabEntriesKey;
@@ -71,7 +73,7 @@ static NSArray *XLGFilteredTabEntries(id entries) {
     return [filtered copy];
 }
 
-static void XLGSetVisibleTabEntries(id self, SEL _cmd, id entries) {
+static void XLGSetVisibleTabEntriesSwift(id self, SEL _cmd, id entries) {
     if ([entries isKindOfClass:NSArray.class]) {
         objc_setAssociatedObject(self,
                                  &kXLGOriginalVisibleTabEntriesKey,
@@ -81,8 +83,23 @@ static void XLGSetVisibleTabEntries(id self, SEL _cmd, id entries) {
 
     id forwarded = XLGHideGrokEnabled() ? XLGFilteredTabEntries(entries) : entries;
 
-    if (gOrigSetVisibleTabEntries) {
-        ((void (*)(id, SEL, id))gOrigSetVisibleTabEntries)(self, _cmd, forwarded);
+    if (gOrigSetVisibleTabEntriesSwift) {
+        ((void (*)(id, SEL, id))gOrigSetVisibleTabEntriesSwift)(self, _cmd, forwarded);
+    }
+}
+
+static void XLGSetVisibleTabEntriesLegacy(id self, SEL _cmd, id entries) {
+    if ([entries isKindOfClass:NSArray.class]) {
+        objc_setAssociatedObject(self,
+                                 &kXLGOriginalVisibleTabEntriesKey,
+                                 [entries copy],
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    id forwarded = XLGHideGrokEnabled() ? XLGFilteredTabEntries(entries) : entries;
+
+    if (gOrigSetVisibleTabEntriesLegacy) {
+        ((void (*)(id, SEL, id))gOrigSetVisibleTabEntriesLegacy)(self, _cmd, forwarded);
     }
 }
 
@@ -220,20 +237,81 @@ static UITableViewCell *XLGSettingsCell(id self,
                                   reuseIdentifier:nil];
 }
 
-static void XLGInstallNavigationHook(void) {
-    if (gNavigationHookInstalled) return;
+static BOOL XLGForceNoGrok(id self, SEL _cmd) {
+    (void)self;
+    (void)_cmd;
+    return XLGHideGrokEnabled() ? NO : YES;
+}
 
-    Class cls = NSClassFromString(@"T1TabbedAppNavigationViewController");
+static void XLGInstallShouldShowGrokGate(void) {
+    SEL gateSEL = NSSelectorFromString(@"shouldShowGrokTab");
+    int count = objc_getClassList(NULL, 0);
+    if (count <= 0) return;
+
+    Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
+    if (!classes) return;
+
+    count = objc_getClassList(classes, count);
+    for (int i = 0; i < count; i++) {
+        Class cls = classes[i];
+        Method method = class_getInstanceMethod(cls, gateSEL);
+        if (!method) continue;
+
+        const char *types = method_getTypeEncoding(method);
+        if (!types || (types[0] != 'B' && types[0] != 'c')) continue;
+
+        NSString *name = NSStringFromClass(cls);
+        if (![name containsString:@"Grok"] &&
+            ![name containsString:@"Navigation"] &&
+            ![name containsString:@"Twitter"]) {
+            continue;
+        }
+
+        IMP current = class_getMethodImplementation(cls, gateSEL);
+        if (current != (IMP)XLGForceNoGrok) {
+            class_replaceMethod(cls, gateSEL, (IMP)XLGForceNoGrok, types);
+            NSLog(@"[XLiquidGlass] Grok gate hooked on %@", name);
+        }
+    }
+
+    free(classes);
+}
+
+static void XLGInstallNavigationHook(void) {
     SEL setter = NSSelectorFromString(@"setVisibleTabEntries:");
 
-    if (!cls || ![cls instancesRespondToSelector:setter]) return;
+    Class swiftCls =
+        NSClassFromString(@"_TtC14T1TwitterSwift34XTabbedAppNavigationViewController");
+    if (swiftCls &&
+        [swiftCls instancesRespondToSelector:setter] &&
+        !gSwiftNavigationHookInstalled) {
 
-    if (XLGHookInstanceMethod(cls,
-                              setter,
-                              (IMP)XLGSetVisibleTabEntries,
-                              &gOrigSetVisibleTabEntries)) {
-        gNavigationHookInstalled = YES;
-        NSLog(@"[XLiquidGlass] 2.0.3 Beta 1 Grok filter installed");
+        if (XLGHookInstanceMethod(swiftCls,
+                                  setter,
+                                  (IMP)XLGSetVisibleTabEntriesSwift,
+                                  &gOrigSetVisibleTabEntriesSwift)) {
+            gSwiftNavigationHookInstalled = YES;
+            NSLog(@"[XLiquidGlass] 2.0.3 Beta 2 Swift XTabbed Grok filter installed");
+        }
+    }
+
+    Class legacyCls = NSClassFromString(@"T1TabbedAppNavigationViewController");
+    if (legacyCls &&
+        [legacyCls instancesRespondToSelector:setter] &&
+        !gLegacyNavigationHookInstalled) {
+
+        if (XLGHookInstanceMethod(legacyCls,
+                                  setter,
+                                  (IMP)XLGSetVisibleTabEntriesLegacy,
+                                  &gOrigSetVisibleTabEntriesLegacy)) {
+            gLegacyNavigationHookInstalled = YES;
+            NSLog(@"[XLiquidGlass] 2.0.3 Beta 2 legacy Grok filter installed");
+        }
+    }
+
+    XLGInstallShouldShowGrokGate();
+
+    if (gSwiftNavigationHookInstalled || gLegacyNavigationHookInstalled) {
         XLGRefreshVisibleTabControllers();
     }
 }
@@ -270,7 +348,7 @@ static void XLGInstallAll(void) {
 __attribute__((constructor))
 static void XLiquidGlassGrokHideInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 2.0.3 Beta 1 companion loaded: optional Grok tab filter");
+        NSLog(@"[XLiquidGlass] 2.0.3 Beta 2 companion loaded: Swift XTabbed + Grok visibility gate");
 
         [[NSNotificationCenter defaultCenter]
             addObserverForName:UIApplicationDidFinishLaunchingNotification
