@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R6";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 2";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -481,7 +481,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 1 R6\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 2\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -1133,7 +1133,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.0 Beta 1 R6",
+             @"nexusVersion": @"2.0 Beta 2",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1326,6 +1326,43 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
 extern id NexusCacheCreateManualSetting(void);
 extern id NexusCacheCreateAutomaticSetting(void);
 
+static NSString *const NXCacheAutoFrequencyKey = @"iQFaceCacheAutoFrequency";
+
+static NSInteger NXCacheAutomaticFrequency(void) {
+    Class prefs = NSClassFromString(@"IQFPrefs");
+    SEL selector = NSSelectorFromString(@"integerForKey:defaultValue:");
+    if (prefs && [prefs respondsToSelector:selector]) {
+        typedef NSInteger (*Getter)(id, SEL, id, NSInteger);
+        NSInteger value = ((Getter)(void *)objc_msgSend)(prefs, selector, NXCacheAutoFrequencyKey, 0);
+        return MAX(0, MIN(3, value));
+    }
+    NSInteger value = [NSUserDefaults.standardUserDefaults integerForKey:NXCacheAutoFrequencyKey];
+    return MAX(0, MIN(3, value));
+}
+
+static void NXSetCacheAutomaticFrequency(NSInteger value) {
+    value = MAX(0, MIN(3, value));
+    Class prefs = NSClassFromString(@"IQFPrefs");
+    SEL selector = NSSelectorFromString(@"setInteger:forKey:");
+    if (prefs && [prefs respondsToSelector:selector]) {
+        typedef void (*Setter)(id, SEL, NSInteger, id);
+        ((Setter)(void *)objc_msgSend)(prefs, selector, value, NXCacheAutoFrequencyKey);
+    } else {
+        [NSUserDefaults.standardUserDefaults setInteger:value forKey:NXCacheAutoFrequencyKey];
+        [NSUserDefaults.standardUserDefaults synchronize];
+    }
+    NXEvent([NSString stringWithFormat:@"Automatic cache frequency changed to %ld", (long)value]);
+}
+
+static NSArray<NSString *> *NXCacheFrequencyLabels(void) {
+    return @[
+        Nexus2Localized(@"Disabled"),
+        Nexus2Localized(@"Daily"),
+        Nexus2Localized(@"Weekly"),
+        Nexus2Localized(@"Monthly")
+    ];
+}
+
 @interface Nexus2UtilitiesController : UITableViewController
 @end
 
@@ -1334,29 +1371,37 @@ extern id NexusCacheCreateAutomaticSetting(void);
     [super viewDidLoad];
     self.title = Nexus2Localized(@"Utilities");
     self.tableView = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
+    self.tableView.rowHeight = UITableViewAutomaticDimension;
+    self.tableView.estimatedRowHeight = 58.0;
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
 }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView; (void)section; return 3;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXUtilities"];
-    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:@"NXUtilities"];
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"NXUtilitiesBeta2"];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"NXUtilitiesBeta2"];
+
     cell.imageView.image = nil;
     cell.accessoryView = nil;
     cell.detailTextLabel.text = nil;
+    cell.textLabel.numberOfLines = 2;
+    cell.textLabel.lineBreakMode = NSLineBreakByWordWrapping;
+    cell.detailTextLabel.numberOfLines = 1;
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+
     if (indexPath.row == 0) {
         cell.textLabel.text = Nexus2Localized(@"Change Icon");
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else if (indexPath.row == 1) {
         cell.textLabel.text = Nexus2Localized(@"Clear cache");
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     } else {
         cell.textLabel.text = Nexus2Localized(@"Automatic cache clearing");
-        NSInteger value = [NSUserDefaults.standardUserDefaults integerForKey:@"iQFaceCacheAutoFrequency"];
-        NSArray *labels = @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"];
-        if (![NXLanguageCode() isEqualToString:@"pt"]) labels = @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];
-        cell.detailTextLabel.text = labels[(NSUInteger)MAX(0, MIN(3, value))];
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        NSInteger value = NXCacheAutomaticFrequency();
+        NSArray<NSString *> *labels = NXCacheFrequencyLabels();
+        cell.detailTextLabel.text = labels[(NSUInteger)value];
     }
     return cell;
 }
@@ -1370,27 +1415,32 @@ extern id NexusCacheCreateAutomaticSetting(void);
     }
 }
 - (void)nx_chooseCacheFrequency {
+    NSInteger current = NXCacheAutomaticFrequency();
+    NSArray<NSString *> *labels = NXCacheFrequencyLabels();
+
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:Nexus2Localized(@"Automatic cache clearing")
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleActionSheet];
-    NSArray *labels = [NXLanguageCode() isEqualToString:@"pt"]
-        ? @[@"Desativado", @"Diariamente", @"Semanalmente", @"Mensalmente"]
-        : @[@"Disabled", @"Daily", @"Weekly", @"Monthly"];
-    for (NSInteger i=0;i<4;i++) {
-        [alert addAction:[UIAlertAction actionWithTitle:labels[(NSUInteger)i] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
-            Class prefs = NSClassFromString(@"IQFPrefs");
-            SEL sel = NSSelectorFromString(@"setInteger:forKey:");
-            if (prefs && [prefs respondsToSelector:sel]) {
-                typedef void (*Setter)(id, SEL, NSInteger, id);
-                ((Setter)(void *)objc_msgSend)(prefs, sel, i, @"iQFaceCacheAutoFrequency");
-            } else {
-                [NSUserDefaults.standardUserDefaults setInteger:i forKey:@"iQFaceCacheAutoFrequency"];
-            }
-            [self.tableView reloadData];
+    for (NSInteger i = 0; i < (NSInteger)labels.count; i++) {
+        NSString *title = labels[(NSUInteger)i];
+        if (i == current) title = [NSString stringWithFormat:@"✓ %@", title];
+        NSInteger selectedValue = i;
+        [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a) {
+            NXSetCacheAutomaticFrequency(selectedValue);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self.tableView reloadRowsAtIndexPaths:@[[NSIndexPath indexPathForRow:2 inSection:0]]
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            });
         }]];
     }
-    [alert addAction:[UIAlertAction actionWithTitle:Nexus2Localized(@"Cancel") style:UIAlertActionStyleCancel handler:nil]];
-    if (alert.popoverPresentationController) alert.popoverPresentationController.sourceView = self.view;
+
+    [alert addAction:[UIAlertAction actionWithTitle:Nexus2Localized(@"Cancel")
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    if (alert.popoverPresentationController) {
+        alert.popoverPresentationController.sourceView = self.view;
+        alert.popoverPresentationController.sourceRect = self.view.bounds;
+    }
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1483,7 +1533,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0 Beta 1 R6", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0 Beta 2", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1749,7 +1799,7 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 1 R6 loaded");
+        NXEvent(@"Nexus 2.0 Beta 2 loaded");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
