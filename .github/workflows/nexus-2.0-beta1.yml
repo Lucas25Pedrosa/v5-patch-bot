@@ -1,4 +1,4 @@
-name: Build Nexus 2.0 Beta 1 R4
+name: Build Nexus 2.0 Beta 1 R5
 
 "on":
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare Nexus 2.0 Beta 1 R4
+      - name: Prepare Nexus 2.0 Beta 1 R5
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -69,7 +69,7 @@ jobs:
           ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
           ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
           grep -F 'Nexus2.m' "$WORK/Makefile"
-          grep -F 'NexusVersion = @"2.0 Beta 1 R4"' "$WORK/Nexus2.m"
+          grep -F 'NexusVersion = @"2.0 Beta 1 R5"' "$WORK/Nexus2.m"
           grep -F 'NexusHideThreadsPromotions' "$WORK/Nexus2.m"
           grep -F 'NexusHideSuggestedPages' "$WORK/Nexus2.m"
           grep -F 'NexusHideStoryPeopleSuggestions' "$WORK/Nexus2.m"
@@ -86,19 +86,23 @@ jobs:
           grep -F 'Nexus developer' "$WORK/Nexus2.m"
           grep -F 'IQFTweakSettings' "$WORK/Nexus2.m"
           grep -F 'NXObjectUnaryMethodCompatible' "$WORK/Nexus2.m"
-          grep -F 'Restoring saved Facebook logo activation' "$WORK/Nexus2.m"
+          grep -F 'Restoring saved Facebook logo activation immediately' "$WORK/Nexus2.m"
           grep -F 'Waiting for feed detection' "$WORK/Nexus2.m"
           grep -F 'Technical log' "$WORK/Nexus2.m"
           grep -F 'NXColoredIcon' "$WORK/Nexus2.m"
           grep -F 'NXCreateVersionSetting' "$WORK/Nexus2.m"
           grep -F 'NXCreateDeveloperCredit' "$WORK/Nexus2.m"
           grep -F 'NXEnsureFeedDetectionTimer' "$WORK/Nexus2.m"
+          grep -F 'Nexus2UtilitiesController' "$WORK/Nexus2.m"
+          grep -F 'Nexus2ToolsController' "$WORK/Nexus2.m"
+          grep -F 'Activation method' "$WORK/Nexus2.m"
+          grep -F 'Backup and restore' "$WORK/Nexus2.m"
+          grep -F 'NXFindLeadingIconView' "$WORK/Nexus2.m"
           ! grep -F 'Safe startup: restored iQFace icon activation' "$WORK/Nexus2.m"
           ctor_block="$(sed -n '/__attribute__((constructor))/,/^}/p' "$WORK/Nexus2.m")"
-          ! grep -F 'NXTryInstallWordmarkHook();' <<<"$ctor_block"
           ! grep -F 'NXTryInstallFeedHooks();' <<<"$ctor_block"
 
-      - name: Build Nexus 2.0 Beta 1 R4
+      - name: Build Nexus 2.0 Beta 1 R5
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -110,14 +114,14 @@ jobs:
           rm -f "$ROOT/nexus2/artifacts-beta1"/*
           DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
           test -n "$DYLIB_PATH"
-          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1-R4.dylib"
+          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1-R5.dylib"
 
           cd "$ROOT"
-          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1-R4.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
-          file nexus2/artifacts-beta1/Nexus-2.0-Beta1-R4.dylib > nexus2/artifacts-beta1/file.txt
-          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1-R4.dylib > nexus2/artifacts-beta1/strings.txt || true
-          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1-R4.dylib > nexus2/artifacts-beta1/install-name.txt
-          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta1-R4.dylib > nexus2/artifacts-beta1/symbols.txt
+          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1-R5.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
+          file nexus2/artifacts-beta1/Nexus-2.0-Beta1-R5.dylib > nexus2/artifacts-beta1/file.txt
+          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1-R5.dylib > nexus2/artifacts-beta1/strings.txt || true
+          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1-R5.dylib > nexus2/artifacts-beta1/install-name.txt
+          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta1-R5.dylib > nexus2/artifacts-beta1/symbols.txt
 
           grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
           grep -F 'arm64' nexus2/artifacts-beta1/file.txt
@@ -132,7 +136,7 @@ jobs:
           grep -F 'IQFResolvedLanguage' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBNavigationBar' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBMemModelObject' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 1 R4' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 1 R5' nexus2/artifacts-beta1/strings.txt
           grep -F '_IQFKey' nexus2/artifacts-beta1/strings.txt
           grep -F 'feedUnitType' nexus2/artifacts-beta1/strings.txt
           grep -F 'feed_unit_type' nexus2/artifacts-beta1/strings.txt
@@ -145,12 +149,15 @@ jobs:
           grep -F '_Nexus2LogoActivationAvailable' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2DiagnosticsText' nexus2/artifacts-beta1/symbols.txt
           grep -F 'lucaspedrosa' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 1 R4' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 1 R5' nexus2/artifacts-beta1/strings.txt
           grep -F 'IQFTweakSettings' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 1 R4' nexus2/artifacts-beta1/strings.txt
-          grep -F 'Restoring saved Facebook logo activation' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 1 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Restoring saved Facebook logo activation immediately' nexus2/artifacts-beta1/strings.txt
           grep -F 'Waiting for feed detection' nexus2/artifacts-beta1/strings.txt
           grep -F 'Technical log' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Activation method' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Backup and restore' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Restoring saved Facebook logo activation immediately' nexus2/artifacts-beta1/strings.txt
           grep -F 'Utilit' nexus2/artifacts-beta1/strings.txt || true
           grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
 
@@ -159,10 +166,10 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Nexus 2.0 Beta 1 R4
+      - name: Upload Nexus 2.0 Beta 1 R5
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-2.0-Beta1-R4-arm64
+          name: Nexus-2.0-Beta1-R5-arm64
           path: nexus2/artifacts-beta1/
           if-no-files-found: error
           retention-days: 90
