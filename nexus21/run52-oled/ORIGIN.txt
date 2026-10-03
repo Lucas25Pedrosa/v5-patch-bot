@@ -1,0 +1,9 @@
+Nexus 2.1 frozen OLED origin
+
+Source commit: 9dea598f152b644b82e2ce5013248ad26a6db669
+Historical workflow run: 34773259869 (#52)
+Historical binary SHA-256: 6ba4328d924f1cf8a34f7b7d63616330236359490f926600557bbf60afd8a476
+
+The files in this directory are frozen copies of the OLED pipeline used by that build.
+Do not replace them with current iqface-oled or nexus OLED adapters.
+Custom background colors are intentionally excluded from Nexus 2.1.
