@@ -4,8 +4,8 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateGrokBootstrapProbe.log";
-static const NSTimeInterval kWindow = 120.0;
+static NSString *const kLogName = @"XTranslateTapDiffProbe.log";
+static const NSTimeInterval kWindow = 12.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
 static IMP gOrigDataTask = NULL;
@@ -203,6 +203,57 @@ static void LogBootstrapStack(NSUInteger seq, NSURLRequest *r) {
     }
 }
 
+static NSString *JoinedSortedStrings(NSArray *values) {
+    if (![values isKindOfClass:NSArray.class] || values.count==0) return @"-";
+    NSMutableArray *clean=[NSMutableArray array];
+    for (id v in values) if ([v isKindOfClass:NSString.class] && [v length]) [clean addObject:v];
+    if (!clean.count) return @"-";
+    [clean sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    return [clean componentsJoinedByString:@","];
+}
+
+static NSString *HeaderNames(NSURLRequest *r) {
+    return JoinedSortedStrings(r.allHTTPHeaderFields.allKeys ?: @[]);
+}
+
+static NSString *QueryKeys(NSURLRequest *r) {
+    NSURLComponents *c=[NSURLComponents componentsWithURL:r.URL resolvingAgainstBaseURL:NO];
+    NSMutableOrderedSet *names=[NSMutableOrderedSet orderedSet];
+    for (NSURLQueryItem *q in c.queryItems ?: @[]) if (q.name.length) [names addObject:q.name];
+    return JoinedSortedStrings(names.array);
+}
+
+static NSString *BodyKeys(NSURLRequest *r) {
+    NSData *d=r.HTTPBody;
+    if (!d.length || d.length > 131072) return d.length?@"(opaque)":@"-";
+    NSString *ct=Header(r,@"content-type").lowercaseString ?: @"";
+    if ([ct containsString:@"application/json"]) {
+        id obj=[NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+        if ([obj isKindOfClass:NSDictionary.class]) return JoinedSortedStrings([(NSDictionary*)obj allKeys]);
+        return @"(json)";
+    }
+    if ([ct containsString:@"application/x-www-form-urlencoded"]) {
+        NSString *body=[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";
+        NSMutableOrderedSet *names=[NSMutableOrderedSet orderedSet];
+        for (NSString *part in [body componentsSeparatedByString:@"&"]) {
+            NSString *name=[[part componentsSeparatedByString:@"="] firstObject];
+            if (name.length) [names addObject:name.stringByRemovingPercentEncoding ?: name];
+        }
+        return JoinedSortedStrings(names.array);
+    }
+    return @"(opaque)";
+}
+
+static void LogTaskShape(NSString *phase, NSUInteger seq, NSURLSessionTask *task, NSURLRequest *r) {
+    if (!r) {
+        Log(@"TASKSHAPE %@ #%lu class=%@ request=nil",phase,(unsigned long)seq,NSStringFromClass(task.class));
+        return;
+    }
+    Log(@"TASKSHAPE %@ #%lu class=%@ headers=[%@] queryKeys=[%@] bodyKeys=[%@] contentType=%@",
+        phase,(unsigned long)seq,NSStringFromClass(task.class),HeaderNames(r),QueryKeys(r),BodyKeys(r),
+        Header(r,@"content-type").length?Header(r,@"content-type"):@"-");
+}
+
 static void LogExternalRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
     if (!r) { Log(@"EXT %@ #%lu nil", phase, (unsigned long)seq); return; }
     Log(@"EXT %@ #%lu label=%@ method=%@ host=%@ path=%@ body=%lu hint=%@",
@@ -363,8 +414,16 @@ static NSURLSessionUploadTask *ProbeUploadFile(NSURLSession *self, SEL _cmd, NSU
 
 static void ProbeResume(NSURLSessionTask *self, SEL _cmd) {
     NSDictionary *m=MetaForTask(self);
+    NSURLRequest *r=self.currentRequest ?: self.originalRequest;
     if (m) {
-        LogRequest(@"RESUME",[m[@"seq"] unsignedIntegerValue],self.currentRequest ?: self.originalRequest);
+        NSUInteger seq=[m[@"seq"] unsignedIntegerValue];
+        LogRequest(@"RESUME",seq,r);
+        if (Armed()) LogTaskShape(@"RESUME",seq,self,r);
+    } else if (Armed()) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"RESUME-UNTRACKED",seq,r);
+        LogTaskShape(@"RESUME-UNTRACKED",seq,self,r);
+        AttachTask(self,seq);
     }
     if (gOrigResume) ((void(*)(id,SEL))gOrigResume)(self,_cmd);
 }
@@ -396,30 +455,32 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Bootstrap Probe"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Translate Tap Diff"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
-- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?1:2; }
-- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Bootstrap":@"Relatório"; }
+- (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
+- (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Tap Diff":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Captura por 120 s. ViewerUser e GrokAccountJwt são registrados mesmo fora da janela, com uma pilha limitada de chamadas para identificar quem dispara o bootstrap.";
-    return @"Read-only: não modifica requisições nem registra valores de tokens/cookies. A pilha só é coletada para ViewerUser e GrokAccountJwt.";
+    if (s==0) return @"Em cada conta, arme a captura, feche o aviso e toque imediatamente em “Traduzir post”. São 12 s. Faça LEGACY_OK e WEB_FAIL no mesmo post.";
+    return @"Read-only. Registra endpoint, status, classe da NSURLSessionTask e somente NOMES de headers/parâmetros/chaves; nunca valores de tokens, cookies ou texto do post.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
     static NSString *rid=@"XTAPCell";
     UITableViewCell *c=[t dequeueReusableCellWithIdentifier:rid];
     if (!c) c=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:rid];
     c.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
-    if (i.section==0) { c.textLabel.text=@"Capturar bootstrap"; c.detailTextLabel.text=@"120 s — use normalmente até tentar Traduzir post"; }
-    else if (i.row==0) { c.textLabel.text=@"Copiar relatório"; c.detailTextLabel.text=kLogName; }
+    if (i.section==0 && i.row==0) { c.textLabel.text=@"Capturar LEGACY_OK"; c.detailTextLabel.text=@"12 s — conta antiga onde funciona"; }
+    else if (i.section==0) { c.textLabel.text=@"Capturar WEB_FAIL"; c.detailTextLabel.text=@"12 s — conta Web Login onde falha"; }
+    else if (i.row==0) { c.textLabel.text=@"Copiar Tap Diff"; c.detailTextLabel.text=kLogName; }
     else { c.textLabel.text=@"Limpar relatório"; c.detailTextLabel.text=@"Apaga as capturas anteriores"; }
     return c;
 }
 - (void)tableView:(UITableView*)t didSelectRowAtIndexPath:(NSIndexPath*)i {
     [t deselectRowAtIndexPath:i animated:YES];
     if (i.section==0) {
-        Arm(@"BOOTSTRAP");
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Bootstrap Probe"
-            message:@"Captura armada por 120 segundos. Use a conta normalmente e tente “Traduzir post”. Se ViewerUser/GrokAccountJwt nascer, a probe registra a pilha de chamadas."
+        NSString *label=i.row==0?@"LEGACY_OK":@"WEB_FAIL";
+        Arm(label);
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Translate Tap Diff"
+            message:[NSString stringWithFormat:@"%@ armado por 12 segundos. Feche este aviso e toque imediatamente em “Traduzir post” no MESMO post.",label]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
@@ -428,7 +489,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Bootstrap Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Translate Tap Diff"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -450,7 +511,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Grok Bootstrap Probe",@"subtitle":@"Identificar quem dispara ViewerUser e GrokAccountJwt.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Translate Tap Diff",@"subtitle":@"Comparar o tráfego exato do toque em Traduzir post.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -487,8 +548,8 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Bootstrap Probe 0.6.0 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=bootstrap-read-only no-secrets",
+        Log(@"========== Translate Tap Diff 0.8.0 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=tap-diff-read-only no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
