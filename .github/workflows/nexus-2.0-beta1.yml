@@ -1,4 +1,4 @@
-name: Build Nexus 2.0 Beta 1
+name: Build Nexus 2.0 Beta 1 R2
 
 "on":
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare Nexus 2.0 Beta 1
+      - name: Prepare Nexus 2.0 Beta 1 R2
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -63,20 +63,29 @@ jobs:
 
           cp nexus2/Nexus2.m "$WORK/Nexus2.m"
           python3 nexus2/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
+          python3 nexus2/patch_avatar_v2.py "$WORK/NexusAvatarFix.m"
 
           ! grep -F 'Translation.m' "$WORK/Makefile"
           ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
           ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
           grep -F 'Nexus2.m' "$WORK/Makefile"
-          grep -F 'NexusVersion = @"2.0 Beta 1"' "$WORK/Nexus2.m"
+          grep -F 'NexusVersion = @"2.0 Beta 1 R2"' "$WORK/Nexus2.m"
           grep -F 'NexusHideThreadsPromotions' "$WORK/Nexus2.m"
           grep -F 'NexusHideSuggestedPages' "$WORK/Nexus2.m"
           grep -F 'NexusHideStoryPeopleSuggestions' "$WORK/Nexus2.m"
           grep -F 'FBNavigationBar' "$WORK/Nexus2.m"
           grep -F 'IQFResolvedLanguage' "$WORK/Nexus2.m"
           grep -F 'Nexus2TargetBackgroundColor' "$WORK/OLEDTweak.m"
+          grep -F 'Nexus2BackgroundHookInstalled' "$WORK/OLEDTweak.m"
+          grep -F 'Nexus2AvatarHooksInstalled' "$WORK/NexusAvatarFix.m"
+          grep -F '_IQFKey' "$WORK/Nexus2.m"
+          grep -F 'feedUnitType' "$WORK/Nexus2.m"
+          grep -F 'feed_unit_type' "$WORK/Nexus2.m"
+          grep -F 'inlineUnitType' "$WORK/Nexus2.m"
+          grep -F 'NXWordmarkRecognizerAttached' "$WORK/Nexus2.m"
+          grep -F 'Nexus developer' "$WORK/Nexus2.m"
 
-      - name: Build Nexus 2.0 Beta 1
+      - name: Build Nexus 2.0 Beta 1 R2
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -88,13 +97,13 @@ jobs:
           rm -f "$ROOT/nexus2/artifacts-beta1"/*
           DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
           test -n "$DYLIB_PATH"
-          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib"
+          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib"
 
           cd "$ROOT"
-          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
-          file nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/file.txt
-          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/strings.txt || true
-          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1.dylib > nexus2/artifacts-beta1/install-name.txt
+          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
+          file nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/file.txt
+          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/strings.txt || true
+          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta1-R2.dylib > nexus2/artifacts-beta1/install-name.txt
 
           grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
           grep -F 'arm64' nexus2/artifacts-beta1/file.txt
@@ -109,6 +118,16 @@ jobs:
           grep -F 'IQFResolvedLanguage' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBNavigationBar' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBMemModelObject' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 1 R2' nexus2/artifacts-beta1/strings.txt
+          grep -F '_IQFKey' nexus2/artifacts-beta1/strings.txt
+          grep -F 'feedUnitType' nexus2/artifacts-beta1/strings.txt
+          grep -F 'feed_unit_type' nexus2/artifacts-beta1/strings.txt
+          grep -F 'inlineUnitType' nexus2/artifacts-beta1/strings.txt
+          grep -F 'wordmark target found' nexus2/artifacts-beta1/strings.txt
+          grep -F 'recognizer attached' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Nexus2BackgroundHookInstalled' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Nexus2AvatarHooksInstalled' nexus2/artifacts-beta1/strings.txt
+          grep -F 'lucaspedrosa' nexus2/artifacts-beta1/strings.txt
           grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
 
           if grep -F 'IQFEnhancerLocalizationVersion' nexus2/artifacts-beta1/strings.txt; then
@@ -116,10 +135,10 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Nexus 2.0 Beta 1
+      - name: Upload Nexus 2.0 Beta 1 R2
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-2.0-Beta1-arm64
+          name: Nexus-2.0-Beta1-R2-arm64
           path: nexus2/artifacts-beta1/
           if-no-files-found: error
           retention-days: 90
