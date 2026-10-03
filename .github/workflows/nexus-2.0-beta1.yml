@@ -89,7 +89,7 @@ jobs:
           grep -F 'Nexus2BackgroundPrepareColorChange' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundRefreshNow' "$WORK/OLEDTweak.m"
           ! grep -F 'Nexus2BackgroundModeKey' "$WORK/OLEDTweak.m"
-          grep -F 'gIQFOLEDModeKnown && gIQFOLEDDarkMode' "$WORK/OLEDTweak.m"
+          grep -F 'gIQFOLEDEnabled && gIQFOLEDDarkMode' "$WORK/OLEDTweak.m"
           grep -F 'window.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundEffectActive' "$WORK/NexusAvatarFix.m"
           grep -F 'Nexus2AvatarHooksInstalled' "$WORK/NexusAvatarFix.m"
