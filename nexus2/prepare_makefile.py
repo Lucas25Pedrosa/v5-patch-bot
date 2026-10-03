@@ -14,7 +14,7 @@ shutil.copyfile(avatar_src, avatar_dst)
 s = s.replace("LIBRARY_NAME = iQFace4in1", "LIBRARY_NAME = Nexus")
 s = s.replace(
     "iQFace4in1_FILES = EnhancerTweak.m EnhancerPicker.m IconsTweak.m IconsPicker.m CacheTweak.m OLEDTweak.m",
-    "Nexus_FILES = EnhancerTweak.m IconsTweak.m IconsPicker.m CacheTweak.m OLEDTweak.m Nexus2.m NexusAvatarFix.m",
+    "Nexus_FILES = IconsTweak.m IconsPicker.m CacheTweak.m OLEDTweak.m Nexus2.m NexusAvatarFix.m",
 )
 s = s.replace("iQFace4in1_FRAMEWORKS", "Nexus_FRAMEWORKS")
 s = s.replace("iQFace4in1_CFLAGS", "Nexus_CFLAGS")
