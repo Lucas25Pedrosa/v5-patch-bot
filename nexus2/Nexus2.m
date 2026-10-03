@@ -655,6 +655,10 @@ static void NXApplyControllerLauncherVisibility(UIViewController *controller, BO
 }
 
 static void NXRefreshActivationMode(void) {
+    if (!NXLogoModeSelected() && NXActivationTimer) {
+        [NXActivationTimer invalidate];
+        NXActivationTimer = nil;
+    }
     BOOL hardUnavailable = NXWordmarkAttempts >= 120 &&
         (!NXWordmarkClassFound || !NXWordmarkSelectorFound ||
          !NXWordmarkHookInstalled || !NXSettingsSymbolAvailable());
@@ -1176,7 +1180,6 @@ static NSArray *NXOwnedRows(void) {
 }
 
 static NSArray *(*NXOrigTweakSections)(id, SEL) = NULL;
-static BOOL NXSettingsSectionsHook = NO;
 static NSInteger NXSettingsHookAttempts = 0;
 
 static NSArray *NXTweakSections(id self, SEL command) {
