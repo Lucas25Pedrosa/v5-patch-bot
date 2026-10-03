@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R5";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R6";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -335,7 +335,7 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXExtra
     dispatch_once(&onceToken, ^{
         all = @{
             @"pt": @{@"Summary":@"Resumo", @"Technical log":@"Log técnico", @"Working":@"Funcionando",
-                     @"Ready":@"Pronto", @"Waiting for feed detection":@"Aguardando detecção do feed",
+                     @"Loaded":@"Carregado", @"Ready":@"Pronto", @"Waiting for feed detection":@"Aguardando detecção do feed",
                      @"Integration with iQFace":@"Integração com iQFace", @"Icons":@"Ícones", @"Cache":@"Cache",
                      @"Utilities":@"Utilitários", @"Tools":@"Ferramentas", @"Activation method":@"Método de ativação",
                      @"Backup and restore":@"Backup e restauração",
@@ -481,7 +481,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 1 R5\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 1 R6\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -494,8 +494,8 @@ NSString *Nexus2DiagnosticsText(void) {
     [report appendFormat:@"[Settings integration]\nIQFTweakSettings: %@\nsections hook: %@\nicon picker: %@\n\n",
      NXStatus(NSClassFromString(@"IQFTweakSettings") != Nil),
      NXStatus(NXSettingsSectionsHook), NXStatus(iconPicker)];
-    [report appendFormat:@"[Feed filters]\nFBMemModelObject: %@\ninitWithFBTree ABI: %@ hook: %@\ninitWithFBPandoTree ABI: %@ hook: %@\nThreads=%d Pages=%d StoryPYMK=%d\nkeys: feedUnitType/feed_unit_type/inlineUnitType/unitType\n\n",
-     NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeABICompatible), NXStatus(NXFeedTreeHookInstalled),
+    [report appendFormat:@"[Feed filters]\nmodule loaded: %@\nFBMemModelObject: %@\ninitWithFBTree ABI: %@ hook: %@\ninitWithFBPandoTree ABI: %@ hook: %@\nThreads=%d Pages=%d StoryPYMK=%d\nkeys: feedUnitType/feed_unit_type/inlineUnitType/unitType\n\n",
+     NXStatus(NXSettingsSectionsHook), NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeABICompatible), NXStatus(NXFeedTreeHookInstalled),
      NXStatus(NXFeedPandoABICompatible), NXStatus(NXFeedPandoHookInstalled),
      NXBool(NXKeyThreads, NO), NXBool(NXKeyPages, NO), NXBool(NXKeyStoryPeople, NO)];
     [report appendFormat:@"[Appearance]\nbackground hook: %@\nmode=%ld color=%@\navatar hooks: %@\n\n",
@@ -1133,7 +1133,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.0 Beta 1 R5",
+             @"nexusVersion": @"2.0 Beta 1 R6",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1265,8 +1265,8 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     BOOL integrationOK = NXSettingsSectionsHook && languageOK;
     BOOL appearanceOK = Nexus2BackgroundHookInstalled() && Nexus2AvatarHooksInstalled();
     BOOL feedHookOK = NXFeedTreeHookInstalled || NXFeedPandoHookInstalled;
-    BOOL feedWaiting = NXAnyFeedFilterEnabled() && !feedHookOK;
-    BOOL feedOK = !feedWaiting;
+    BOOL feedModuleLoaded = NXSettingsSectionsHook && NSClassFromString(@"Nexus2FeedController") != Nil;
+    BOOL feedOK = feedModuleLoaded;
     BOOL iconOK = NSClassFromString(@"IQFIconsPickerController") != Nil;
 
     NSArray *titles = @[
@@ -1280,14 +1280,12 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     NSArray *oks = @[@(activationOK), @(integrationOK), @(appearanceOK), @(feedOK), @(iconOK), @YES];
 
     BOOL ok = [oks[(NSUInteger)indexPath.row] boolValue];
-    BOOL waiting = indexPath.row == 3 && feedWaiting;
-    NSString *emoji = ok ? @"🟢" : (waiting ? @"🟡" : @"🔴");
+    NSString *emoji = ok ? @"🟢" : @"🔴";
     cell.textLabel.text = [NSString stringWithFormat:@"%@ %@", emoji, titles[(NSUInteger)indexPath.row]];
-    if (indexPath.row == 3 && ok && !NXAnyFeedFilterEnabled()) {
-        cell.detailTextLabel.text = Nexus2Localized(@"Ready");
+    if (indexPath.row == 3) {
+        cell.detailTextLabel.text = ok ? Nexus2Localized(@"Loaded") : Nexus2Localized(@"Unavailable on this Facebook version");
     } else {
-        cell.detailTextLabel.text = ok ? Nexus2Localized(@"Working") :
-            (waiting ? Nexus2Localized(@"Waiting for feed detection") : Nexus2Localized(@"Unavailable on this Facebook version"));
+        cell.detailTextLabel.text = ok ? Nexus2Localized(@"Working") : Nexus2Localized(@"Unavailable on this Facebook version");
     }
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     cell.accessoryType = UITableViewCellAccessoryNone;
@@ -1486,7 +1484,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0 Beta 1 R5", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0 Beta 1 R6", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1752,7 +1750,7 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 1 R5 loaded");
+        NXEvent(@"Nexus 2.0 Beta 1 R6 loaded");
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
