@@ -137,7 +137,7 @@ jobs:
           grep -F 'dlsym(RTLD_DEFAULT, "IQFOLEDEnabled")' "$WORK/Nexus2.m"
           grep -F 'iQFace OLED runtime disabled via exported refresh' "$WORK/Nexus2.m"
           ! grep -F 'MSHookFunction' "$WORK/Nexus2.m"
-          ! grep -F 'method_setImplementation' "$WORK/Nexus2.m" | grep -F 'IQFRefreshOLED' || true
+          ! grep -F 'MSHookFunction' "$WORK/Nexus2.m"
           ! grep -F 'IQFOLEDInit' "$WORK/Nexus2.m"
           ! grep -F 'overrideUserInterfaceStyle' "$WORK/Nexus2.m"
           ctor_block="$(sed -n '/__attribute__((constructor))/,/^}/p' "$WORK/Nexus2.m")"
@@ -216,11 +216,13 @@ jobs:
           grep -F 'Dark mode required' nexus2/artifacts-beta1/strings.txt
           grep -F 'OLED row hidden:' nexus2/artifacts-beta1/strings.txt
           grep -F 'IQFOLEDDarkMode' nexus2/artifacts-beta1/strings.txt
-          grep -F 'iQFace OLED preference reinforced after startup' nexus2/artifacts-beta1/strings.txt
+          grep -F 'IQFRefreshOLED' nexus2/artifacts-beta1/strings.txt
+          grep -F 'IQFApplyForcedAppearance' nexus2/artifacts-beta1/strings.txt
+          grep -F 'IQFOLEDEnabled' nexus2/artifacts-beta1/strings.txt
+          grep -F 'iQFace OLED runtime disabled via exported refresh' nexus2/artifacts-beta1/strings.txt
           grep -F 'preference disabled:' nexus2/artifacts-beta1/strings.txt
+          grep -F 'runtime disabled:' nexus2/artifacts-beta1/strings.txt
           ! grep -F 'MSHookFunction' nexus2/artifacts-beta1/strings.txt
-          ! grep -F 'IQFRefreshOLED' nexus2/artifacts-beta1/strings.txt
-          ! grep -F 'IQFApplyForcedAppearance' nexus2/artifacts-beta1/strings.txt
           grep -F 'Nexus 2.0 Beta 4 R3 loaded' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusBackgroundMode' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusCustomBackgroundColor' nexus2/artifacts-beta1/strings.txt
