@@ -34,13 +34,13 @@ jobs:
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name XTranslateAuthProbe.dylib ! -path '*/XTranslateAuthProbe.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/XTranslateAuthProbe-0.3.0-X12.31.1-arm64.dylib
-          file artifacts/XTranslateAuthProbe-0.3.0-X12.31.1-arm64.dylib
-          lipo -info artifacts/XTranslateAuthProbe-0.3.0-X12.31.1-arm64.dylib
-          shasum -a 256 artifacts/XTranslateAuthProbe-0.3.0-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/XTranslateGrokProbe-0.4.0-X12.31.1-arm64.dylib
+          file artifacts/XTranslateGrokProbe-0.4.0-X12.31.1-arm64.dylib
+          lipo -info artifacts/XTranslateGrokProbe-0.4.0-X12.31.1-arm64.dylib
+          shasum -a 256 artifacts/XTranslateGrokProbe-0.4.0-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XTranslateAuthProbe-0.3.0-X12.31.1-arm64
+          name: XTranslateGrokProbe-0.4.0-X12.31.1-arm64
           path: xtranslate-auth-probe/artifacts/
           if-no-files-found: error
