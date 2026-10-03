@@ -192,7 +192,7 @@ static NSString *BootstrapTag(NSURLRequest *r) {
 }
 
 static BOOL IsGrokAccountJwt(NSURLRequest *r) {
-    return [[Operation(r) ?: @""] isEqualToString:@"GrokAccountJwt"];
+    return [(Operation(r) ?: @"") isEqualToString:@"GrokAccountJwt"];
 }
 
 static BOOL IsCookieLoginUID(NSString *uid) {
