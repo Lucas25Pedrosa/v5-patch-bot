@@ -368,7 +368,6 @@ static BOOL NXWordmarkRecognizerAttached = NO;
 static BOOL NXLauncherButtonSeen = NO;
 static BOOL NXLauncherBarItemSeen = NO;
 static BOOL NXLauncherCurrentlyHidden = NO;
-static BOOL NXSettingsBuilderHook = NO;
 static BOOL NXSettingsSectionsHook = NO;
 static BOOL NXFeedClassFound = NO;
 static BOOL NXFeedTreeABICompatible = NO;
