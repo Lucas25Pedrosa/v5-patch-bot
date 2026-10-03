@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 4 R1";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 4 R2";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -454,34 +454,55 @@ static BOOL NXIQFaceOLEDPreferenceDisabled = NO;
 static BOOL NXIQFaceOLEDRowHidden = NO;
 
 static NSString *NXIQFaceOLEDPreferenceKey(void) {
-    // iQFace 1.2 stores its own OLED state under this key.
-    // Keep it completely separate from the Nexus OLED preference.
+    // iQFace 1.2 internal OLED preference. Keep separate from Nexus OLED.
     return @"IQFOLEDDarkMode";
 }
 
-static void NXDisableIQFaceOLEDPreference(void) {
-    NXSetIQFBool(NXIQFaceOLEDPreferenceKey(), NO);
+static void NXWriteIQFaceOLEDPreferenceToDefaults(void) {
+    // Constructor-safe path: never message IQFPrefs/iQFace here.
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    [defaults setBool:NO forKey:NXIQFaceOLEDPreferenceKey()];
+    [defaults synchronize];
     NXIQFaceOLEDPreferenceDisabled =
-        !NXIQFBool(NXIQFaceOLEDPreferenceKey(), YES);
+        ![defaults boolForKey:NXIQFaceOLEDPreferenceKey()];
+}
+
+static void NXReinforceIQFaceOLEDPreferenceAfterStartup(void) {
+    // Keep the persistent value disabled first.
+    NXWriteIQFaceOLEDPreferenceToDefaults();
+
+    // iQFace access is deferred until constructors are finished.
+    Class prefs = NSClassFromString(@"IQFPrefs");
+    SEL setter = NSSelectorFromString(@"setBool:forKey:");
+    if (prefs != Nil && [prefs respondsToSelector:setter]) {
+        typedef void (*Setter)(id, SEL, BOOL, id);
+        ((Setter)(void *)objc_msgSend)(prefs, setter, NO, NXIQFaceOLEDPreferenceKey());
+    }
+
+    SEL getter = NSSelectorFromString(@"boolForKey:defaultValue:");
+    if (prefs != Nil && [prefs respondsToSelector:getter]) {
+        typedef BOOL (*Getter)(id, SEL, id, BOOL);
+        NXIQFaceOLEDPreferenceDisabled =
+            !((Getter)(void *)objc_msgSend)(prefs, getter, NXIQFaceOLEDPreferenceKey(), YES);
+    }
+
     if (NXIQFaceOLEDPreferenceDisabled) {
-        NXEvent(@"iQFace OLED preference disabled");
+        NXEvent(@"iQFace OLED preference reinforced after startup");
     }
 }
 
 static void NXScheduleIQFaceOLEDPreferenceGuard(void) {
-    // Feather injects in list order. With Nexus before iQFace, this first
-    // write is available before iQFace reads its OLED preference.
-    NXDisableIQFaceOLEDPreference();
+    // Feather injects Nexus before iQFace. The early write must not depend on
+    // any iQFace runtime state.
+    NXWriteIQFaceOLEDPreferenceToDefaults();
 
-    // Repeat only the preference write during early startup. No function
-    // hooking and no UIUserInterfaceStyle manipulation.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        NXDisableIQFaceOLEDPreference();
+        NXReinforceIQFaceOLEDPreferenceAfterStartup();
     });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.00 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.25 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        NXDisableIQFaceOLEDPreference();
+        NXReinforceIQFaceOLEDPreferenceAfterStartup();
     });
 }
 
@@ -557,7 +578,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 4 R1\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 4 R2\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -1694,7 +1715,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0 Beta 4 R1", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0 Beta 4 R2", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1961,7 +1982,7 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 4 R1 loaded");
+        NXEvent(@"Nexus 2.0 Beta 4 R2 loaded");
 
         // Try immediately in the constructor. If iQFace is already mapped this
         // neutralizes its OLED functions before normal UI startup. The helper
