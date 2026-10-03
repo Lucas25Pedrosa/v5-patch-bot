@@ -187,7 +187,7 @@ jobs:
           grep -F 'Automatic cache frequency changed to' nexus2/artifacts-beta1/strings.txt
           grep -F 'Nexus 2.0 loaded' nexus2/artifacts-beta1/strings.txt
           grep -F 'effect active:' nexus2/artifacts-beta1/strings.txt
-          grep -F 'O modo OLED do Nexus só funcionará se o Modo Escuro estiver definido como Sistema nas configurações do Facebook.' nexus2/artifacts-beta1/strings.txt
+          grep -F 'Dark mode required' nexus2/artifacts-beta1/strings.txt
           grep -F 'Nexus 2.0 loaded' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusBackgroundMode' nexus2/artifacts-beta1/strings.txt
           grep -F 'NexusCustomBackgroundColor' nexus2/artifacts-beta1/strings.txt
