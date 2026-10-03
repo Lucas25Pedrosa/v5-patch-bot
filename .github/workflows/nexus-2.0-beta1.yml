@@ -1,4 +1,4 @@
-name: Build Nexus 2.0 Beta 2 R5
+name: Build Nexus 2.0 Beta 2 R6
 
 "on":
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare Nexus 2.0 Beta 2 R5
+      - name: Prepare Nexus 2.0 Beta 2 R6
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -57,8 +57,8 @@ jobs:
             python3 "$ROOT/iqface-oled/adapt_iqface11.py"
             python3 "$ROOT/iqface-oled/adapt_iqface11_native_icon_switches.py"
           )
-          python3 nexus/prepare_oled.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
-          python3 nexus2/prepare_oled_v2.py "$WORK/OLEDTweak.m"
+          python3 nexus/prepare_oled_102.py "$WORK/Tweak.m" "$WORK/OLEDTweak.m"
+          python3 nexus2/adapt_oled_102_modes.py "$WORK/OLEDTweak.m"
           rm "$WORK/Tweak.m"
 
           cp nexus2/Nexus2.m "$WORK/Nexus2.m"
@@ -69,13 +69,19 @@ jobs:
           ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
           ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
           grep -F 'Nexus2.m' "$WORK/Makefile"
-          grep -F 'NexusVersion = @"2.0 Beta 2 R5"' "$WORK/Nexus2.m"
+          grep -F 'NexusVersion = @"2.0 Beta 2 R6"' "$WORK/Nexus2.m"
           grep -F 'NexusHideThreadsPromotions' "$WORK/Nexus2.m"
           grep -F 'NexusHideSuggestedPages' "$WORK/Nexus2.m"
           grep -F 'NexusHideStoryPeopleSuggestions' "$WORK/Nexus2.m"
           grep -F 'FBNavigationBar' "$WORK/Nexus2.m"
           grep -F 'IQFResolvedLanguage' "$WORK/Nexus2.m"
           grep -F 'Nexus2TargetBackgroundColor' "$WORK/OLEDTweak.m"
+          grep -F 'IQFOLEDCountThemeAnchors' "$WORK/OLEDTweak.m"
+          grep -F 'IQFOLEDInstallImmediateAvatarHooks' "$WORK/OLEDTweak.m"
+          grep -F 'NexusOLEDCreateModeSetting' "$WORK/OLEDTweak.m"
+          ! grep -F 'IQFRefreshOLED' "$WORK/OLEDTweak.m"
+          ! grep -F 'IQFApplyForcedAppearance' "$WORK/OLEDTweak.m"
+          ! grep -F 'overrideUserInterfaceStyle' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundHookInstalled' "$WORK/OLEDTweak.m"
           grep -F 'Nexus2BackgroundEffectActive' "$WORK/OLEDTweak.m"
           grep -F 'gIQFOLEDModeKnown && gIQFOLEDDarkMode' "$WORK/OLEDTweak.m"
@@ -117,7 +123,7 @@ jobs:
           ctor_block="$(sed -n '/__attribute__((constructor))/,/^}/p' "$WORK/Nexus2.m")"
           ! grep -F 'NXTryInstallFeedHooks();' <<<"$ctor_block"
 
-      - name: Build Nexus 2.0 Beta 2 R5
+      - name: Build Nexus 2.0 Beta 2 R6
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
@@ -129,14 +135,14 @@ jobs:
           rm -f "$ROOT/nexus2/artifacts-beta1"/*
           DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
           test -n "$DYLIB_PATH"
-          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta2-R5.dylib"
+          cp "$DYLIB_PATH" "$ROOT/nexus2/artifacts-beta1/Nexus-2.0-Beta2-R6.dylib"
 
           cd "$ROOT"
-          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta2-R5.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
-          file nexus2/artifacts-beta1/Nexus-2.0-Beta2-R5.dylib > nexus2/artifacts-beta1/file.txt
-          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta2-R5.dylib > nexus2/artifacts-beta1/strings.txt || true
-          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta2-R5.dylib > nexus2/artifacts-beta1/install-name.txt
-          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta2-R5.dylib > nexus2/artifacts-beta1/symbols.txt
+          shasum -a 256 nexus2/artifacts-beta1/Nexus-2.0-Beta2-R6.dylib > nexus2/artifacts-beta1/SHA256SUMS.txt
+          file nexus2/artifacts-beta1/Nexus-2.0-Beta2-R6.dylib > nexus2/artifacts-beta1/file.txt
+          strings -a nexus2/artifacts-beta1/Nexus-2.0-Beta2-R6.dylib > nexus2/artifacts-beta1/strings.txt || true
+          otool -D nexus2/artifacts-beta1/Nexus-2.0-Beta2-R6.dylib > nexus2/artifacts-beta1/install-name.txt
+          nm -gU nexus2/artifacts-beta1/Nexus-2.0-Beta2-R6.dylib > nexus2/artifacts-beta1/symbols.txt
 
           grep -F 'Mach-O 64-bit' nexus2/artifacts-beta1/file.txt
           grep -F 'arm64' nexus2/artifacts-beta1/file.txt
@@ -151,7 +157,7 @@ jobs:
           grep -F 'IQFResolvedLanguage' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBNavigationBar' nexus2/artifacts-beta1/strings.txt
           grep -F 'FBMemModelObject' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F '_IQFKey' nexus2/artifacts-beta1/strings.txt
           grep -F 'feedUnitType' nexus2/artifacts-beta1/strings.txt
           grep -F 'feed_unit_type' nexus2/artifacts-beta1/strings.txt
@@ -165,26 +171,31 @@ jobs:
           grep -F '_Nexus2LogoActivationAvailable' nexus2/artifacts-beta1/symbols.txt
           grep -F '_Nexus2DiagnosticsText' nexus2/artifacts-beta1/symbols.txt
           grep -F 'lucaspedrosa' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F 'IQFTweakSettings' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F 'Restoring saved Facebook logo activation immediately' nexus2/artifacts-beta1/strings.txt
           grep -F 'Waiting for feed detection' nexus2/artifacts-beta1/strings.txt
           grep -F 'Technical log' nexus2/artifacts-beta1/strings.txt
           grep -F 'Activation method' nexus2/artifacts-beta1/strings.txt
           grep -F 'Backup and restore' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F 'module loaded:' nexus2/artifacts-beta1/strings.txt
           grep -F 'Loaded' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F 'Automatic cache frequency changed to' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F 'effect active:' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusBackgroundMode' nexus2/artifacts-beta1/strings.txt
+          grep -F 'NexusCustomBackgroundColor' nexus2/artifacts-beta1/strings.txt
+          ! grep -F 'IQFRefreshOLED' nexus2/artifacts-beta1/strings.txt
+          ! grep -F 'IQFApplyForcedAppearance' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           ! grep -F 'iQFace OLED coordination' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
-          grep -F '2.0 Beta 2 R5' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
+          grep -F '2.0 Beta 2 R6' nexus2/artifacts-beta1/strings.txt
           grep -F 'Restoring saved Facebook logo activation immediately' nexus2/artifacts-beta1/strings.txt
           grep -F 'Utilit' nexus2/artifacts-beta1/strings.txt || true
           grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
@@ -194,10 +205,10 @@ jobs:
             exit 1
           fi
 
-      - name: Upload Nexus 2.0 Beta 2 R5
+      - name: Upload Nexus 2.0 Beta 2 R6
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-2.0-Beta2-R5-arm64
+          name: Nexus-2.0-Beta2-R6-arm64
           path: nexus2/artifacts-beta1/
           if-no-files-found: error
           retention-days: 90
