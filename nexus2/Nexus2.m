@@ -1264,7 +1264,6 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     BOOL activationOK = NXSettingsSymbolAvailable();
     BOOL integrationOK = NXSettingsSectionsHook && languageOK;
     BOOL appearanceOK = Nexus2BackgroundHookInstalled() && Nexus2AvatarHooksInstalled();
-    BOOL feedHookOK = NXFeedTreeHookInstalled || NXFeedPandoHookInstalled;
     BOOL feedModuleLoaded = NXSettingsSectionsHook && NSClassFromString(@"Nexus2FeedController") != Nil;
     BOOL feedOK = feedModuleLoaded;
     BOOL iconOK = NSClassFromString(@"IQFIconsPickerController") != Nil;
