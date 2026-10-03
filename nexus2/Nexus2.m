@@ -25,6 +25,8 @@ extern BOOL Nexus2AvatarHooksInstalled(void);
 
 #pragma mark - Shared helpers
 
+static void NXEvent(NSString *event);
+
 static void *NXFindSymbol(const char *name) {
     void *value = dlsym(RTLD_DEFAULT, name);
     if (value) return value;
