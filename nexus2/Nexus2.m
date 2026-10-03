@@ -1326,6 +1326,9 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
 
 #pragma mark - Nexus utilities / tools
 
+extern id NexusCacheCreateManualSetting(void);
+extern id NexusCacheCreateAutomaticSetting(void);
+
 @interface Nexus2UtilitiesController : UITableViewController
 @end
 
