@@ -4,8 +4,8 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateGrokPrivateFactoryProbe.log";
-static const NSTimeInterval kWindow = 15.0;
+static NSString *const kLogName = @"XTranslateGrokPrivateBridgeFix.log";
+static const NSTimeInterval kWindow = 20.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
 static IMP gOrigDataTask = NULL;
@@ -259,13 +259,14 @@ static void LogTaskShape(NSString *phase, NSUInteger seq, NSURLSessionTask *task
 
 static void LogExternalRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
     if (!r) { Log(@"EXT %@ #%lu nil", phase, (unsigned long)seq); return; }
-    Log(@"EXT %@ #%lu label=%@ method=%@ host=%@ path=%@ body=%lu hint=%@",
+    BOOL xaiAuth = Header(r, @"X-XAI-Token-Auth").length > 0 || Header(r, @"x-xai-token-auth").length > 0;
+    Log(@"EXT %@ #%lu label=%@ method=%@ host=%@ path=%@ body=%lu hint=%@ xaiAuth=%d",
         phase, (unsigned long)seq, gLabel ?: @"-",
         r.HTTPMethod ?: @"GET",
         r.URL.host ?: @"-",
         r.URL.path ?: @"-",
         (unsigned long)r.HTTPBody.length,
-        KeywordHint(r));
+        KeywordHint(r),xaiAuth);
 }
 
 static void LogRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
@@ -422,26 +423,76 @@ static BOOL IsGrokRESTRequest(NSURLRequest *r) {
            [path hasPrefix:@"/2/grok/"];
 }
 
+static BOOL IsTargetGrokBridgeRequest(NSURLRequest *r) {
+    NSString *host=r.URL.host.lowercaseString ?: @"";
+    NSString *path=r.URL.path ?: @"";
+    return ([host isEqualToString:@"api.x.com"] && [path hasSuffix:@"/2/grok/translation.json"]) ||
+           ([host isEqualToString:@"grok.x.com"] && [path hasSuffix:@"/2/grok/pass_through_jwt.json"]);
+}
+
+static BOOL UsesPlaceholderOAuth(NSURLRequest *r) {
+    NSString *a = Header(r, @"Authorization");
+    if (!a.length) a = Header(r, @"authorization");
+    return [a containsString:@"oauth_token="];
+}
+
 static NSURLSessionDataTask *PrivateDataTaskDelegate(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate) {
+    if (IsTargetGrokBridgeRequest(request) && UsesPlaceholderOAuth(request)) {
+        if (delegate) {
+            Log(@"PRIVATE_BRIDGE skip op=%@ selector=_dataTaskWithRequest:delegate: reason=delegate-present class=%@",
+                Operation(request),NSStringFromClass([delegate class]));
+            return ((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,request,delegate);
+        }
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"PRIVATE_BRIDGE_IN",seq,request);
+        Log(@"PRIVATE_BRIDGE route op=%@ via=public-dataTaskWithRequest",Operation(request));
+        NSURLSessionDataTask *task=[self dataTaskWithRequest:request];
+        LogRequest(@"PRIVATE_BRIDGE_TASK",seq,task.currentRequest ?: task.originalRequest);
+        AttachTask(task,seq);
+        return task;
+    }
     if (IsGrokRESTRequest(request)) {
-        Log(@"PRIVATE_FACTORY selector=_dataTaskWithRequest:delegate: op=%@ sessionClass=%@ delegateClass=%@",
-            Operation(request),NSStringFromClass(self.class),delegate?NSStringFromClass([delegate class]):@"nil");
+        Log(@"PRIVATE_FACTORY pass op=%@ selector=_dataTaskWithRequest:delegate: auth=%@",
+            Operation(request),AuthShape(request));
     }
     return ((id(*)(id,SEL,id,id))gOrigPrivateDataTaskDelegate)(self,_cmd,request,delegate);
 }
 
 static NSURLSessionDataTask *PrivateDataTaskDelegateCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id delegate, id completion) {
+    if (IsTargetGrokBridgeRequest(request) && UsesPlaceholderOAuth(request)) {
+        if (delegate) {
+            Log(@"PRIVATE_BRIDGE skip op=%@ selector=_dataTaskWithRequest:delegate:completionHandler: reason=delegate-present class=%@",
+                Operation(request),NSStringFromClass([delegate class]));
+            return ((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,request,delegate,completion);
+        }
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"PRIVATE_BRIDGE_IN",seq,request);
+        Log(@"PRIVATE_BRIDGE route op=%@ via=public-dataTaskWithRequest-completion",Operation(request));
+        NSURLSessionDataTask *task=[self dataTaskWithRequest:request completionHandler:completion];
+        LogRequest(@"PRIVATE_BRIDGE_TASK",seq,task.currentRequest ?: task.originalRequest);
+        AttachTask(task,seq);
+        return task;
+    }
     if (IsGrokRESTRequest(request)) {
-        Log(@"PRIVATE_FACTORY selector=_dataTaskWithRequest:delegate:completionHandler: op=%@ sessionClass=%@ delegateClass=%@ completion=%d",
-            Operation(request),NSStringFromClass(self.class),delegate?NSStringFromClass([delegate class]):@"nil",completion!=nil);
+        Log(@"PRIVATE_FACTORY pass op=%@ selector=_dataTaskWithRequest:delegate:completionHandler: auth=%@",
+            Operation(request),AuthShape(request));
     }
     return ((id(*)(id,SEL,id,id,id))gOrigPrivateDataTaskDelegateCompletion)(self,_cmd,request,delegate,completion);
 }
 
 static NSURLSessionDataTask *DataTaskUniqueIdentifier(NSURLSession *self, SEL _cmd, NSURLRequest *request, id identifier) {
+    if (IsTargetGrokBridgeRequest(request) && UsesPlaceholderOAuth(request) && !identifier) {
+        NSUInteger seq=++gReqSeq;
+        LogRequest(@"PRIVATE_BRIDGE_IN",seq,request);
+        Log(@"PRIVATE_BRIDGE route op=%@ via=public-dataTaskWithRequest uniqueIdentifier=nil",Operation(request));
+        NSURLSessionDataTask *task=[self dataTaskWithRequest:request];
+        LogRequest(@"PRIVATE_BRIDGE_TASK",seq,task.currentRequest ?: task.originalRequest);
+        AttachTask(task,seq);
+        return task;
+    }
     if (IsGrokRESTRequest(request)) {
-        Log(@"PRIVATE_FACTORY selector=dataTaskWithRequest:uniqueIdentifier: op=%@ sessionClass=%@ identifierClass=%@",
-            Operation(request),NSStringFromClass(self.class),identifier?NSStringFromClass([identifier class]):@"nil");
+        Log(@"PRIVATE_FACTORY pass op=%@ selector=dataTaskWithRequest:uniqueIdentifier: auth=%@ identifier=%d",
+            Operation(request),AuthShape(request),identifier!=nil);
     }
     return ((id(*)(id,SEL,id,id))gOrigDataTaskUniqueIdentifier)(self,_cmd,request,identifier);
 }
@@ -529,12 +580,12 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Private Factory Probe"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"Grok Private Bridge Fix"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?1:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Grok":@"Relatório"; }
 - (NSString*)tableView:(UITableView*)t titleForFooterInSection:(NSInteger)s {
-    if (s==0) return @"Arme na conta Web Login e toque em Traduzir post. A probe marca somente qual factory privado criou a task Grok e a classe do delegate.";
+    if (s==0) return @"Arme na conta Web Login e toque em Traduzir post. Beta 1 redireciona somente translation.json e pass_through_jwt.json pelo caminho público já tratado pelo Web Login.";
     return @"Read-only. Sem valores de tokens/cookies e sem varredura global de classes.";
 }
 - (UITableViewCell*)tableView:(UITableView*)t cellForRowAtIndexPath:(NSIndexPath*)i {
@@ -552,7 +603,7 @@ static void Arm(NSString *label) {
     if (i.section==0) {
         NSString *label=@"WEB_GROK";
         Arm(label);
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Bridge Fix"
             message:@"WEB_GROK armado por 15 segundos. Feche e abra o Grok ou toque em “Traduzir post” em um post novo."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -562,7 +613,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Factory Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"Grok Private Bridge Fix"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -584,7 +635,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"Grok Private Factory Probe",@"subtitle":@"Identificar o selector privado exato usado pelas tasks Grok.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"Grok Private Bridge Fix",@"subtitle":@"Beta 1: fazer os dois endpoints privados reutilizarem o tratamento Web Login existente.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -621,15 +672,16 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== Grok Private Factory Probe 0.11.0 Beta 1 loaded ==========");
-        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-private-factory-confirmation-read-only no-secrets",
+        Log(@"========== Grok Private Bridge Fix 0.11.0 Beta 1 loaded ==========");
+        Log(@"ENV appVersion=%@ build=%@ os=%@ mode=grok-private-bridge-fix-beta1 no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
             UIDevice.currentDevice.systemVersion);
         InstallAll();
-        DumpFocusedTaskFactories();
         for (NSNumber *n in @[@0.05,@0.2,@0.5,@1.0,@2.0,@4.0]) Retry(n.doubleValue);
     }
 }
 
 // Build trigger 0.11 Beta 1 R2
+
+// Build trigger Grok Private Bridge Fix 0.12 Beta 1
