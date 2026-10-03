@@ -81,10 +81,30 @@ s, n = re.subn(
 if n < 2:
     raise SystemExit(f"expected constructor + live refresh replacements, found {n}")
 
+# Never infer Facebook Dark Mode from the iOS system appearance.
+# OLED/custom backgrounds are allowed only after Facebook-specific theme anchors
+# positively identify the app as dark. Unknown/tied state is treated as light-safe.
+old_fallback = '''    } else if (!gIQFOLEDModeKnown) {
+        for (UIWindow *window in windows) {
+            if (window.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark) {
+                gIQFOLEDDarkMode = YES;
+                gIQFOLEDModeKnown = YES;
+                break;
+            }
+        }
+    }'''
+new_fallback = '''    } else {
+        gIQFOLEDDarkMode = NO;
+        gIQFOLEDModeKnown = NO;
+    }'''
+if old_fallback not in s:
+    raise SystemExit("theme fallback marker not found")
+s = s.replace(old_fallback, new_fallback, 1)
+
 # Instant setter must follow the new mode even before the first periodic pass.
 s = s.replace(
     'if (gIQFOLEDEnabled && IQFOLEDIsMappedDark(rgba)) {',
-    'if (Nexus2BackgroundMode() != 0 && IQFOLEDIsMappedDark(rgba)) {',
+    'if (Nexus2BackgroundMode() != 0 && gIQFOLEDModeKnown && gIQFOLEDDarkMode && IQFOLEDIsMappedDark(rgba)) {',
     1,
 )
 
@@ -104,6 +124,11 @@ BOOL Nexus2BackgroundHookInstalled(void) {
 __attribute__((used, visibility("default")))
 NSInteger Nexus2BackgroundCurrentMode(void) {
     return Nexus2BackgroundMode();
+}
+
+__attribute__((used, visibility("default")))
+BOOL Nexus2BackgroundEffectActive(void) {
+    return Nexus2BackgroundMode() != 0 && gIQFOLEDModeKnown && gIQFOLEDDarkMode;
 }
 
 static void IQFOLEDInstallInstantSetter(void) {''',
@@ -140,6 +165,8 @@ required = [
     'gIQFOLEDEnabled = (Nexus2BackgroundMode() != 0);',
     'Nexus2BackgroundHookInstalled',
     'Nexus2BackgroundCurrentMode',
+    'Nexus2BackgroundEffectActive',
+    'gIQFOLEDModeKnown && gIQFOLEDDarkMode',
 ]
 for marker in required:
     if marker not in s:
