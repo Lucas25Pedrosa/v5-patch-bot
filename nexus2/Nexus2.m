@@ -1179,14 +1179,31 @@ static NSArray *NXOwnedRows(void) {
     return rows.copy;
 }
 
-static NSArray *NXSectionsAddingNexus(NSArray *sections);
-
 static NSArray *(*NXOrigTweakSections)(id, SEL) = NULL;
 static NSInteger NXSettingsHookAttempts = 0;
 
 static NSArray *NXTweakSections(id self, SEL command) {
     NSArray *sections = NXOrigTweakSections ? NXOrigTweakSections(self, command) : nil;
-    return NXSectionsAddingNexus(sections);
+    if (![sections isKindOfClass:NSArray.class]) return sections;
+
+    NSMutableArray *result = [sections mutableCopy];
+    for (NSInteger i = (NSInteger)result.count - 1; i >= 0; i--) {
+        id raw = result[(NSUInteger)i];
+        if (![raw isKindOfClass:NSDictionary.class]) continue;
+        NSString *header = [raw[@"header"] isKindOfClass:NSString.class] ? raw[@"header"] : nil;
+        if ([[header lowercaseString] containsString:@"nexus"]) [result removeObjectAtIndex:(NSUInteger)i];
+    }
+
+    NSDictionary *nexusSection = @{@"header": @"NEXUS 2.0", @"rows": NXOwnedRows()};
+    NSUInteger insertionIndex = result.count;
+    for (NSUInteger i = 0; i < result.count; i++) {
+        id raw = result[i];
+        if (![raw isKindOfClass:NSDictionary.class]) continue;
+        NSString *header = [raw[@"header"] isKindOfClass:NSString.class] ? raw[@"header"] : nil;
+        if (NXIsInfoHeader(header)) { insertionIndex = i; break; }
+    }
+    [result insertObject:nexusSection atIndex:MIN(insertionIndex, result.count)];
+    return [result copy];
 }
 
 static void NXTryInstallSettingsHooks(void) {
