@@ -1,4 +1,4 @@
-name: Build Grok Pass-Through Probe
+name: Build Grok Private Factory Probe
 
 "on":
   workflow_dispatch:
@@ -9,6 +9,7 @@ name: Build Grok Pass-Through Probe
       - "xtranslate-grok-bootstrap-probe-*"
       - "xtranslate-tap-diff-probe-*"
       - "xtranslate-grok-passthrough-probe-*"
+      - "xtranslate-grok-private-session-fix-*"
     paths:
       - "xtranslate-auth-probe/**"
       - ".github/workflows/xtranslate-auth-probe.yml"
@@ -38,13 +39,13 @@ jobs:
           mkdir -p artifacts
           dylib_path="$(find .theos -type f -name XTranslateAuthProbe.dylib ! -path '*/XTranslateAuthProbe.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/XTranslateGrokPassThroughProbe-0.10.0-X12.31.1-arm64.dylib
-          file artifacts/XTranslateGrokPassThroughProbe-0.10.0-X12.31.1-arm64.dylib
-          lipo -info artifacts/XTranslateGrokPassThroughProbe-0.10.0-X12.31.1-arm64.dylib
-          shasum -a 256 artifacts/XTranslateGrokPassThroughProbe-0.10.0-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
+          file artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
+          lipo -info artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib
+          shasum -a 256 artifacts/XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64.dylib > artifacts/SHA256SUMS.txt
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: XTranslateGrokPassThroughProbe-0.10.0-X12.31.1-arm64
+          name: XTranslateGrokPrivateFactoryProbe-0.11.0-Beta1-X12.31.1-arm64
           path: xtranslate-auth-probe/artifacts/
           if-no-files-found: error
