@@ -165,7 +165,7 @@ static NSString *KeywordHint(NSURLRequest *r) {
     return hits.count ? [hits componentsJoinedByString:@","] : @"-";
 }
 
-static BOOL IsRelevantHost(NSURLRequest *r) {
+static BOOL IsXHost(NSURLRequest *r) {
     NSString *h=r.URL.host.lowercaseString ?: @"";
     return [h containsString:@"twitter.com"] || [h hasSuffix:@"x.com"] || [h containsString:@"api.x.com"];
 }
@@ -178,8 +178,20 @@ static NSString *Operation(NSURLRequest *r) {
     return last.length ? last : path;
 }
 
+static void LogExternalRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
+    if (!r) { Log(@"EXT %@ #%lu nil", phase, (unsigned long)seq); return; }
+    Log(@"EXT %@ #%lu label=%@ method=%@ host=%@ path=%@ body=%lu hint=%@",
+        phase, (unsigned long)seq, gLabel ?: @"-",
+        r.HTTPMethod ?: @"GET",
+        r.URL.host ?: @"-",
+        r.URL.path ?: @"-",
+        (unsigned long)r.HTTPBody.length,
+        KeywordHint(r));
+}
+
 static void LogRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
     if (!r) { Log(@"REQ %@ #%lu nil", phase, (unsigned long)seq); return; }
+    if (!IsXHost(r)) { LogExternalRequest(phase, seq, r); return; }
     Log(@"REQ %@ #%lu label=%@ method=%@ host=%@ op=%@ path=%@ auth=%@ oauthUID=%@ authTypeHdr=%@ csrf=%d cookies=%@ cookieUID=%@ xtid=%d body=%lu hint=%@",
         phase, (unsigned long)seq, gLabel ?: @"-",
         r.HTTPMethod ?: @"GET",
@@ -272,7 +284,7 @@ static void AttachTask(NSURLSessionTask *task, NSUInteger seq) {
 
 static NSURLSessionDataTask *ProbeDataTask(NSURLSession *self, SEL _cmd, NSURLRequest *request) {
     if (!gOrigDataTask) return nil;
-    if (!Armed() || !IsRelevantHost(request))
+    if (!Armed())
         return ((id(*)(id,SEL,id))gOrigDataTask)(self,_cmd,request);
 
     NSUInteger seq=++gReqSeq;
@@ -285,7 +297,7 @@ static NSURLSessionDataTask *ProbeDataTask(NSURLSession *self, SEL _cmd, NSURLRe
 
 static NSURLSessionDataTask *ProbeDataTaskCompletion(NSURLSession *self, SEL _cmd, NSURLRequest *request, id completion) {
     if (!gOrigDataTaskCompletion) return nil;
-    if (!Armed() || !IsRelevantHost(request))
+    if (!Armed())
         return ((id(*)(id,SEL,id,id))gOrigDataTaskCompletion)(self,_cmd,request,completion);
 
     NSUInteger seq=++gReqSeq;
@@ -298,7 +310,7 @@ static NSURLSessionDataTask *ProbeDataTaskCompletion(NSURLSession *self, SEL _cm
 
 static NSURLSessionUploadTask *ProbeUploadData(NSURLSession *self, SEL _cmd, NSURLRequest *request, NSData *data) {
     if (!gOrigUploadData) return nil;
-    if (!Armed() || !IsRelevantHost(request))
+    if (!Armed())
         return ((id(*)(id,SEL,id,id))gOrigUploadData)(self,_cmd,request,data);
     NSUInteger seq=++gReqSeq;
     LogRequest(@"IN-UPLOAD",seq,request);
@@ -310,7 +322,7 @@ static NSURLSessionUploadTask *ProbeUploadData(NSURLSession *self, SEL _cmd, NSU
 
 static NSURLSessionUploadTask *ProbeUploadFile(NSURLSession *self, SEL _cmd, NSURLRequest *request, NSURL *fileURL) {
     if (!gOrigUploadFile) return nil;
-    if (!Armed() || !IsRelevantHost(request))
+    if (!Armed())
         return ((id(*)(id,SEL,id,id))gOrigUploadFile)(self,_cmd,request,fileURL);
     NSUInteger seq=++gReqSeq;
     LogRequest(@"IN-UPLOADFILE",seq,request);
@@ -355,7 +367,7 @@ static void Arm(NSString *label) {
 @interface XTranslateAuthProbeVC : UITableViewController @end
 @implementation XTranslateAuthProbeVC
 - (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
-- (void)viewDidLoad { [super viewDidLoad]; self.title=@"XTranslate Auth Probe"; }
+- (void)viewDidLoad { [super viewDidLoad]; self.title=@"XTranslate Grok Probe"; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView*)t { return 2; }
 - (NSInteger)tableView:(UITableView*)t numberOfRowsInSection:(NSInteger)s { return s==0?2:2; }
 - (NSString*)tableView:(UITableView*)t titleForHeaderInSection:(NSInteger)s { return s==0?@"Comparação":@"Relatório"; }
@@ -378,7 +390,7 @@ static void Arm(NSString *label) {
     [t deselectRowAtIndexPath:i animated:YES];
     if (i.section==0) {
         Arm(i.row==0?@"OLD_OK":@"NEW_FAIL");
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Auth Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Grok Probe"
             message:@"Captura armada por 45 segundos. Volte ao mesmo post e toque uma vez em “Traduzir post”."
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -388,7 +400,7 @@ static void Arm(NSString *label) {
     if (i.row==0) {
         NSString *r=[NSString stringWithContentsOfFile:LogPath() encoding:NSUTF8StringEncoding error:nil] ?: @"";
         UIPasteboard.generalPasteboard.string=r;
-        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Auth Probe"
+        UIAlertController *a=[UIAlertController alertControllerWithTitle:@"XTranslate Grok Probe"
             message:[NSString stringWithFormat:@"Comparação copiada (%lu caracteres).",(unsigned long)r.length]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
@@ -410,7 +422,7 @@ static void InjectNFB(id controller) {
     @try { sections=[controller valueForKey:@"sections"]; } @catch (__unused NSException *e) { return; }
     if (![sections isKindOfClass:NSArray.class] || SectionsHave(sections)) return;
     NSMutableArray *u=[sections mutableCopy];
-    [u addObject:@{@"title":@"XTranslate Auth Probe",@"subtitle":@"Comparar autenticação da tradução.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
+    [u addObject:@{@"title":@"XTranslate Grok Probe",@"subtitle":@"Rastrear o caminho completo da tradução.",@"icon":@"flask",@"action":@"showXTranslateAuthProbe"}];
     @try { [controller setValue:[u copy] forKey:@"sections"]; } @catch (__unused NSException *e) {}
 }
 static void NFBSetup(id self, SEL _cmd) {
@@ -447,7 +459,7 @@ __attribute__((constructor))
 static void Init(void) {
     @autoreleasepool {
         NSBundle *b=NSBundle.mainBundle;
-        Log(@"========== XTranslate Auth Probe 0.3.0 loaded ==========");
+        Log(@"========== XTranslate Grok Probe 0.4.0 loaded ==========");
         Log(@"ENV appVersion=%@ build=%@ os=%@ mode=read-only no-secrets",
             [b objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"-",
             [b objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"-",
