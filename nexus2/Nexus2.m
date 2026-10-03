@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 1 R2";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -17,6 +17,10 @@ static NSString * const NXSettingsChangedNotification = @"NexusSettingsDidChange
 
 typedef NSString *(*NXResolvedLanguageFunction)(void);
 typedef void (*NXPresentSettingsFunction)(void);
+
+extern BOOL Nexus2BackgroundHookInstalled(void);
+extern NSInteger Nexus2BackgroundCurrentMode(void);
+extern BOOL Nexus2AvatarHooksInstalled(void);
 
 #pragma mark - Shared helpers
 
@@ -104,7 +108,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"freed": @"liberados",
                 @"Some files were in use.": @"Alguns arquivos estavam em uso.",
                 @"Approximately %@ of temporary files will be removed.": @"Serão removidos aproximadamente %@ de arquivos temporários.",
-                @"Clear": @"Limpar"
+                @"Clear": @"Limpar",
+                @"Nexus developer": @"Desenvolvedor do Nexus"
             },
             @"fr": @{
                 @"Appearance": @"Apparence", @"Background appearance": @"Arrière-plan",
@@ -137,7 +142,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"Cache vidé", @"freed": @"libérés",
                 @"Some files were in use.": @"Certains fichiers étaient utilisés.",
                 @"Approximately %@ of temporary files will be removed.": @"Environ %@ de fichiers temporaires seront supprimés.",
-                @"Clear": @"Vider"
+                @"Clear": @"Vider",
+                @"Nexus developer": @"Développeur de Nexus"
             },
             @"ru": @{
                 @"Appearance": @"Оформление", @"Background appearance": @"Фон",
@@ -167,7 +173,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"Кэш очищен", @"freed": @"освобождено",
                 @"Some files were in use.": @"Некоторые файлы использовались.",
                 @"Approximately %@ of temporary files will be removed.": @"Будет удалено примерно %@ временных файлов.",
-                @"Clear": @"Очистить"
+                @"Clear": @"Очистить",
+                @"Nexus developer": @"Разработчик Nexus"
             },
             @"zh": @{
                 @"Appearance": @"外观", @"Background appearance": @"背景外观",
@@ -193,7 +200,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"缓存已清除", @"freed": @"已释放",
                 @"Some files were in use.": @"部分文件正在使用。",
                 @"Approximately %@ of temporary files will be removed.": @"将删除约 %@ 的临时文件。",
-                @"Clear": @"清除"
+                @"Clear": @"清除",
+                @"Nexus developer": @"Nexus 开发者"
             },
             @"vi": @{
                 @"Appearance": @"Giao diện", @"Background appearance": @"Giao diện nền",
@@ -222,7 +230,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"Đã xóa bộ nhớ đệm", @"freed": @"đã giải phóng",
                 @"Some files were in use.": @"Một số tệp đang được sử dụng.",
                 @"Approximately %@ of temporary files will be removed.": @"Khoảng %@ tệp tạm thời sẽ bị xóa.",
-                @"Clear": @"Xóa"
+                @"Clear": @"Xóa",
+                @"Nexus developer": @"Nhà phát triển Nexus"
             },
             @"ar": @{
                 @"Appearance": @"المظهر", @"Background appearance": @"مظهر الخلفية",
@@ -251,7 +260,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"تم مسح ذاكرة التخزين المؤقت", @"freed": @"تم تحريرها",
                 @"Some files were in use.": @"كانت بعض الملفات قيد الاستخدام.",
                 @"Approximately %@ of temporary files will be removed.": @"ستتم إزالة نحو %@ من الملفات المؤقتة.",
-                @"Clear": @"مسح"
+                @"Clear": @"مسح",
+                @"Nexus developer": @"مطوّر Nexus"
             },
             @"fa": @{
                 @"Appearance": @"ظاهر", @"Background appearance": @"ظاهر پس‌زمینه",
@@ -280,7 +290,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"کش پاک شد", @"freed": @"آزاد شد",
                 @"Some files were in use.": @"برخی فایل‌ها در حال استفاده بودند.",
                 @"Approximately %@ of temporary files will be removed.": @"حدود %@ فایل موقت حذف خواهد شد.",
-                @"Clear": @"پاک کردن"
+                @"Clear": @"پاک کردن",
+                @"Nexus developer": @"توسعه‌دهنده Nexus"
             },
             @"ckb": @{
                 @"Appearance": @"ڕووکار", @"Background appearance": @"ڕووکاری پاشبنەما",
@@ -310,7 +321,8 @@ static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *NXTrans
                 @"Cache cleared": @"کاش پاککرایەوە", @"freed": @"ئازاد کرا",
                 @"Some files were in use.": @"هەندێک فایل لە بەکارهێناندا بوون.",
                 @"Approximately %@ of temporary files will be removed.": @"نزیکەی %@ فایلە کاتییەکان دەسڕدرێنەوە.",
-                @"Clear": @"پاککردنەوە"
+                @"Clear": @"پاککردنەوە",
+                @"Nexus developer": @"گەشەپێدەری Nexus"
             }
         };
     });
@@ -351,6 +363,13 @@ static NSMutableArray<NSString *> *NXEvents;
 static BOOL NXWordmarkClassFound = NO;
 static BOOL NXWordmarkSelectorFound = NO;
 static BOOL NXWordmarkHookInstalled = NO;
+static BOOL NXWordmarkTargetFound = NO;
+static BOOL NXWordmarkRecognizerAttached = NO;
+static BOOL NXLauncherButtonSeen = NO;
+static BOOL NXLauncherBarItemSeen = NO;
+static BOOL NXLauncherCurrentlyHidden = NO;
+static BOOL NXSettingsBuilderHook = NO;
+static BOOL NXSettingsSectionsHook = NO;
 static BOOL NXFeedClassFound = NO;
 static BOOL NXFeedTreeHookInstalled = NO;
 static BOOL NXFeedPandoHookInstalled = NO;
@@ -397,31 +416,42 @@ static BOOL NXSettingsSymbolAvailable(void) {
 __attribute__((used, visibility("default")))
 BOOL Nexus2LogoActivationAvailable(void) {
     return NXWordmarkClassFound && NXWordmarkSelectorFound &&
-           NXWordmarkHookInstalled && NXSettingsSymbolAvailable();
+           NXWordmarkHookInstalled && NXWordmarkTargetFound &&
+           NXWordmarkRecognizerAttached && NXSettingsSymbolAvailable();
 }
 
 __attribute__((used, visibility("default")))
 NSString *Nexus2DiagnosticsText(void) {
     NSString *fbVersion = NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?";
     NSString *fbBuild = NSBundle.mainBundle.infoDictionary[@"CFBundleVersion"] ?: @"?";
-    NSMutableString *s = [NSMutableString string];
-    [s appendFormat:@"Nexus 2.0 Beta 1\nFacebook %@ (%@)\niOS %@\niQFace language: %@\n\n",
-     fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode()];
-    [s appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nIQFPresentSettings: %@\nmode: %@\n\n",
+    BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
+    BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
+    NSMutableString *report = [NSMutableString string];
+    [report appendFormat:@"Nexus 2.0 Beta 1 R2\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+     fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
+     NXStatus(languageBridge)];
+    [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
      NXStatus(NXWordmarkClassFound), NXStatus(NXWordmarkSelectorFound),
-     NXStatus(NXWordmarkHookInstalled), NXStatus(NXSettingsSymbolAvailable()),
+     NXStatus(NXWordmarkHookInstalled), NXStatus(NXWordmarkTargetFound),
+     NXStatus(NXWordmarkRecognizerAttached), NXStatus(NXSettingsSymbolAvailable()),
+     NXStatus(NXLauncherButtonSeen), NXStatus(NXLauncherBarItemSeen),
+     NXStatus(NXLauncherCurrentlyHidden),
      [NSUserDefaults.standardUserDefaults stringForKey:NXKeyActivation] ?: @"iqface"];
-    [s appendFormat:@"[Feed filters]\nFBMemModelObject: %@\ninitWithFBTree hook: %@\ninitWithFBPandoTree hook: %@\nThreads=%d Pages=%d StoryPYMK=%d\n\n",
+    [report appendFormat:@"[Settings integration]\nIQFSettingsViewController: %@\nsectionsBuilder hook: %@\nsections hook: %@\nicon picker: %@\n\n",
+     NXStatus(NSClassFromString(@"IQFSettingsViewController") != Nil),
+     NXStatus(NXSettingsBuilderHook), NXStatus(NXSettingsSectionsHook), NXStatus(iconPicker)];
+    [report appendFormat:@"[Feed filters]\nFBMemModelObject: %@\ninitWithFBTree hook: %@\ninitWithFBPandoTree hook: %@\nThreads=%d Pages=%d StoryPYMK=%d\nkeys: feedUnitType/feed_unit_type/inlineUnitType/unitType\n\n",
      NXStatus(NXFeedClassFound), NXStatus(NXFeedTreeHookInstalled),
      NXStatus(NXFeedPandoHookInstalled), NXBool(NXKeyThreads, NO), NXBool(NXKeyPages, NO),
      NXBool(NXKeyStoryPeople, NO)];
-    [s appendFormat:@"[Background]\nmode=%ld color=%@\n\n",
-     (long)NXInteger(NXKeyBackgroundMode, 1),
-     [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF"];
-    [s appendString:@"[Events]\n"];
-    for (NSString *event in NXEvents ?: @[]) [s appendFormat:@"%@\n", event];
-    if (NXCapturedUI.length) [s appendString:NXCapturedUI];
-    return s;
+    [report appendFormat:@"[Appearance]\nbackground hook: %@\nmode=%ld color=%@\navatar hooks: %@\n\n",
+     NXStatus(Nexus2BackgroundHookInstalled()), (long)Nexus2BackgroundCurrentMode(),
+     [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF",
+     NXStatus(Nexus2AvatarHooksInstalled())];
+    [report appendString:@"[Events]\n"];
+    for (NSString *event in NXEvents ?: @[]) [report appendFormat:@"%@\n", event];
+    if (NXCapturedUI.length) [report appendString:NXCapturedUI];
+    return report;
 }
 
 #pragma mark - Facebook logo activation
@@ -485,15 +515,28 @@ static UIView *NXFindWordmark(UIView *root, UIView *navigationBar) {
     return best;
 }
 
+static const void *NXLauncherViewStateKey = &NXLauncherViewStateKey;
+static const void *NXLauncherBarItemsKey = &NXLauncherBarItemsKey;
+
 static void NXAttachWordmark(UIView *navigationBar) {
     UIView *target = NXFindWordmark(navigationBar, navigationBar);
-    if (!target || objc_getAssociatedObject(target, NXWordmarkRecognizerKey)) return;
+    if (!target) return;
+    NXWordmarkTargetFound = YES;
+    UITapGestureRecognizer *existing = objc_getAssociatedObject(target, NXWordmarkRecognizerKey);
+    if (existing != nil) {
+        NXWordmarkRecognizerAttached = [target.gestureRecognizers containsObject:existing];
+        return;
+    }
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
         initWithTarget:Nexus2WordmarkTarget.shared action:@selector(tap:)];
     tap.cancelsTouchesInView = NO;
+    tap.delaysTouchesBegan = NO;
+    tap.delaysTouchesEnded = NO;
     tap.delegate = Nexus2WordmarkTarget.shared;
     [target addGestureRecognizer:tap];
     objc_setAssociatedObject(target, NXWordmarkRecognizerKey, tap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NXWordmarkRecognizerAttached = [target.gestureRecognizers containsObject:tap];
+    if (NXWordmarkRecognizerAttached) NXEvent(@"Facebook logo recognizer attached");
 }
 
 static void NXNavigationLayoutSubviews(id self, SEL command) {
@@ -513,24 +556,93 @@ static BOOL NXIsIQFaceButton(UIView *view) {
     return NO;
 }
 
+static BOOL NXIsIQFaceBarButtonItem(UIBarButtonItem *item) {
+    if (![item isKindOfClass:UIBarButtonItem.class]) return NO;
+    SEL action = item.action;
+    return action != NULL && [NSStringFromSelector(action) isEqualToString:@"iqf_tapped"];
+}
+
 static void NXApplyLauncherVisibility(UIView *view, BOOL hide) {
     if (!view) return;
     if (NXIsIQFaceButton(view)) {
-        view.hidden = hide;
-        view.alpha = hide ? 0.0 : 1.0;
-        view.userInteractionEnabled = !hide;
+        NXLauncherButtonSeen = YES;
+        NSDictionary *state = objc_getAssociatedObject(view, NXLauncherViewStateKey);
+        if (hide) {
+            if (!state) {
+                state = @{@"hidden": @(view.hidden), @"alpha": @(view.alpha),
+                          @"interaction": @(view.userInteractionEnabled)};
+                objc_setAssociatedObject(view, NXLauncherViewStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            view.hidden = YES;
+            view.alpha = 0.0;
+            view.userInteractionEnabled = NO;
+        } else if (state) {
+            view.hidden = [state[@"hidden"] boolValue];
+            view.alpha = [state[@"alpha"] doubleValue];
+            view.userInteractionEnabled = [state[@"interaction"] boolValue];
+            objc_setAssociatedObject(view, NXLauncherViewStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     }
     for (UIView *child in view.subviews.copy) NXApplyLauncherVisibility(child, hide);
 }
 
+static void NXApplyNavigationItemVisibility(UINavigationItem *item, BOOL hide) {
+    if (!item) return;
+    NSArray<UIBarButtonItem *> *stored = objc_getAssociatedObject(item, NXLauncherBarItemsKey);
+    if (!hide) {
+        if (stored) {
+            item.leftBarButtonItems = stored;
+            objc_setAssociatedObject(item, NXLauncherBarItemsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        return;
+    }
+
+    NSArray<UIBarButtonItem *> *items = item.leftBarButtonItems ?: @[];
+    NSMutableArray<UIBarButtonItem *> *filtered = [NSMutableArray arrayWithCapacity:items.count];
+    BOOL found = NO;
+    for (UIBarButtonItem *candidate in items) {
+        if (NXIsIQFaceBarButtonItem(candidate)) {
+            found = YES;
+            NXLauncherBarItemSeen = YES;
+        } else {
+            [filtered addObject:candidate];
+        }
+    }
+    if (!found && NXIsIQFaceBarButtonItem(item.leftBarButtonItem)) {
+        found = YES;
+        NXLauncherBarItemSeen = YES;
+        items = @[item.leftBarButtonItem];
+        [filtered removeAllObjects];
+    }
+    if (found) {
+        if (!stored) objc_setAssociatedObject(item, NXLauncherBarItemsKey, [items copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        item.leftBarButtonItems = [filtered copy];
+    }
+}
+
+static void NXApplyControllerLauncherVisibility(UIViewController *controller, BOOL hide) {
+    if (!controller) return;
+    NXApplyNavigationItemVisibility(controller.navigationItem, hide);
+    for (UIViewController *child in controller.childViewControllers.copy)
+        NXApplyControllerLauncherVisibility(child, hide);
+    if (controller.presentedViewController)
+        NXApplyControllerLauncherVisibility(controller.presentedViewController, hide);
+}
+
 static void NXRefreshActivationMode(void) {
-    BOOL available = Nexus2LogoActivationAvailable();
-    if (NXLogoModeSelected() && !available && NXWordmarkAttempts >= 120) {
+    BOOL hardUnavailable = NXWordmarkAttempts >= 120 &&
+        (!NXWordmarkClassFound || !NXWordmarkSelectorFound ||
+         !NXWordmarkHookInstalled || !NXSettingsSymbolAvailable());
+    if (NXLogoModeSelected() && hardUnavailable) {
         [NSUserDefaults.standardUserDefaults setObject:@"iqface" forKey:NXKeyActivation];
         NXEvent(@"Logo activation unavailable; fell back to iQFace icon");
     }
-    BOOL hide = NXLogoModeSelected() && available;
-    for (UIWindow *window in UIApplication.sharedApplication.windows) NXApplyLauncherVisibility(window, hide);
+    BOOL hide = NXLogoModeSelected() && Nexus2LogoActivationAvailable();
+    NXLauncherCurrentlyHidden = hide;
+    for (UIWindow *window in UIApplication.sharedApplication.windows) {
+        NXApplyLauncherVisibility(window, hide);
+        NXApplyControllerLauncherVisibility(window.rootViewController, hide);
+    }
 }
 
 static void NXTryInstallWordmarkHook(void) {
@@ -940,7 +1052,7 @@ static NSArray *NXOwnedRows(void) {
     id separators = NXCreateSeparatorSetting(); if (separators) [rows addObject:separators];
     id cache = NexusCacheCreateManualSetting(); if (cache) [rows addObject:cache];
     id autoCache = NexusCacheCreateAutomaticSetting(); if (autoCache) [rows addObject:autoCache];
-    id version = NXStaticSetting(@"Nexus 2.0 Beta 1", nil, @"point.3.connected.trianglepath.dotted"); if (version) [rows addObject:version];
+    id version = NXStaticSetting(@"Nexus 2.0 Beta 1 R2", nil, @"point.3.connected.trianglepath.dotted"); if (version) [rows addObject:version];
     return rows.copy;
 }
 
@@ -1013,7 +1125,7 @@ static void Nexus2Initialize(void) {
         if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.facebook.Facebook"] ||
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 1 loaded");
+        NXEvent(@"Nexus 2.0 Beta 1 R2 loaded");
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryInstallSettingsHooks();
             NXTryInstallWordmarkHook();
