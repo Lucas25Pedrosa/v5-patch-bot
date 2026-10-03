@@ -4,7 +4,7 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-static NSString *const kLogName = @"XTranslateAuthProbe.log";
+static NSString *const kLogName = @"XTranslateGrokProbe.log";
 static const NSTimeInterval kWindow = 45.0;
 static const NSUInteger kMaxBytes = 3 * 1024 * 1024;
 
