@@ -5,7 +5,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 
-__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 2 R2";
+__attribute__((used, visibility("default"))) NSString * const NexusVersion = @"2.0 Beta 2 R3";
 
 static NSString * const NXKeyThreads = @"NexusHideThreadsPromotions";
 static NSString * const NXKeyPages = @"NexusHideSuggestedPages";
@@ -35,8 +35,6 @@ static void *NXFindSymbol(const char *name) {
     strlcpy(underscored + 1, name, sizeof(underscored) - 1);
     return dlsym(RTLD_DEFAULT, underscored);
 }
-
-typedef void (*NXIQFVoidFunction)(void);
 
 static BOOL NXIQFOLEDNeutralized = NO;
 static NSInteger NXIQFOLEDNeutralizeAttempts = 0;
@@ -89,27 +87,23 @@ static void NXSetIQFOLEDPreferenceEnabled(BOOL enabled) {
 }
 
 static BOOL NXIQFOLEDSymbolsReady(void) {
-    return NXFindSymbol("IQFKeyOLEDDarkMode") != NULL &&
-           NXFindSymbol("IQFRefreshOLED") != NULL &&
-           NXFindSymbol("IQFApplyForcedAppearance") != NULL;
+    return NXFindSymbol("IQFKeyOLEDDarkMode") != NULL;
 }
 
 static void NXNeutralizeIQFOLEDForcedAppearance(void) {
     BOOL wasEnabled = NXIQFOLEDPreferenceEnabled();
     if (wasEnabled) NXSetIQFOLEDPreferenceEnabled(NO);
 
-    NXIQFVoidFunction refresh = (NXIQFVoidFunction)NXFindSymbol("IQFRefreshOLED");
-    NXIQFVoidFunction apply = (NXIQFVoidFunction)NXFindSymbol("IQFApplyForcedAppearance");
-
-    if (!NXIQFOLEDNeutralized || wasEnabled) {
-        if (refresh) refresh();
-        if (apply) apply();
-        NXIQFOLEDNeutralized = refresh != NULL && apply != NULL && !NXIQFOLEDPreferenceEnabled();
-        if (NXIQFOLEDNeutralized) {
-            NXEvent(wasEnabled ? @"iQFace OLED disabled; Facebook appearance restored" :
-                                 @"iQFace OLED coordination active");
-        }
+    BOOL nowNeutralized = !NXIQFOLEDPreferenceEnabled();
+    if (nowNeutralized && (!NXIQFOLEDNeutralized || wasEnabled)) {
+        NXEvent(@"iQFace OLED preference neutralized without changing Facebook appearance");
     }
+    NXIQFOLEDNeutralized = nowNeutralized;
+}
+
+static void NXPreflightDisableIQFOLEDPreference(void) {
+    [NSUserDefaults.standardUserDefaults setBool:NO forKey:@"IQFOLEDDarkMode"];
+    [NSUserDefaults.standardUserDefaults synchronize];
 }
 
 static void NXTryNeutralizeIQFOLED(void) {
@@ -595,7 +589,7 @@ NSString *Nexus2DiagnosticsText(void) {
     BOOL languageBridge = NXFindSymbol("IQFResolvedLanguage") != NULL;
     BOOL iconPicker = NSClassFromString(@"IQFIconsPickerController") != Nil;
     NSMutableString *report = [NSMutableString string];
-    [report appendFormat:@"Nexus 2.0 Beta 2 R2\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
+    [report appendFormat:@"Nexus 2.0 Beta 2 R3\nFacebook %@ (%@)\niOS %@\niQFace language: %@\nIQFResolvedLanguage: %@\n\n",
      fbVersion, fbBuild, UIDevice.currentDevice.systemVersion ?: @"?", NXLanguageCode(),
      NXStatus(languageBridge)];
     [report appendFormat:@"[Activation / Facebook Logo]\nFBNavigationBar: %@\nlayoutSubviews: %@\nhook installed: %@\nwordmark target found: %@\nrecognizer attached: %@\nIQFPresentSettings: %@\niQFace button seen: %@\niQFace bar item seen: %@\nlauncher hidden: %@\nmode: %@\n\n",
@@ -617,7 +611,7 @@ NSString *Nexus2DiagnosticsText(void) {
      (long)Nexus2BackgroundCurrentMode(),
      [NSUserDefaults.standardUserDefaults stringForKey:NXKeyBackgroundColor] ?: @"#000000FF",
      NXStatus(Nexus2AvatarHooksInstalled())];
-    [report appendFormat:@"[iQFace OLED coordination]\npreference disabled: %@\nrefresh symbol: %@\nforced appearance symbol: %@\ncoordination active: %@\n\n",
+    [report appendFormat:@"[iQFace OLED coordination]\npreference disabled: %@\nrefresh symbol present: %@\nforced appearance symbol present: %@\nappearance routines invoked by Nexus: NO\ncoordination active: %@\n\n",
      NXStatus(!NXIQFOLEDPreferenceEnabled()), NXStatus(NXFindSymbol("IQFRefreshOLED") != NULL),
      NXStatus(NXFindSymbol("IQFApplyForcedAppearance") != NULL), NXStatus(NXIQFOLEDNeutralized)];
     [report appendString:@"[Events]\n"];
@@ -1251,7 +1245,7 @@ static BOOL NXAllowedPreferenceKey(NSString *key) {
     }];
     return @{@"format": @"nexus-settings",
              @"schemaVersion": @1,
-             @"nexusVersion": @"2.0 Beta 2 R2",
+             @"nexusVersion": @"2.0 Beta 2 R3",
              @"facebookVersion": NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"?",
              @"createdAt": @([[NSDate date] timeIntervalSince1970]),
              @"settings": settings};
@@ -1653,7 +1647,7 @@ static id NXCreateDeveloperCredit(void) {
 }
 
 static id NXCreateVersionSetting(void) {
-    return NXStaticSetting(@"Nexus", @"2.0 Beta 2 R2", @"point.3.connected.trianglepath.dotted");
+    return NXStaticSetting(@"Nexus", @"2.0 Beta 2 R3", @"point.3.connected.trianglepath.dotted");
 }
 
 static BOOL NXHeaderContainsAny(NSString *header, NSArray<NSString *> *tokens) {
@@ -1935,7 +1929,8 @@ static void Nexus2Initialize(void) {
             [NSBundle.mainBundle.bundlePath hasSuffix:@".appex"]) return;
 
         NXEvents=[NSMutableArray array];
-        NXEvent(@"Nexus 2.0 Beta 2 R2 loaded");
+        NXEvent(@"Nexus 2.0 Beta 2 R3 loaded");
+        NXPreflightDisableIQFOLEDPreference();
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NXTryNeutralizeIQFOLED();
