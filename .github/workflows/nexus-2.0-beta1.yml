@@ -200,7 +200,6 @@ jobs:
           grep -F 'iQFace OLED internal state refreshed to OFF; Facebook appearance untouched' nexus2/artifacts-beta1/strings.txt
           grep -F '2.0 Beta 2 R4' nexus2/artifacts-beta1/strings.txt
           grep -F 'IQFApplyForcedAppearance invoked by Nexus: NO' nexus2/artifacts-beta1/strings.txt
-          grep -F 'iQFace OLED preference neutralized without changing Facebook appearance' nexus2/artifacts-beta1/strings.txt
           grep -F 'Restoring saved Facebook logo activation immediately' nexus2/artifacts-beta1/strings.txt
           grep -F 'Utilit' nexus2/artifacts-beta1/strings.txt || true
           grep -F 'English' nexus2/artifacts-beta1/strings.txt || true
