@@ -140,7 +140,8 @@ static NSString *Operation(NSURLRequest *r) {
     NSString *path=r.URL.path ?: @"";
     NSArray *parts=[path componentsSeparatedByString:@"/"];
     if ([path containsString:@"/graphql/"] && parts.count) return parts.lastObject ?: @"-";
-    return parts.lastObject.length ? parts.lastObject : path;
+    NSString *last = [parts.lastObject isKindOfClass:NSString.class] ? (NSString *)parts.lastObject : nil;
+    return last.length ? last : path;
 }
 
 static void LogRequest(NSString *phase, NSUInteger seq, NSURLRequest *r) {
