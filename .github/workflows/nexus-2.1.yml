@@ -1,4 +1,4 @@
-name: Build Nexus 2.1 Run52 OLED
+name: Build Nexus 2.1.1 IPA Vault
 
 "on":
   workflow_dispatch:
@@ -31,11 +31,11 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Prepare Nexus 2.1 with frozen run52 OLED
+      - name: Prepare Nexus 2.1.1 from frozen Run52 OLED
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
-          WORK="$RUNNER_TEMP/nexus-2.1"
+          WORK="$RUNNER_TEMP/nexus-2.1.1"
           rm -rf "$WORK"
           mkdir -p "$WORK"
 
@@ -68,19 +68,57 @@ jobs:
           rm "$WORK/Tweak.m"
 
           cp nexus2/Nexus2.m "$WORK/Nexus2.m"
+          cp nexus21/NexusIPAVaultCredit.m "$WORK/NexusIPAVaultCredit.m"
           python3 nexus2/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
           cp nexus21/run52-oled/NexusAvatarFix.m "$WORK/NexusAvatarFix.m"
+
+          python3 - "$WORK/Nexus2.m" "$WORK/Makefile" <<'PY'
+          from pathlib import Path
+          import sys
+
+          nexus = Path(sys.argv[1])
+          text = nexus.read_text(encoding="utf-8")
+
+          replacements = [
+              ('NexusVersion = @"2.1"', 'NexusVersion = @"2.1.1"'),
+              ('@"nexusVersion": @"2.1"', '@"nexusVersion": @"2.1.1"'),
+              ('setValue:@"v2.1" forKey:@"valueText"', 'setValue:@"v2.1.1" forKey:@"valueText"'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"missing version marker: {old}")
+              text = text.replace(old, new, 1)
+
+          if text.count('Nexus 2.1') < 2:
+              raise SystemExit('expected Nexus 2.1 display/log markers')
+          text = text.replace('Nexus 2.1', 'Nexus 2.1.1')
+          nexus.write_text(text, encoding="utf-8")
+
+          makefile = Path(sys.argv[2])
+          make = makefile.read_text(encoding="utf-8")
+          marker = 'Nexus2.m NexusAvatarFix.m'
+          if marker not in make:
+              raise SystemExit('Nexus Makefile source marker not found')
+          make = make.replace(marker, marker + ' NexusIPAVaultCredit.m', 1)
+          makefile.write_text(make, encoding="utf-8")
+          PY
 
           ! grep -F 'Translation.m' "$WORK/Makefile"
           ! grep -F 'EnhancerTweak.m' "$WORK/Makefile"
           ! grep -F 'WordmarkActivation.m' "$WORK/Makefile"
+          grep -F 'NexusIPAVaultCredit.m' "$WORK/Makefile"
 
-          grep -F 'NexusVersion = @"2.1"' "$WORK/Nexus2.m"
+          grep -F 'NexusVersion = @"2.1.1"' "$WORK/Nexus2.m"
           grep -F 'NXKeyOLED = @"iQFaceOLEDEnabled"' "$WORK/Nexus2.m"
           grep -F 'iQFaceOLEDFeedSeparatorsEnabled' "$WORK/Nexus2.m"
           ! grep -F 'NexusCustomBackgroundColor' "$WORK/Nexus2.m"
           ! grep -F 'UIColorPickerViewController' "$WORK/Nexus2.m"
           ! grep -F 'Custom color' "$WORK/Nexus2.m"
+
+          grep -F 'IPA Vault' "$WORK/NexusIPAVaultCredit.m"
+          grep -F 'IPA Source • Nexus Distributor' "$WORK/NexusIPAVaultCredit.m"
+          grep -F 'https://t.me/ipavault' "$WORK/NexusIPAVaultCredit.m"
+          grep -F 'shippingbox.circle' "$WORK/NexusIPAVaultCredit.m"
 
           grep -F 'IQFOLEDPreferenceKey = @"iQFaceOLEDEnabled"' "$WORK/OLEDTweak.m"
           grep -F 'IQFOLEDSeparatorsPreferenceKey = @"iQFaceOLEDFeedSeparatorsEnabled"' "$WORK/OLEDTweak.m"
@@ -92,11 +130,11 @@ jobs:
           ! grep -F 'Nexus2Background' "$WORK/OLEDTweak.m"
           ! grep -F 'NexusCustomBackgroundColor' "$WORK/OLEDTweak.m"
 
-      - name: Build Nexus 2.1
+      - name: Build Nexus 2.1.1
         run: |
           set -euo pipefail
           ROOT="$GITHUB_WORKSPACE"
-          WORK="$RUNNER_TEMP/nexus-2.1"
+          WORK="$RUNNER_TEMP/nexus-2.1.1"
           cd "$WORK"
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
 
@@ -117,7 +155,8 @@ jobs:
           grep -F 'Mach-O 64-bit' nexus21/artifacts/file.txt
           grep -F 'arm64' nexus21/artifacts/file.txt
           grep -F '@rpath/Nexus.dylib' nexus21/artifacts/install-name.txt
-          grep -F 'Nexus 2.1 loaded' nexus21/artifacts/strings.txt
+          grep -F 'Nexus 2.1.1 loaded' nexus21/artifacts/strings.txt
+          grep -F 'v2.1.1' nexus21/artifacts/strings.txt
           grep -F 'iQFaceOLEDEnabled' nexus21/artifacts/strings.txt
           grep -F 'iQFaceOLEDFeedSeparatorsEnabled' nexus21/artifacts/strings.txt
           grep -F 'Modo OLED' nexus21/artifacts/strings.txt
@@ -127,15 +166,28 @@ jobs:
           grep -F 'NexusHideSuggestedPages' nexus21/artifacts/strings.txt
           grep -F 'NexusHideStoryPeopleSuggestions' nexus21/artifacts/strings.txt
           grep -F 'NexusActivationMode' nexus21/artifacts/strings.txt
+          grep -F 'IPA Vault' nexus21/artifacts/strings.txt
+          grep -F 'https://t.me/ipavault' nexus21/artifacts/strings.txt
+          grep -F 'shippingbox.circle' nexus21/artifacts/strings.txt
+
+          python3 - <<'PY'
+          from pathlib import Path
+          data = Path('nexus21/artifacts/Nexus.dylib').read_bytes()
+          text = 'IPA Source • Nexus Distributor'
+          variants = [text.encode('utf-8'), text.encode('utf-16le'), text.encode('utf-16be')]
+          if not any(v in data for v in variants):
+              raise SystemExit('Missing IPA Vault subtitle in Nexus.dylib')
+          print('FOUND IPA Vault subtitle')
+          PY
 
           ! grep -F 'NexusCustomBackgroundColor' nexus21/artifacts/strings.txt
           ! grep -F 'Custom color' nexus21/artifacts/strings.txt
           ! grep -F 'Nexus2BackgroundModeKey' nexus21/artifacts/strings.txt
 
-      - name: Upload Nexus 2.1
+      - name: Upload Nexus 2.1.1
         uses: actions/upload-artifact@v4
         with:
-          name: Nexus-2.1-Run52-OLED-arm64
+          name: Nexus-2.1.1-IPAVault-arm64
           path: nexus21/artifacts/
           if-no-files-found: error
           retention-days: 90
