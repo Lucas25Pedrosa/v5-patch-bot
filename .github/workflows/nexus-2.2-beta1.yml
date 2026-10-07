@@ -1,0 +1,83 @@
+name: Build Nexus 2.2 Beta 1 Adaptive OLED
+
+"on":
+  workflow_dispatch:
+  push:
+    branches: ["nexus-2.2-beta1-facebookplus-oled-20261007"]
+    paths:
+      - "nexus22/**"
+      - "nexus2/**"
+      - "nexus/prepare_cache.py"
+      - "nexus/prepare_icons.py"
+      - "iqface-cache/**"
+      - "iqface-icons/**"
+      - "iqface-4in1/Makefile"
+      - ".github/workflows/nexus-2.2-beta1.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Prepare Nexus 2.2 Beta 1
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          WORK="$RUNNER_TEMP/nexus-2.2-beta1"
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          python3 nexus/prepare_cache.py iqface-cache/Tweak.m "$WORK/CacheTweak.m"
+          python3 nexus2/patch_cache_v2.py "$WORK/CacheTweak.m"
+          python3 nexus/prepare_icons.py iqface-icons/Tweak.m "$WORK/IconsTweak.m"
+          cp iqface-icons/IconPicker.m "$WORK/IconsPicker.m"
+          python3 nexus2/patch_icon_picker_v2.py "$WORK/IconsPicker.m"
+          cp nexus2/Nexus2.m "$WORK/Nexus2.m"
+          python3 nexus22/patch_version.py "$WORK/Nexus2.m"
+          cp nexus22/FacebookPlusOLED.m "$WORK/FacebookPlusOLED.m"
+          cp nexus21/run52-oled/NexusAvatarFix.m "$WORK/NexusAvatarFix.m"
+          python3 nexus22/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
+          grep -F 'NexusVersion = @"2.2 Beta 1"' "$WORK/Nexus2.m"
+          grep -F 'adaptive dark-neutral OLED (2.2 Beta 1)' "$WORK/Nexus2.m"
+          grep -F 'Nexus22OLEDEngine' "$WORK/FacebookPlusOLED.m"
+          grep -F 'NX22ShouldOLED' "$WORK/FacebookPlusOLED.m"
+          grep -F 'resolvedColorWithTraitCollection' "$WORK/FacebookPlusOLED.m"
+          ! grep -F 'OLEDTweak.m' "$WORK/Makefile"
+      - name: Build
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          WORK="$RUNNER_TEMP/nexus-2.2-beta1"
+          cd "$WORK"
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          OUT="$ROOT/nexus22/artifacts"
+          mkdir -p "$OUT" && rm -f "$OUT"/*
+          DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"
+          test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" "$OUT/Nexus-2.2-Beta1.dylib"
+          cd "$ROOT"
+          shasum -a 256 nexus22/artifacts/Nexus-2.2-Beta1.dylib > nexus22/artifacts/SHA256SUMS.txt
+          file nexus22/artifacts/Nexus-2.2-Beta1.dylib > nexus22/artifacts/file.txt
+          strings -a nexus22/artifacts/Nexus-2.2-Beta1.dylib > nexus22/artifacts/strings.txt || true
+          otool -D nexus22/artifacts/Nexus-2.2-Beta1.dylib > nexus22/artifacts/install-name.txt
+          grep -F 'Mach-O 64-bit' nexus22/artifacts/file.txt
+          grep -F 'arm64' nexus22/artifacts/file.txt
+          grep -F '@rpath/Nexus.dylib' nexus22/artifacts/install-name.txt
+          grep -F '2.2 Beta 1' nexus22/artifacts/strings.txt
+          grep -F 'adaptive-dark-neutral-alpha-preserving' nexus22/artifacts/strings.txt
+          grep -F 'iQFaceOLEDEnabled' nexus22/artifacts/strings.txt
+          grep -F 'NexusHideThreadsPromotions' nexus22/artifacts/strings.txt
+          grep -F 'NexusActivationMode' nexus22/artifacts/strings.txt
+      - name: Upload Nexus 2.2 Beta 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-2.2-Beta1-Adaptive-OLED-arm64
+          path: nexus22/artifacts/
+          if-no-files-found: error
+          retention-days: 90
