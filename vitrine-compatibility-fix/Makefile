@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = VitrineCompatibilityFix
 
-VitrineCompatibilityFix_FILES = Tweak.m
+VitrineCompatibilityFix_FILES = Tweak101.m
 VitrineCompatibilityFix_FRAMEWORKS = Foundation UIKit
 VitrineCompatibilityFix_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations
 VitrineCompatibilityFix_LDFLAGS = -Wl,-install_name,@rpath/VitrineCompatibilityFix.dylib
