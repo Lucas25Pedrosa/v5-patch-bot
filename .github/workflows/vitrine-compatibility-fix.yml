@@ -1,0 +1,47 @@
+name: Build VitrineCompatibilityFix 1.0
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "vitrine-compatibility-fix/**"
+      - ".github/workflows/vitrine-compatibility-fix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build VitrineCompatibilityFix
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: |
+          make -C vitrine-compatibility-fix clean
+          make -C vitrine-compatibility-fix
+          mkdir -p vitrine-compatibility-fix/artifacts
+          DYLIB="$(find vitrine-compatibility-fix/.theos/obj -type f -name 'VitrineCompatibilityFix.dylib' | head -n 1)"
+          test -n "$DYLIB"
+          cp "$DYLIB" vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib
+          file vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib
+          otool -L vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib
+          shasum -a 256 vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib | tee vitrine-compatibility-fix/artifacts/SHA256.txt
+
+      - name: Upload VitrineCompatibilityFix
+        uses: actions/upload-artifact@v4
+        with:
+          name: VitrineCompatibilityFix-1.0-arm64
+          path: vitrine-compatibility-fix/artifacts/
+          if-no-files-found: error
