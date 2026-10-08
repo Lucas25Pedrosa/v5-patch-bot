@@ -1,4 +1,4 @@
-name: Build VitrineCompatibilityFix 1.0
+name: Build VitrineCompatibilityFix 1.0.1
 
 "on":
   workflow_dispatch:
@@ -34,14 +34,14 @@ jobs:
           mkdir -p vitrine-compatibility-fix/artifacts
           DYLIB="$(find vitrine-compatibility-fix/.theos/obj -type f -name 'VitrineCompatibilityFix.dylib' | head -n 1)"
           test -n "$DYLIB"
-          cp "$DYLIB" vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib
-          file vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib
-          otool -L vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib
-          shasum -a 256 vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0-arm64.dylib | tee vitrine-compatibility-fix/artifacts/SHA256.txt
+          cp "$DYLIB" vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0.1-arm64.dylib
+          file vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0.1-arm64.dylib
+          otool -L vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0.1-arm64.dylib
+          shasum -a 256 vitrine-compatibility-fix/artifacts/VitrineCompatibilityFix-1.0.1-arm64.dylib | tee vitrine-compatibility-fix/artifacts/SHA256.txt
 
       - name: Upload VitrineCompatibilityFix
         uses: actions/upload-artifact@v4
         with:
-          name: VitrineCompatibilityFix-1.0-arm64
+          name: VitrineCompatibilityFix-1.0.1-arm64
           path: vitrine-compatibility-fix/artifacts/
           if-no-files-found: error
