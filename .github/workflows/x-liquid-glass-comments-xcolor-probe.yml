@@ -1,0 +1,41 @@
+name: Build XLiquidGlass Comments XColor Probe 0.4
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-comments-xcolor-probe/**'
+      - '.github/workflows/x-liquid-glass-comments-xcolor-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build probe
+        working-directory: x-liquid-glass-comments-xcolor-probe
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-comments-xcolor-probe
+          cp .theos/obj/debug/XLiquidGlassCommentsXColorProbe.dylib ../build-comments-xcolor-probe/XLiquidGlassCommentsXColorProbe-0.4-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsXColorProbe.dylib ../build-comments-xcolor-probe/XLiquidGlassCommentsXColorProbe-0.4-arm64.dylib
+          file ../build-comments-xcolor-probe/XLiquidGlassCommentsXColorProbe-0.4-arm64.dylib
+          shasum -a 256 ../build-comments-xcolor-probe/XLiquidGlassCommentsXColorProbe-0.4-arm64.dylib > ../build-comments-xcolor-probe/XLiquidGlassCommentsXColorProbe-0.4-SHA256SUMS.txt
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassCommentsXColorProbe-0.4-arm64
+          path: build-comments-xcolor-probe/*
+          if-no-files-found: error
