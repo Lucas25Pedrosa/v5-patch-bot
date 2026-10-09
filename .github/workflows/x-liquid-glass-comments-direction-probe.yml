@@ -1,0 +1,37 @@
+name: Build XLiquidGlass Comments Direction Probe 0.5.1
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-comments-direction-probe/**'
+      - '.github/workflows/x-liquid-glass-comments-direction-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Build probe
+        working-directory: x-liquid-glass-comments-direction-probe
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-comments-direction-probe
+          cp .theos/obj/debug/XLiquidGlassCommentsDirectionProbe.dylib ../build-comments-direction-probe/XLiquidGlassCommentsDirectionProbe-0.5.1-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsDirectionProbe.dylib ../build-comments-direction-probe/XLiquidGlassCommentsDirectionProbe-0.5.1-arm64.dylib
+          file ../build-comments-direction-probe/XLiquidGlassCommentsDirectionProbe-0.5.1-arm64.dylib
+          shasum -a 256 ../build-comments-direction-probe/XLiquidGlassCommentsDirectionProbe-0.5.1-arm64.dylib > ../build-comments-direction-probe/XLiquidGlassCommentsDirectionProbe-0.5.1-SHA256SUMS.txt
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassCommentsDirectionProbe-0.5.1-arm64
+          path: build-comments-direction-probe/*
+          if-no-files-found: error
