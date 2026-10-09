@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Scroll Fix
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-scroll-fix/**"
+      - ".github/workflows/x-liquid-glass-scroll-fix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-scroll-fix
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Scroll Fix dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassScrollFix.dylib ! -path '*/XLiquidGlassScrollFix.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassScrollFix-0.1-arm64.dylib
+          file artifacts/XLiquidGlassScrollFix-0.1-arm64.dylib
+          shasum -a 256 artifacts/XLiquidGlassScrollFix-0.1-arm64.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload Scroll Fix dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassScrollFix-0.1-arm64
+          path: x-liquid-glass-scroll-fix/artifacts/
+          if-no-files-found: error
