@@ -1,5 +1,6 @@
 name: Build XLiquidGlass 2.0.2 Beta 3 Comments Native Bypass
 
+# Beta 3 builder: preserves X native ScrollEdgeTreatment in conversations.
 on:
   push:
     paths:
