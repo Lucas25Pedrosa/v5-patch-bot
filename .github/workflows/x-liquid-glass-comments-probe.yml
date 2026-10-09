@@ -28,13 +28,13 @@ jobs:
           make clean
           make FINALPACKAGE=1
           mkdir -p ../build-comments-probe
-          cp .theos/obj/debug/XLiquidGlassCommentsProbe.dylib ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-arm64.dylib || \
-          cp .theos/obj/XLiquidGlassCommentsProbe.dylib ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-arm64.dylib
-          shasum -a 256 ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-arm64.dylib > ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-SHA256SUMS.txt
+          cp .theos/obj/debug/XLiquidGlassCommentsProbe.dylib ../build-comments-probe/XLiquidGlassCommentsProbe-0.2.1-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsProbe.dylib ../build-comments-probe/XLiquidGlassCommentsProbe-0.2.1-arm64.dylib
+          shasum -a 256 ../build-comments-probe/XLiquidGlassCommentsProbe-0.2.1-arm64.dylib > ../build-comments-probe/XLiquidGlassCommentsProbe-0.2.1-SHA256SUMS.txt
 
       - name: Upload Comments Probe dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlassCommentsProbe-0.2-arm64
+          name: XLiquidGlassCommentsProbe-0.2.1-arm64
           path: build-comments-probe/*
           if-no-files-found: error
