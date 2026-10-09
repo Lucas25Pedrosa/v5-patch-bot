@@ -9,4 +9,5 @@ XLiquidGlassCommentsTransitionProbe_FILES = XLiquidGlassCommentsTransitionProbe.
 XLiquidGlassCommentsTransitionProbe_FRAMEWORKS = Foundation UIKit QuartzCore
 XLiquidGlassCommentsTransitionProbe_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 
+# Transition-focused diagnostic build 0.6
 include $(THEOS_MAKE_PATH)/tweak.mk
