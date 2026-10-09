@@ -11,7 +11,10 @@ static BOOL gHookInstalled = NO;
 static _Atomic(uint64_t) gRunLoopGeneration = 1;
 static _Atomic(uint64_t) gEligibleCalls = 0;
 static _Atomic(uint64_t) gSuppressedCalls = 0;
+static _Atomic(uint64_t) gThrottleSuppressed = 0;
+static _Atomic(uint64_t) gDuplicateSuppressed = 0;
 static CFRunLoopObserverRef gRunLoopObserver = NULL;
+static const CFTimeInterval kXCFActiveScrollInterval = (1.0 / 60.0);
 
 @interface XCFLayoutState : NSObject
 @property (nonatomic) BOOL hasSignature;
@@ -29,6 +32,7 @@ static CFRunLoopObserverRef gRunLoopObserver = NULL;
 @property (nonatomic) UIUserInterfaceLevel level;
 @property (nonatomic, weak) UIWindow *window;
 @property (nonatomic) NSUInteger subviewCount;
+@property (nonatomic) CFTimeInterval nextForwardTime;
 @end
 
 @implementation XCFLayoutState
@@ -81,12 +85,11 @@ static BOOL XCFInsetsEqual(UIEdgeInsets a, UIEdgeInsets b) {
     return a.top == b.top && a.left == b.left && a.bottom == b.bottom && a.right == b.right;
 }
 
-static BOOL XCFSignatureMatches(XCFLayoutState *state, UIView *target, UIScrollView *scroll, uint64_t generation) {
-    if (!state.hasSignature || state.generation != generation) return NO;
+static BOOL XCFStructuralSignatureMatches(XCFLayoutState *state, UIView *target, UIScrollView *scroll) {
+    if (!state.hasSignature) return NO;
     if (state.window != target.window) return NO;
     if (!CGRectEqualToRect(state.frame, target.frame)) return NO;
     if (!CGRectEqualToRect(state.bounds, target.bounds)) return NO;
-    if (!CGPointEqualToPoint(state.contentOffset, scroll.contentOffset)) return NO;
     if (!CGSizeEqualToSize(state.contentSize, scroll.contentSize)) return NO;
     if (!XCFInsetsEqual(state.adjustedInset, scroll.adjustedContentInset)) return NO;
     if (!CGAffineTransformEqualToTransform(state.transform, target.transform)) return NO;
@@ -100,6 +103,12 @@ static BOOL XCFSignatureMatches(XCFLayoutState *state, UIView *target, UIScrollV
         if (state.level != traits.userInterfaceLevel) return NO;
     }
     return YES;
+}
+
+static BOOL XCFExactDuplicateInGeneration(XCFLayoutState *state, UIScrollView *scroll, uint64_t generation) {
+    return state.hasSignature &&
+           state.generation == generation &&
+           CGPointEqualToPoint(state.contentOffset, scroll.contentOffset);
 }
 
 static void XCFStoreSignature(XCFLayoutState *state, UIView *target, UIScrollView *scroll, uint64_t generation) {
@@ -124,6 +133,16 @@ static void XCFStoreSignature(XCFLayoutState *state, UIView *target, UIScrollVie
     }
 }
 
+static void XCFAdvance60HzSchedule(XCFLayoutState *state, CFTimeInterval now) {
+    if (state.nextForwardTime <= 0.0 || now - state.nextForwardTime > 0.250) {
+        state.nextForwardTime = now + kXCFActiveScrollInterval;
+        return;
+    }
+    do {
+        state.nextForwardTime += kXCFActiveScrollInterval;
+    } while (state.nextForwardTime <= now);
+}
+
 static void XCFLayoutSubviews(id self, SEL cmd) {
     if (![self isKindOfClass:UIView.class] || ![NSThread isMainThread]) {
         if (gNextLayoutSubviews) ((void(*)(id, SEL))gNextLayoutSubviews)(self, cmd);
@@ -145,16 +164,42 @@ static void XCFLayoutSubviews(id self, SEL cmd) {
         objc_setAssociatedObject(self, kXCFLayoutStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // Suppress only an exact duplicate in the same main-runloop generation.
-    // Any real scroll, geometry, trait, window or subtree change still flows
-    // through the already-installed XLiquidGlass implementation.
-    if (XCFSignatureMatches(state, target, scroll, generation)) {
-        atomic_fetch_add(&gSuppressedCalls, 1);
-        return;
+    BOOL structuralSame = XCFStructuralSignatureMatches(state, target, scroll);
+    BOOL activeScroll = scroll.isTracking || scroll.isDragging || scroll.isDecelerating;
+    CFTimeInterval now = CACurrentMediaTime();
+
+    // Beta 2 strategy:
+    // - Outside active scrolling, retain the very conservative same-runloop dedupe.
+    // - During active comment scrolling, only when geometry/traits/window/subtree
+    //   are unchanged, cap this decorative ScrollEdgeTreatment path to an
+    //   average of 60 forwards/s. The TFNTableView itself remains untouched and
+    //   can continue scrolling at ProMotion rates.
+    // - Any structural change bypasses the throttle immediately.
+    if (structuralSame) {
+        if (activeScroll) {
+            if (state.nextForwardTime > 0.0 && now < state.nextForwardTime) {
+                atomic_fetch_add(&gSuppressedCalls, 1);
+                atomic_fetch_add(&gThrottleSuppressed, 1);
+                return;
+            }
+        } else if (XCFExactDuplicateInGeneration(state, scroll, generation)) {
+            atomic_fetch_add(&gSuppressedCalls, 1);
+            atomic_fetch_add(&gDuplicateSuppressed, 1);
+            return;
+        }
+    } else {
+        // Structural changes must never inherit a stale throttle deadline.
+        state.nextForwardTime = 0.0;
     }
 
     if (gNextLayoutSubviews) ((void(*)(id, SEL))gNextLayoutSubviews)(self, cmd);
     XCFStoreSignature(state, target, scroll, generation);
+
+    if (activeScroll) {
+        XCFAdvance60HzSchedule(state, now);
+    } else {
+        state.nextForwardTime = 0.0;
+    }
 }
 
 static void XCFRunLoopCallback(CFRunLoopObserverRef observer, CFRunLoopActivity activity, void *info) {
@@ -189,15 +234,13 @@ static void XCFInstallHook(void) {
     }
 
     NSString *owner = XCFImageForIMP(current);
-    // Install only on top of XLiquidGlass; never replace native X/UIKit or
-    // another unrelated tweak owner.
     if (![owner containsString:@"XLiquidGlass"] || [owner containsString:@"CommentsScrollFix"]) return;
 
     gNextLayoutSubviews = current;
     class_replaceMethod(cls, sel, (IMP)XCFLayoutSubviews, method_getTypeEncoding(method));
     gHookInstalled = (class_getMethodImplementation(cls, sel) == (IMP)XCFLayoutSubviews);
     if (gHookInstalled) {
-        NSLog(@"[XLiquidGlassCommentsScrollFix] 0.2 installed over %@", owner);
+        NSLog(@"[XLiquidGlassCommentsScrollFix] 0.2 Beta 2 installed over %@", owner);
     }
 }
 
@@ -211,17 +254,21 @@ static void XCFScheduleInstall(NSTimeInterval delay) {
 static void XCFLogStats(void) {
     uint64_t eligible = atomic_load(&gEligibleCalls);
     uint64_t suppressed = atomic_load(&gSuppressedCalls);
+    uint64_t throttled = atomic_load(&gThrottleSuppressed);
+    uint64_t duplicates = atomic_load(&gDuplicateSuppressed);
     double pct = eligible ? (100.0 * (double)suppressed / (double)eligible) : 0.0;
-    NSLog(@"[XLiquidGlassCommentsScrollFix] eligible=%llu suppressed=%llu (%.1f%%)",
+    NSLog(@"[XLiquidGlassCommentsScrollFix] eligible=%llu suppressed=%llu (%.1f%%) throttle=%llu duplicate=%llu",
           (unsigned long long)eligible,
           (unsigned long long)suppressed,
-          pct);
+          pct,
+          (unsigned long long)throttled,
+          (unsigned long long)duplicates);
 }
 
 __attribute__((constructor))
 static void XLiquidGlassCommentsScrollFixInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassCommentsScrollFix] 0.2 loaded");
+        NSLog(@"[XLiquidGlassCommentsScrollFix] 0.2 Beta 2 loaded");
         dispatch_async(dispatch_get_main_queue(), ^{
             XCFInstallRunLoopObserver();
             XCFInstallHook();
