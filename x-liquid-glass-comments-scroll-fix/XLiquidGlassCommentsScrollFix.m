@@ -4,6 +4,7 @@
 #import <objc/runtime.h>
 #import <dlfcn.h>
 #import <stdatomic.h>
+#import <limits.h>
 
 static IMP gNextLayoutSubviews = NULL;
 static BOOL gHookInstalled = NO;
@@ -144,9 +145,9 @@ static void XCFLayoutSubviews(id self, SEL cmd) {
         objc_setAssociatedObject(self, kXCFLayoutStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // The only suppressed case is an exact duplicate in the same main-runloop
-    // generation, with identical geometry, table scroll state, traits and window.
-    // Any real scroll/geometry/trait change still flows through XLiquidGlass.
+    // Suppress only an exact duplicate in the same main-runloop generation.
+    // Any real scroll, geometry, trait, window or subtree change still flows
+    // through the already-installed XLiquidGlass implementation.
     if (XCFSignatureMatches(state, target, scroll, generation)) {
         atomic_fetch_add(&gSuppressedCalls, 1);
         return;
@@ -188,8 +189,8 @@ static void XCFInstallHook(void) {
     }
 
     NSString *owner = XCFImageForIMP(current);
-    // Install only on top of the existing XLiquidGlass implementation. This
-    // avoids replacing UIKit/X native ownership or another unrelated tweak.
+    // Install only on top of XLiquidGlass; never replace native X/UIKit or
+    // another unrelated tweak owner.
     if (![owner containsString:@"XLiquidGlass"] || [owner containsString:@"CommentsScrollFix"]) return;
 
     gNextLayoutSubviews = current;
