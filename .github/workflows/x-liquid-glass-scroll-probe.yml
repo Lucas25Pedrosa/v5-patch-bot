@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Scroll Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-scroll-probe/**"
+      - ".github/workflows/x-liquid-glass-scroll-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-scroll-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Scroll Probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassScrollProbe.dylib ! -path '*/XLiquidGlassScrollProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassScrollProbe.dylib
+          file artifacts/XLiquidGlassScrollProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassScrollProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload Scroll Probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassScrollProbe-0.1-arm64
+          path: x-liquid-glass-scroll-probe/artifacts/
+          if-no-files-found: error
