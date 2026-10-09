@@ -1,0 +1,60 @@
+name: Build XLiquidGlass Comments Transition Probe 0.6
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-comments-transition-probe/**'
+      - '.github/workflows/x-liquid-glass-comments-transition-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fix ticker declaration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('x-liquid-glass-comments-transition-probe/XLiquidGlassCommentsTransitionProbe.m')
+          s=p.read_text()
+          marker='static void Begin(void){'
+          decl='@interface XLGTicker:NSObject + (instancetype)shared; - (void)tick:(CADisplayLink*)link; @end\n\n'
+          if decl not in s.split(marker)[0]:
+              s=s.replace(marker,decl+marker,1)
+          s=s.replace(' gDisplayLink=[CADisplayLink displayLinkWithTarget:[NSBlockOperation blockOperationWithBlock:^{}] selector:@selector(main)]; [gDisplayLink invalidate];','')
+          # remove duplicate declaration before implementation
+          first=s.find(decl)
+          second=s.find(decl, first+len(decl))
+          if second!=-1:
+              s=s[:second]+s[second+len(decl):]
+          p.write_text(s)
+          PY
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build probe
+        working-directory: x-liquid-glass-comments-transition-probe
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-comments-transition-probe
+          cp .theos/obj/debug/XLiquidGlassCommentsTransitionProbe.dylib ../build-comments-transition-probe/XLiquidGlassCommentsTransitionProbe-0.6-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsTransitionProbe.dylib ../build-comments-transition-probe/XLiquidGlassCommentsTransitionProbe-0.6-arm64.dylib
+          file ../build-comments-transition-probe/XLiquidGlassCommentsTransitionProbe-0.6-arm64.dylib
+          shasum -a 256 ../build-comments-transition-probe/XLiquidGlassCommentsTransitionProbe-0.6-arm64.dylib > ../build-comments-transition-probe/XLiquidGlassCommentsTransitionProbe-0.6-SHA256SUMS.txt
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassCommentsTransitionProbe-0.6-arm64
+          path: build-comments-transition-probe/*
+          if-no-files-found: error
