@@ -14,6 +14,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fix probe source compile issues
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('x-liquid-glass-comments-xcolor-probe/XLiquidGlassCommentsXColorProbe.m')
+          s = p.read_text()
+          s = s.replace('NSString *(^inc)(NSString *) = ^NSString *(NSString *key) {',
+                        'NSNumber *(^inc)(NSString *) = ^NSNumber *(NSString *key) {')
+          old = '''    UIWindow *window = UIApplication.sharedApplication.keyWindow;\n    if (!window) {\n        for (UIWindow *w in UIApplication.sharedApplication.windows) if (w.isKeyWindow) { window = w; break; }\n    }\n'''
+          new = '''    UIWindow *window = nil;\n    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {\n        if (![scene isKindOfClass:UIWindowScene.class]) continue;\n        for (UIWindow *w in ((UIWindowScene *)scene).windows) {\n            if (w.isKeyWindow) { window = w; break; }\n        }\n        if (window) break;\n    }\n'''
+          if old not in s:
+              raise SystemExit('window anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
       - name: Install Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
