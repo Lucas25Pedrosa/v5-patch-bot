@@ -1,0 +1,40 @@
+name: Build XLiquidGlass Comments Probe
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-comments-probe/**'
+      - '.github/workflows/x-liquid-glass-comments-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Comments Probe dylib
+        working-directory: x-liquid-glass-comments-probe
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-comments-probe
+          cp .theos/obj/debug/XLiquidGlassCommentsProbe.dylib ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsProbe.dylib ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-arm64.dylib
+          shasum -a 256 ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-arm64.dylib > ../build-comments-probe/XLiquidGlassCommentsProbe-0.2-SHA256SUMS.txt
+
+      - name: Upload Comments Probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassCommentsProbe-0.2-arm64
+          path: build-comments-probe/*
+          if-no-files-found: error
