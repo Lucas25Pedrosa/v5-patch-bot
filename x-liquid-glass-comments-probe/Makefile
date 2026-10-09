@@ -5,8 +5,8 @@ INSTALL_TARGET_PROCESSES := Twitter
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := XLiquidGlassCommentsProbe
-XLiquidGlassCommentsProbe_FILES := XLiquidGlassCommentsProbe.m
+XLiquidGlassCommentsProbe_FILES := XLiquidGlassCommentsProbeSafe.m
 XLiquidGlassCommentsProbe_FRAMEWORKS := Foundation UIKit QuartzCore
-XLiquidGlassCommentsProbe_CFLAGS := -fno-objc-arc -Wall -Wextra -Wno-unused-parameter
+XLiquidGlassCommentsProbe_CFLAGS := -fobjc-arc -Wall -Wextra -Wno-unused-parameter
 
 include $(THEOS_MAKE_PATH)/tweak.mk
