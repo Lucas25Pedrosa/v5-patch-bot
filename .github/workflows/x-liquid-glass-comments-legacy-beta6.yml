@@ -1,0 +1,53 @@
+name: Build XLiquidGlass Beta 6 Comments Legacy Mode
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-only/**'
+      - 'scripts/patch_xlg_comments_legacy_beta6.py'
+      - '.github/workflows/x-liquid-glass-comments-legacy-beta6.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply Beta 6 comments legacy patch
+        run: python3 scripts/patch_xlg_comments_legacy_beta6.py
+
+      - name: Verify Beta 6 markers
+        run: |
+          grep -n 'gXLGCommentsLegacyScopeDepth' x-liquid-glass-only/XLiquidGlass.m
+          grep -n 'XLGCommentsLegacyBeta6Init' x-liquid-glass-only/XLiquidGlass.m
+          grep -n 'T1ConversationContainerViewController' x-liquid-glass-only/XLiquidGlass.m
+          grep -n 'T1URTViewController' x-liquid-glass-only/XLiquidGlass.m
+          grep -n 'XLGCommentsLegacyScopeActive()' x-liquid-glass-only/XLiquidGlass.m
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XLiquidGlass Beta 6
+        working-directory: x-liquid-glass-only
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-xlg-comments-legacy-beta6
+          cp .theos/obj/debug/XLiquidGlass.dylib ../build-xlg-comments-legacy-beta6/XLiquidGlass-2.0.2-Beta6-CommentsLegacy-arm64.dylib || \
+          cp .theos/obj/XLiquidGlass.dylib ../build-xlg-comments-legacy-beta6/XLiquidGlass-2.0.2-Beta6-CommentsLegacy-arm64.dylib
+          file ../build-xlg-comments-legacy-beta6/XLiquidGlass-2.0.2-Beta6-CommentsLegacy-arm64.dylib
+          shasum -a 256 ../build-xlg-comments-legacy-beta6/XLiquidGlass-2.0.2-Beta6-CommentsLegacy-arm64.dylib > ../build-xlg-comments-legacy-beta6/XLiquidGlass-2.0.2-Beta6-CommentsLegacy-SHA256SUMS.txt
+
+      - name: Upload XLiquidGlass Beta 6
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass-2.0.2-Beta6-CommentsLegacy-arm64
+          path: build-xlg-comments-legacy-beta6/*
+          if-no-files-found: error
