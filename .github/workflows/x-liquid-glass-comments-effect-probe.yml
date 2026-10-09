@@ -1,0 +1,41 @@
+name: Build XLiquidGlass Comments Effect Probe 0.3
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-comments-effect-probe/**'
+      - '.github/workflows/x-liquid-glass-comments-effect-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build probe
+        working-directory: x-liquid-glass-comments-effect-probe
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-comments-effect-probe
+          cp .theos/obj/debug/XLiquidGlassCommentsEffectProbe.dylib ../build-comments-effect-probe/XLiquidGlassCommentsEffectProbe-0.3-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsEffectProbe.dylib ../build-comments-effect-probe/XLiquidGlassCommentsEffectProbe-0.3-arm64.dylib
+          file ../build-comments-effect-probe/XLiquidGlassCommentsEffectProbe-0.3-arm64.dylib
+          shasum -a 256 ../build-comments-effect-probe/XLiquidGlassCommentsEffectProbe-0.3-arm64.dylib > ../build-comments-effect-probe/XLiquidGlassCommentsEffectProbe-0.3-SHA256SUMS.txt
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassCommentsEffectProbe-0.3-arm64
+          path: build-comments-effect-probe/*
+          if-no-files-found: error
