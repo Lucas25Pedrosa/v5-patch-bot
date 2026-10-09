@@ -28,13 +28,13 @@ jobs:
           make clean
           make FINALPACKAGE=1
           mkdir -p ../build-comments-scroll-fix
-          cp .theos/obj/debug/XLiquidGlassCommentsScrollFix.dylib ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-arm64.dylib || \
-          cp .theos/obj/XLiquidGlassCommentsScrollFix.dylib ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-arm64.dylib
-          shasum -a 256 ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-arm64.dylib > ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-SHA256SUMS.txt
+          cp .theos/obj/debug/XLiquidGlassCommentsScrollFix.dylib ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-Beta2-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsScrollFix.dylib ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-Beta2-arm64.dylib
+          shasum -a 256 ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-Beta2-arm64.dylib > ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-Beta2-SHA256SUMS.txt
 
       - name: Upload Comments Scroll Fix dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlassCommentsScrollFix-0.2-arm64
+          name: XLiquidGlassCommentsScrollFix-0.2-Beta2-arm64
           path: build-comments-scroll-fix/*
           if-no-files-found: error
