@@ -1,0 +1,51 @@
+name: Build XLiquidGlass Beta 5 Comments Native Isolation
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-only/**'
+      - 'scripts/patch_xlg_comments_native_isolation_beta5.py'
+      - '.github/workflows/x-liquid-glass-comments-native-isolation-beta5.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply comments native isolation patch
+        run: python3 scripts/patch_xlg_comments_native_isolation_beta5.py
+
+      - name: Verify patch markers
+        run: |
+          grep -n 'XLGCommentsNativeIsolationContext' x-liquid-glass-only/XLiquidGlass.m
+          grep -n 'if (XLGCommentsNativeIsolationContext(treatment)) return;' x-liquid-glass-only/XLiquidGlass.m
+          grep -n 'if (XLGCommentsNativeIsolationContext(view)) return;' x-liquid-glass-only/XLiquidGlass.m
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XLiquidGlass
+        working-directory: x-liquid-glass-only
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-xlg-comments-native-beta5
+          cp .theos/obj/debug/XLiquidGlass.dylib ../build-xlg-comments-native-beta5/XLiquidGlass-2.0.2-Beta5-CommentsNativeIsolation-arm64.dylib || \
+          cp .theos/obj/XLiquidGlass.dylib ../build-xlg-comments-native-beta5/XLiquidGlass-2.0.2-Beta5-CommentsNativeIsolation-arm64.dylib
+          file ../build-xlg-comments-native-beta5/XLiquidGlass-2.0.2-Beta5-CommentsNativeIsolation-arm64.dylib
+          shasum -a 256 ../build-xlg-comments-native-beta5/XLiquidGlass-2.0.2-Beta5-CommentsNativeIsolation-arm64.dylib > ../build-xlg-comments-native-beta5/XLiquidGlass-2.0.2-Beta5-CommentsNativeIsolation-SHA256SUMS.txt
+
+      - name: Upload XLiquidGlass Beta 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass-2.0.2-Beta5-CommentsNativeIsolation-arm64
+          path: build-xlg-comments-native-beta5/*
+          if-no-files-found: error
