@@ -1,10 +1,9 @@
-name: Build XLiquidGlass 2.0.2 Beta 3 Comments Native Bypass
+name: Build XLiquidGlass 2.0.2 Beta 4 Comments Effect Bypass
 
-# Beta 3 builder: preserves X native ScrollEdgeTreatment in conversations.
 on:
   push:
     paths:
-      - 'scripts/patch_xlg_comments_native_bypass.py'
+      - 'scripts/patch_xlg_comments_effect_bypass.py'
       - '.github/workflows/x-liquid-glass-comments-native-bypass.yml'
   workflow_dispatch:
 
@@ -21,10 +20,10 @@ jobs:
           ref: xlg-2.0.2-stable-x12.31-20261002
           path: upstream
 
-      - name: Patch comments ScrollEdgeTreatment
+      - name: Patch comments setEffect guard
         run: |
-          python3 scripts/patch_xlg_comments_native_bypass.py upstream/x-liquid-glass-only/XLiquidGlass.m
-          grep -n -A18 -B6 'XLGShouldBypassScrollEdgeTreatmentForConversation' upstream/x-liquid-glass-only/XLiquidGlass.m
+          python3 scripts/patch_xlg_comments_effect_bypass.py upstream/x-liquid-glass-only/XLiquidGlass.m
+          grep -n -A28 -B6 'XLGCommentsNativeEffectContext' upstream/x-liquid-glass-only/XLiquidGlass.m
 
       - name: Install Theos
         run: |
@@ -39,15 +38,15 @@ jobs:
         run: |
           make clean
           make FINALPACKAGE=1
-          mkdir -p ../../build-xlg-comments-native-bypass
-          cp .theos/obj/debug/XLiquidGlass.dylib ../../build-xlg-comments-native-bypass/XLiquidGlass-2.0.2-Beta3-CommentsNativeBypass-arm64.dylib || \
-          cp .theos/obj/XLiquidGlass.dylib ../../build-xlg-comments-native-bypass/XLiquidGlass-2.0.2-Beta3-CommentsNativeBypass-arm64.dylib
-          file ../../build-xlg-comments-native-bypass/XLiquidGlass-2.0.2-Beta3-CommentsNativeBypass-arm64.dylib
-          shasum -a 256 ../../build-xlg-comments-native-bypass/XLiquidGlass-2.0.2-Beta3-CommentsNativeBypass-arm64.dylib > ../../build-xlg-comments-native-bypass/XLiquidGlass-2.0.2-Beta3-CommentsNativeBypass-SHA256SUMS.txt
+          mkdir -p ../../build-xlg-comments-effect-bypass
+          cp .theos/obj/debug/XLiquidGlass.dylib ../../build-xlg-comments-effect-bypass/XLiquidGlass-2.0.2-Beta4-CommentsEffectBypass-arm64.dylib || \
+          cp .theos/obj/XLiquidGlass.dylib ../../build-xlg-comments-effect-bypass/XLiquidGlass-2.0.2-Beta4-CommentsEffectBypass-arm64.dylib
+          file ../../build-xlg-comments-effect-bypass/XLiquidGlass-2.0.2-Beta4-CommentsEffectBypass-arm64.dylib
+          shasum -a 256 ../../build-xlg-comments-effect-bypass/XLiquidGlass-2.0.2-Beta4-CommentsEffectBypass-arm64.dylib > ../../build-xlg-comments-effect-bypass/XLiquidGlass-2.0.2-Beta4-CommentsEffectBypass-SHA256SUMS.txt
 
       - name: Upload patched XLiquidGlass
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass-2.0.2-Beta3-CommentsNativeBypass-arm64
-          path: build-xlg-comments-native-bypass/*
+          name: XLiquidGlass-2.0.2-Beta4-CommentsEffectBypass-arm64
+          path: build-xlg-comments-effect-bypass/*
           if-no-files-found: error
