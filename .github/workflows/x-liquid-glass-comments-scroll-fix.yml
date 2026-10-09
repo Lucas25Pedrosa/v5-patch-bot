@@ -1,0 +1,40 @@
+name: Build XLiquidGlass Comments Scroll Fix
+
+on:
+  push:
+    paths:
+      - 'x-liquid-glass-comments-scroll-fix/**'
+      - '.github/workflows/x-liquid-glass-comments-scroll-fix.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git $HOME/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Comments Scroll Fix dylib
+        working-directory: x-liquid-glass-comments-scroll-fix
+        run: |
+          make clean
+          make FINALPACKAGE=1
+          mkdir -p ../build-comments-scroll-fix
+          cp .theos/obj/debug/XLiquidGlassCommentsScrollFix.dylib ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-arm64.dylib || \
+          cp .theos/obj/XLiquidGlassCommentsScrollFix.dylib ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-arm64.dylib
+          shasum -a 256 ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-arm64.dylib > ../build-comments-scroll-fix/XLiquidGlassCommentsScrollFix-0.2-SHA256SUMS.txt
+
+      - name: Upload Comments Scroll Fix dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassCommentsScrollFix-0.2-arm64
+          path: build-comments-scroll-fix/*
+          if-no-files-found: error
