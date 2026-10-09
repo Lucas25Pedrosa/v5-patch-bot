@@ -7,6 +7,6 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = XLiquidGlassCommentsXColorProbe
 XLiquidGlassCommentsXColorProbe_FILES = XLiquidGlassCommentsXColorProbe.m
 XLiquidGlassCommentsXColorProbe_FRAMEWORKS = Foundation UIKit QuartzCore
-XLiquidGlassCommentsXColorProbe_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter
+XLiquidGlassCommentsXColorProbe_CFLAGS = -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
 
 include $(THEOS_MAKE_PATH)/tweak.mk
