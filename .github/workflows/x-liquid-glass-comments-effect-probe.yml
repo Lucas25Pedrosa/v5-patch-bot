@@ -14,6 +14,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fix ARC owner capture
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('x-liquid-glass-comments-effect-probe/XLiquidGlassCommentsEffectProbe.m')
+          s = p.read_text()
+          old = 'BOOL ok = XCEPHook(cls, @selector(setEffect:), (IMP)XCEPSetEffect, &gNextSetEffect, &gSetEffectOwner);'
+          new = 'gSetEffectOwner = XCEPImageForIMP(class_getMethodImplementation(cls, @selector(setEffect:)));\n    BOOL ok = XCEPHook(cls, @selector(setEffect:), (IMP)XCEPSetEffect, &gNextSetEffect, NULL);'
+          if old not in s:
+              raise SystemExit('ARC owner-capture anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
       - name: Install Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git $HOME/theos
