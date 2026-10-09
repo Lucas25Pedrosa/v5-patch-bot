@@ -1,0 +1,75 @@
+name: Build Nexus 2.3 Beta 1 Custom Background
+
+"on":
+  workflow_dispatch:
+  push:
+    branches: ["nexus-2.3-beta1-custom-background-20261009"]
+    paths:
+      - "nexus23/**"
+      - "nexus2/**"
+      - "nexus/prepare_cache.py"
+      - "nexus/prepare_icons.py"
+      - "iqface-cache/**"
+      - "iqface-icons/**"
+      - "iqface-4in1/Makefile"
+      - ".github/workflows/nexus-2.3-beta1.yml"
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Prepare Nexus 2.3 Beta 1
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"; WORK="$RUNNER_TEMP/nexus-2.3-beta1"
+          rm -rf "$WORK" && mkdir -p "$WORK"
+          python3 nexus/prepare_cache.py iqface-cache/Tweak.m "$WORK/CacheTweak.m"
+          python3 nexus2/patch_cache_v2.py "$WORK/CacheTweak.m"
+          python3 nexus/prepare_icons.py iqface-icons/Tweak.m "$WORK/IconsTweak.m"
+          cp iqface-icons/IconPicker.m "$WORK/IconsPicker.m"
+          python3 nexus2/patch_icon_picker_v2.py "$WORK/IconsPicker.m"
+          cp nexus2/Nexus2.m "$WORK/Nexus2.m"
+          python3 nexus23/patch_version.py "$WORK/Nexus2.m"
+          cp nexus23/AdaptiveBackground.m "$WORK/AdaptiveBackground.m"
+          cp nexus21/run52-oled/NexusAvatarFix.m "$WORK/NexusAvatarFix.m"
+          python3 nexus23/prepare_makefile.py iqface-4in1/Makefile "$WORK/Makefile"
+          grep -F 'NexusVersion = @"2.3 Beta 1"' "$WORK/Nexus2.m"
+          grep -F 'Nexus23BackgroundEngine' "$WORK/AdaptiveBackground.m"
+          grep -F 'NexusCustomBackgroundEnabled' "$WORK/AdaptiveBackground.m"
+          grep -F 'NexusCustomBackgroundColor' "$WORK/AdaptiveBackground.m"
+          grep -F 'NX23ShouldTransform' "$WORK/AdaptiveBackground.m"
+          ! grep -F 'FacebookPlusOLED.m' "$WORK/Makefile"
+      - name: Build
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"; WORK="$RUNNER_TEMP/nexus-2.3-beta1"
+          cd "$WORK"; make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          OUT="$ROOT/nexus23/artifacts"; mkdir -p "$OUT" && rm -f "$OUT"/*
+          DYLIB_PATH="$(find .theos -type f -name Nexus.dylib -print -quit)"; test -n "$DYLIB_PATH"
+          cp "$DYLIB_PATH" "$OUT/Nexus-2.3-Beta1.dylib"
+          cd "$ROOT"
+          shasum -a 256 "$OUT/Nexus-2.3-Beta1.dylib" > "$OUT/SHA256SUMS.txt"
+          file "$OUT/Nexus-2.3-Beta1.dylib" > "$OUT/file.txt"
+          strings -a "$OUT/Nexus-2.3-Beta1.dylib" > "$OUT/strings.txt" || true
+          otool -D "$OUT/Nexus-2.3-Beta1.dylib" > "$OUT/install-name.txt"
+          grep -F 'Mach-O 64-bit' "$OUT/file.txt"; grep -F 'arm64' "$OUT/file.txt"
+          grep -F '@rpath/Nexus.dylib' "$OUT/install-name.txt"
+          grep -F '2.3 Beta 1' "$OUT/strings.txt"
+          grep -F 'adaptive-dark-neutral-custom-color-alpha-preserving' "$OUT/strings.txt"
+          grep -F 'NexusCustomBackgroundEnabled' "$OUT/strings.txt"
+          grep -F 'NexusCustomBackgroundColor' "$OUT/strings.txt"
+          grep -F 'iQFaceOLEDEnabled' "$OUT/strings.txt"
+      - name: Upload Nexus 2.3 Beta 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-2.3-Beta1-Custom-Background-arm64
+          path: nexus23/artifacts/
+          if-no-files-found: error
+          retention-days: 90
