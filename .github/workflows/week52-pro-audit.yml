@@ -1,0 +1,55 @@
+name: Build Week52 Pro Audit PoC
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "week52-pro-audit/**"
+      - ".github/workflows/week52-pro-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: week52-pro-audit
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 audit dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name Week52ProAudit.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/Week52ProAudit.dylib
+          file artifacts/Week52ProAudit.dylib | tee artifacts/FILE.txt
+          shasum -a 256 artifacts/Week52ProAudit.dylib | tee artifacts/SHA256SUMS.txt
+          strings -a artifacts/Week52ProAudit.dylib | grep -F "Week52 Pro Audit 0.1"
+          strings -a artifacts/Week52ProAudit.dylib | grep -F "MSHookFunction"
+          strings -a artifacts/Week52ProAudit.dylib | grep -F "/Economy.app/Economy"
+          otool -hv artifacts/Week52ProAudit.dylib | tee artifacts/MACHO.txt
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: Week52ProAudit-0.1-arm64
+          path: week52-pro-audit/artifacts/
+          if-no-files-found: error
+          retention-days: 7
