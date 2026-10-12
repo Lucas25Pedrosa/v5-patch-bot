@@ -75,6 +75,13 @@ jobs:
           echo '=== RELEVANT STRINGS ===' >> analysis/report.txt
           cat analysis/relevant_strings.txt >> analysis/report.txt
 
+      - name: Print analysis summary
+        run: |
+          echo '===== REPORT ====='
+          cat analysis/report.txt
+          echo '===== OBJC MATCHES ====='
+          grep -Eai -C 4 'Liquid|Glass|TabBar|TTK|TUX|AWEFeed|cellHeight|BottomMask|fullscreen|immersive|safeArea|floating' analysis/objc.txt | head -n 5000 || true
+
       - name: Upload analysis
         uses: actions/upload-artifact@v4
         with:
