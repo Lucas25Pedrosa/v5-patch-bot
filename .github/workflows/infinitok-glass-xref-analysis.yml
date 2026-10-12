@@ -1,0 +1,117 @@
+name: Infinitok Liquid Glass Xrefs
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - infinitok-0.0.2-static-analysis
+    paths:
+      - ".github/workflows/infinitok-glass-xref-analysis.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download prior deep-analysis artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p input reports
+          gh run download 38208899778 -R Lucas25Pedrosa/v5-patch-bot \
+            -n Infinitok-0.0.2-dylib-deep-analysis -D input
+          find input -maxdepth 3 -type f -print
+          test -f input/binaries/Infinitok.dylib
+          lipo input/binaries/Infinitok.dylib -thin arm64 -output input/Infinitok.arm64.dylib
+
+      - name: String neighborhoods around glass implementation
+        run: |
+          set -euo pipefail
+          S=input/reports/Infinitok.strings-with-offsets.txt
+          {
+            echo '===== ALL GLASS/H00K/RUNTIME STRINGS ====='
+            grep -Ei 'glass|liquid|hook|swizz|method|class|runtime|enabled|controls|notices|overlays|TUX|TTK|iPad|floating' "$S" || true
+            echo
+            echo '===== NEIGHBORHOOD 0x49000-0x49fff ====='
+            awk '$1 ~ /^[0-9a-fA-F]+$/ {x=strtonum("0x"$1); if (x>=strtonum("0x49000") && x<=strtonum("0x49fff")) print}' "$S" 2>/dev/null || true
+            echo
+            echo '===== NEIGHBORHOOD 0x4af00-0x4b500 ====='
+            awk '$1 ~ /^[0-9a-fA-F]+$/ {x=strtonum("0x"$1); if (x>=strtonum("0x4af00") && x<=strtonum("0x4b500")) print}' "$S" 2>/dev/null || true
+            echo
+            echo '===== NEIGHBORHOOD 0x4ed00-0x4ef00 ====='
+            awk '$1 ~ /^[0-9a-fA-F]+$/ {x=strtonum("0x"$1); if (x>=strtonum("0x4ed00") && x<=strtonum("0x4ef00")) print}' "$S" 2>/dev/null || true
+          } | tee reports/string-neighborhoods.txt
+
+      - name: Find hooking callsites in disassembly
+        run: |
+          set -euo pipefail
+          D=input/reports/Infinitok.disasm.txt
+          {
+            echo '===== MSHookMessageEx CALLS ====='
+            grep -n -B35 -A12 '_MSHookMessageEx' "$D" || true
+            echo
+            echo '===== method_setImplementation CALLS ====='
+            grep -n -B45 -A15 '_method_setImplementation' "$D" || true
+            echo
+            echo '===== imp_implementationWithBlock CALLS ====='
+            grep -n -B45 -A15 '_imp_implementationWithBlock' "$D" || true
+            echo
+            echo '===== objc_copyClassList CALLS ====='
+            grep -n -B50 -A20 '_objc_copyClassList' "$D" || true
+            echo
+            echo '===== class_copyMethodList CALLS ====='
+            grep -n -B50 -A20 '_class_copyMethodList' "$D" || true
+          } | tee reports/hook-callsites.txt
+
+      - name: Search Objective-C metadata for glass selectors
+        run: |
+          set -euo pipefail
+          O=input/reports/Infinitok.objc-metadata.txt
+          {
+            for P in \
+              'isLiquidGlassEnabled' \
+              'isLiquidGlassButtonEnabled' \
+              'isLiquidGlassMenuEnabled' \
+              'TUXLiquidGlassConfiguration' \
+              'liquidGlassEnabled' \
+              'liquidGlassControls' \
+              'liquidGlassNotices' \
+              'liquidGlassOverlays' \
+              'AWENewFeedTableViewController' \
+              'AWEFeedCellViewController' \
+              'tableView:heightForRowAtIndexPath:'; do
+              echo "===== $P ====="
+              grep -n -F -B12 -A20 "$P" "$O" || true
+            done
+          } | tee reports/objc-glass-context.txt
+
+      - name: Runtime/string address correlation
+        run: |
+          set -euo pipefail
+          INF=input/Infinitok.arm64.dylib
+          {
+            echo '===== MACH-O SECTIONS ====='
+            otool -l "$INF" | grep -E 'sectname|segname|addr |size |offset ' || true
+            echo
+            echo '===== SYMBOLS AROUND CODE ====='
+            nm -nm "$INF" | head -250 || true
+            echo
+            echo '===== INIT MOD SECTION ====='
+            otool -s __DATA_CONST __mod_init_func "$INF" 2>&1 || true
+            otool -s __DATA __mod_init_func "$INF" 2>&1 || true
+          } | tee reports/macho-map.txt
+
+      - name: Upload Xref analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinitok-glass-xref-analysis
+          path: reports/
+          if-no-files-found: error
