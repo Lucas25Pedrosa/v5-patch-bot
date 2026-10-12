@@ -23,22 +23,20 @@ jobs:
           curl -fL --retry 3 --retry-delay 2 \
             "https://pub-dd800571175348b6a2745b3396360028.r2.dev/TikTok-47.1.0-Infinitok.ipa" \
             -o "$RUNNER_TEMP/infinitok.ipa"
-          ls -lh "$RUNNER_TEMP/infinitok.ipa"
 
       - name: Extract Infinitok dylib
         run: |
           set -euo pipefail
           mkdir -p analysis-output
-          unzip -l "$RUNNER_TEMP/infinitok.ipa" | grep -i 'Infinitok.*\.dylib' | tee analysis-output/ipa-dylib-location.txt
           entry="$(unzip -Z1 "$RUNNER_TEMP/infinitok.ipa" | grep -iE '(^|/)Infinitok\.dylib$' | head -1)"
-          echo "entry=$entry"
+          echo "entry=$entry" | tee analysis-output/ipa-dylib-location.txt
           test -n "$entry"
           unzip -p "$RUNNER_TEMP/infinitok.ipa" "$entry" > "$RUNNER_TEMP/Infinitok.dylib"
           file "$RUNNER_TEMP/Infinitok.dylib" | tee analysis-output/file.txt
           shasum -a 256 "$RUNNER_TEMP/Infinitok.dylib" | tee analysis-output/sha256.txt
           stat -f 'size=%z' "$RUNNER_TEMP/Infinitok.dylib" | tee analysis-output/size.txt
 
-      - name: Mach-O and Objective-C inventory
+      - name: Mach-O inventory
         run: |
           set -euo pipefail
           D="$RUNNER_TEMP/Infinitok.dylib"
@@ -46,49 +44,109 @@ jobs:
           otool -l "$D" > analysis-output/otool-load-commands.txt
           nm -m "$D" > analysis-output/nm-m.txt || true
           nm -u "$D" > analysis-output/nm-undefined.txt || true
-          otool -Iv "$D" > analysis-output/otool-indirect.txt || true
           otool -ov "$D" > analysis-output/otool-objc.txt || true
-          xcrun llvm-objdump --macho --syms "$D" > analysis-output/llvm-syms.txt || true
-          xcrun llvm-objdump --macho --objc-meta-data "$D" > analysis-output/llvm-objc.txt 2>&1 || true
-
-      - name: Strings and focused targets
-        run: |
-          set -euo pipefail
-          D="$RUNNER_TEMP/Infinitok.dylib"
           strings -a -t x "$D" > analysis-output/strings-offsets.txt
-          strings -a "$D" | sort -u > analysis-output/strings-unique.txt
           grep -iE 'liquid|glass|tab.?bar|floating|full.?size|fullscreen|immersive|feed|cellHeight|lastStable|BottomMask|player|video|safe.?area|TTK|TUX|AWEFeed|iOS26|solarium' analysis-output/strings-offsets.txt > analysis-output/relevant-strings.txt || true
-          grep -iE 'MSHook|logos|substrate|substitute|ellekit|fishhook|hookMessage|objc_getClass|class_get|method_get|method_set|class_addMethod' analysis-output/strings-offsets.txt > analysis-output/hook-runtime-strings.txt || true
 
-      - name: Focused Objective-C metadata
+      - name: Install radare2 analysis tools
         run: |
           set -euo pipefail
-          cat analysis-output/otool-objc.txt analysis-output/llvm-objc.txt analysis-output/nm-m.txt > "$RUNNER_TEMP/allmeta.txt"
-          grep -iE -C 6 'TTKIOS26LiquidGlassSwitch|TTKABTest|TUXAppInfoUtils|TUXExperiments|TTKBizUIComponentDependencyImpl|TTKTabBarController|TTKFakeTabBar|TTKTabBar|TTKTabBarConfig|AWENewFeedTableViewController|TTKFeedTableViewService|AWEFeedCellViewController|AWEFeedViewCell|TTKFeedDescBottomMaskView|cellHeight|lastStableCellHeight|heightForRowAtIndexPath|tabBarHeight|heightForTabBar|LiquidGlass' "$RUNNER_TEMP/allmeta.txt" > analysis-output/focused-objc.txt || true
+          brew install radare2
+          python3 -m pip install --user r2pipe
 
-      - name: Disassemble
+      - name: Cross-reference Liquid Glass strings and hook APIs
         run: |
           set -euo pipefail
-          D="$RUNNER_TEMP/Infinitok.dylib"
-          otool -tvV "$D" > analysis-output/disassembly.txt || true
-          grep -iE -C 10 'TTKIOS26LiquidGlassSwitch|TTKABTest|TUXAppInfoUtils|TUXExperiments|TTKBizUIComponentDependencyImpl|TTKTabBarController|TTKFakeTabBar|AWENewFeedTableViewController|TTKFeedTableViewService|AWEFeedCellViewController|TTKFeedDescBottomMaskView|cellHeight|tabBarHeight|LiquidGlass' analysis-output/disassembly.txt > analysis-output/focused-disassembly.txt || true
+          cat > "$RUNNER_TEMP/xrefs.py" <<'PY'
+          import json, os, re
+          import r2pipe
 
-      - name: Print concise analysis inputs
+          path = os.environ['DYLIB']
+          out = os.environ['OUT']
+          r = r2pipe.open(path, flags=['-2'])
+          r.cmd('e anal.timeout=120')
+          r.cmd('aaa')
+
+          rx = re.compile(r'(liquid.?glass|isLiquidGlass|TUXExperiments|TTKIOS26|TTKABTest|TTKTabBar|TTKFakeTabBar|tabBarHeight|heightForTabBar|AWENewFeed|AWEFeedCell|TTKFeedTable|BottomMask|full.?size|fullscreen|immersive)', re.I)
+          strings = r.cmdj('izzj') or []
+          targets=[]
+          for s in strings:
+              txt=s.get('string','')
+              if rx.search(txt):
+                  targets.append((s.get('vaddr',0), txt))
+
+          seen_funcs=set()
+          with open(out,'w',encoding='utf-8') as f:
+              def emit_function(at, why):
+                  info=r.cmdj(f'afij @ {at}') or []
+                  if not info:
+                      f.write(f'  XREF 0x{at:x} no-function {why}\n')
+                      return
+                  fi=info[0]
+                  off=fi.get('offset', at)
+                  name=fi.get('name','?')
+                  f.write(f'  XREF 0x{at:x} -> FUNC 0x{off:x} {name} size={fi.get("size")} why={why}\n')
+                  if off not in seen_funcs:
+                      seen_funcs.add(off)
+                      f.write(r.cmd(f'pdf @ {off}'))
+                      f.write('\n')
+
+              for addr, txt in targets:
+                  f.write(f'\n===== STRING 0x{addr:x}: {txt} =====\n')
+                  refs=r.cmdj(f'axtj @ {addr}') or []
+                  f.write(f'refs={len(refs)}\n')
+                  for ref in refs[:30]:
+                      emit_function(ref.get('from',0), f'string:{txt}')
+
+              f.write('\n===== IMPORT XREFS =====\n')
+              syms=r.cmdj('isj') or []
+              wanted=re.compile(r'(MSHookMessageEx|method_setImplementation|class_getInstanceMethod|class_addMethod|objc_getClass|class_copyMethodList)', re.I)
+              for sym in syms:
+                  name=sym.get('name','')
+                  if not wanted.search(name):
+                      continue
+                  addr=sym.get('vaddr',0)
+                  f.write(f'\n--- IMPORT {name} @ 0x{addr:x} ---\n')
+                  refs=r.cmdj(f'axtj @ {addr}') or []
+                  for ref in refs[:100]:
+                      emit_function(ref.get('from',0), f'import:{name}')
+          r.quit()
+          PY
+          DYLIB="$RUNNER_TEMP/Infinitok.dylib" OUT="analysis-output/r2-liquid-glass-xrefs.txt" python3 "$RUNNER_TEMP/xrefs.py"
+
+      - name: Extract exact settings neighbourhood
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          p='analysis-output/strings-offsets.txt'
+          rows=[]
+          for line in open(p, errors='ignore'):
+              m=re.match(r'\s*([0-9a-fA-F]+)\s+(.*)', line.rstrip('\n'))
+              if m: rows.append((int(m.group(1),16),m.group(2)))
+          anchors=['liquid_glass_enabled','isLiquidGlassButtonEnabled','patched %lu TUXExperiments gates','INFINITOK [glass]']
+          with open('analysis-output/string-neighbourhoods.txt','w') as o:
+              for anchor in anchors:
+                  idx=[i for i,(_,s) in enumerate(rows) if anchor.lower() in s.lower()]
+                  for i in idx:
+                      o.write(f'===== {anchor} @ 0x{rows[i][0]:x} =====\n')
+                      for a,s in rows[max(0,i-25):min(len(rows),i+35)]: o.write(f'{a:08x} {s}\n')
+          PY
+
+      - name: Print targeted results
         run: |
           echo '=== FILE ==='
           cat analysis-output/file.txt analysis-output/sha256.txt analysis-output/size.txt
           echo '=== RELEVANT STRINGS ==='
-          head -n 700 analysis-output/relevant-strings.txt || true
-          echo '=== HOOK RUNTIME ==='
-          head -n 250 analysis-output/hook-runtime-strings.txt || true
-          echo '=== UNDEFINED HOOK/OBJC APIs ==='
-          grep -iE 'MSHook|substrate|substitute|ellekit|hook|objc_|class_|method_' analysis-output/nm-undefined.txt | head -n 400 || true
-          echo '=== FOCUSED OBJC ==='
-          head -n 1600 analysis-output/focused-objc.txt || true
+          cat analysis-output/relevant-strings.txt | head -n 800
+          echo '=== STRING NEIGHBOURHOODS ==='
+          cat analysis-output/string-neighbourhoods.txt | head -n 1000
+          echo '=== R2 XREFS ==='
+          cat analysis-output/r2-liquid-glass-xrefs.txt | head -n 5000
 
       - name: Upload analysis
         uses: actions/upload-artifact@v4
         with:
-          name: Infinitok-LiquidGlass-Binary-Analysis
+          name: Infinitok-LiquidGlass-Xref-Analysis
           path: analysis-output/
           if-no-files-found: error
