@@ -1,0 +1,48 @@
+name: Build TikTokLiquidGlass Infinitok Clone
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "tiktok-liquid-glass-infinitok-clone/**"
+      - ".github/workflows/tiktok-liquid-glass-infinitok-clone.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: tiktok-liquid-glass-infinitok-clone
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build tweak
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name TikTokLiquidGlassInfinitok.dylib ! -path '*/TikTokLiquidGlassInfinitok.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/TikTokLiquidGlass-InfinitokStyle-0.1-TikTok47-arm64.dylib
+          file artifacts/TikTokLiquidGlass-InfinitokStyle-0.1-TikTok47-arm64.dylib
+          shasum -a 256 artifacts/TikTokLiquidGlass-InfinitokStyle-0.1-TikTok47-arm64.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TikTokLiquidGlass-InfinitokStyle-0.1-TikTok47-arm64
+          path: tiktok-liquid-glass-infinitok-clone/artifacts/
+          if-no-files-found: error
