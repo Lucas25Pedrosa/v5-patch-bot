@@ -1,0 +1,153 @@
+name: Deep Analyze Infinitok dylib
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - infinitok-0.0.2-static-analysis
+    paths:
+      - ".github/workflows/infinitok-dylib-deep-analysis.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download and extract
+        run: |
+          set -euo pipefail
+          mkdir -p work reports binaries
+          curl -L --fail --retry 3 --retry-delay 2 \
+            'https://pub-dd800571175348b6a2745b3396360028.r2.dev/TikTok-47.1.0-Infinitok.ipa' \
+            -o work/Infinitok.ipa
+          ditto -x -k work/Infinitok.ipa work/extracted
+          APP="$(find work/extracted/Payload -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          echo "$APP" > work/app-path.txt
+          test -f "$APP/Frameworks/Infinitok.dylib"
+          cp "$APP/Frameworks/Infinitok.dylib" binaries/Infinitok.dylib
+          if [ -f "$APP/Frameworks/zxPluginsInject.dylib" ]; then cp "$APP/Frameworks/zxPluginsInject.dylib" binaries/zxPluginsInject.dylib; fi
+
+      - name: Basic binary identity and dependencies
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          INF="$APP/Frameworks/Infinitok.dylib"
+          ZX="$APP/Frameworks/zxPluginsInject.dylib"
+          {
+            echo '===== INFINITOK ====='
+            file "$INF"
+            stat -f 'size=%z' "$INF"
+            shasum -a 256 "$INF"
+            echo '--- LC dependencies ---'
+            otool -L "$INF"
+            echo '--- dylib id ---'
+            otool -D "$INF" || true
+            echo
+            echo '===== ZX LOADER ====='
+            if [ -f "$ZX" ]; then
+              file "$ZX"
+              stat -f 'size=%z' "$ZX"
+              shasum -a 256 "$ZX"
+              otool -L "$ZX"
+              echo '--- loader relevant strings ---'
+              strings -a "$ZX" | grep -Ei 'Infinitok|\.dylib|dlopen|NSBundle|Frameworks|CydiaSubstrate|Substrate' || true
+            fi
+          } | tee reports/identity-deps.txt
+
+      - name: Extract all Infinitok strings and focused keys
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          INF="$APP/Frameworks/Infinitok.dylib"
+          strings -a "$INF" > reports/Infinitok.all-strings.txt
+          strings -a -t x "$INF" > reports/Infinitok.strings-with-offsets.txt
+          {
+            echo '===== LIQUID GLASS / FLAGS ====='
+            strings -a -t x "$INF" | grep -Ei 'liquid|glass|solarium|ios26|tux_|ttk_|supportLiquid|isLiquid|floating|rounded|ipad|full.?size|full.?screen|immersive' || true
+            echo
+            echo '===== TAB BAR ====='
+            strings -a -t x "$INF" | grep -Ei 'tab.?bar|TTKTabBar|TTKFakeTabBar|tabbar|platter|UITabBar|compact|visualProvider|safeArea|bottom' || true
+            echo
+            echo '===== FEED / VIDEO ====='
+            strings -a -t x "$INF" | grep -Ei 'AWEFeed|FeedTable|cellHeight|lastStable|BottomMask|player|video|contentView|container|underlay|extend|heightForRow|paging' || true
+            echo
+            echo '===== PREF KEYS ====='
+            strings -a -t x "$INF" | grep -Ei 'extra\.|liquid_glass|glass_|tab_bar|tabbar|feed\.|Infinitok|INFINITOK' || true
+          } | tee reports/focused-strings.txt
+
+      - name: Objective-C metadata
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          INF="$APP/Frameworks/Infinitok.dylib"
+          otool -ov "$INF" > reports/Infinitok.objc-metadata.txt 2>&1 || true
+          nm -m "$INF" > reports/Infinitok.nm-m.txt 2>&1 || true
+          nm -nm "$INF" > reports/Infinitok.nm-nm.txt 2>&1 || true
+          {
+            echo '===== OBJC CLASSES / SELECTORS OF INTEREST ====='
+            grep -Ei -C 4 'TTK|TUX|AWE|Liquid|Glass|TabBar|cellHeight|Feed|BottomMask|fullscreen|immersive|safeArea|layout|frame' reports/Infinitok.objc-metadata.txt || true
+            echo
+            echo '===== NM INTEREST ====='
+            grep -Ei 'TTK|TUX|AWE|Liquid|Glass|TabBar|Feed|objc|swizzle|hook|substrate' reports/Infinitok.nm-m.txt || true
+          } | tee reports/objc-focused.txt
+
+      - name: Load commands and sections
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          INF="$APP/Frameworks/Infinitok.dylib"
+          otool -l "$INF" > reports/Infinitok.loadcommands.txt
+          otool -arch arm64 -s __TEXT __cstring "$INF" > reports/Infinitok.cstring-section.txt 2>&1 || true
+          otool -arch arm64 -s __DATA_CONST __objc_selrefs "$INF" > reports/Infinitok.selrefs.txt 2>&1 || true
+          otool -arch arm64 -s __DATA_CONST __objc_classrefs "$INF" > reports/Infinitok.classrefs.txt 2>&1 || true
+
+      - name: Disassemble Infinitok
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          INF="$APP/Frameworks/Infinitok.dylib"
+          otool -arch arm64 -tvV "$INF" > reports/Infinitok.disasm.txt 2>&1 || true
+          xcrun llvm-objdump --macho --disassemble --no-show-raw-insn "$INF" > reports/Infinitok.llvm-disasm.txt 2>&1 || true
+
+      - name: Inspect loader relationship and app load commands
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          EXE="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          ZX="$APP/Frameworks/zxPluginsInject.dylib"
+          {
+            echo '===== MAIN TIKTOK LC LOADS ====='
+            otool -L "$EXE" | grep -Ei 'Infinitok|zxPlugins|Substrate|Frameworks' || true
+            echo
+            echo '===== MAIN TIKTOK STRING REFERENCES ====='
+            strings -a "$EXE" | grep -Ei 'Infinitok|zxPluginsInject' || true
+            echo
+            echo '===== ZX FULL STRINGS ====='
+            if [ -f "$ZX" ]; then strings -a -t x "$ZX"; fi
+          } > reports/loader-map.txt
+
+      - name: Bundle localization and version evidence
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          find "$APP/Infinitok.bundle" -maxdepth 3 -type f -print | sort > reports/bundle-files.txt || true
+          if [ -f "$APP/Infinitok.bundle/en.lproj/Localizable.strings" ]; then
+            cat "$APP/Infinitok.bundle/en.lproj/Localizable.strings" > reports/Infinitok.en.Localizable.strings
+          fi
+          find "$APP/Infinitok.bundle" -type f -maxdepth 2 -print0 | xargs -0 grep -aHinE 'version|liquid|glass|tab bar|tab_bar|full size|feed' > reports/bundle-focused.txt 2>/dev/null || true
+
+      - name: Upload deep analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinitok-0.0.2-dylib-deep-analysis
+          path: |
+            reports/
+            binaries/
+          if-no-files-found: error
