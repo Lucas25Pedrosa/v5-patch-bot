@@ -5,7 +5,7 @@ INSTALL_TARGET_PROCESSES := TikTok
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := TikTokLiquidGlassInfinitok
-TikTokLiquidGlassInfinitok_FILES := TikTokLiquidGlassInfinitok.m
+TikTokLiquidGlassInfinitok_FILES := TikTokLiquidGlassInfinitok.m TikTokLiquidGlassExactCore.m
 TikTokLiquidGlassInfinitok_FRAMEWORKS := Foundation UIKit
 TikTokLiquidGlassInfinitok_CFLAGS := -fobjc-arc -fblocks -Wall -Wextra -Wno-unused-parameter
 
