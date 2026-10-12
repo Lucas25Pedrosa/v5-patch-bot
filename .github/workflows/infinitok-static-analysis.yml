@@ -1,0 +1,159 @@
+name: Analyze Infinitok 0.0.2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - infinitok-0.0.2-static-analysis
+    paths:
+      - ".github/workflows/infinitok-static-analysis.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download Infinitok IPA
+        run: |
+          set -euo pipefail
+          mkdir -p work reports candidates
+          curl -L --fail --retry 3 --retry-delay 2 \
+            'https://pub-dd800571175348b6a2745b3396360028.r2.dev/TikTok-47.1.0-Infinitok.ipa' \
+            -o work/Infinitok-47.1.0.ipa
+          shasum -a 256 work/Infinitok-47.1.0.ipa | tee reports/ipa-sha256.txt
+          ls -lh work/Infinitok-47.1.0.ipa | tee reports/ipa-size.txt
+
+      - name: Extract IPA
+        run: |
+          set -euo pipefail
+          ditto -x -k work/Infinitok-47.1.0.ipa work/extracted
+          APP="$(find work/extracted/Payload -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP"
+          echo "$APP" > work/app-path.txt
+          echo "APP=$APP" | tee reports/app-path.txt
+
+      - name: App metadata
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          PLIST="$APP/Info.plist"
+          {
+            echo "CFBundleIdentifier=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST" 2>/dev/null || true)"
+            echo "CFBundleShortVersionString=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST" 2>/dev/null || true)"
+            echo "CFBundleVersion=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST" 2>/dev/null || true)"
+            echo "CFBundleExecutable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST" 2>/dev/null || true)"
+            echo "UIDesignRequiresCompatibility=$(/usr/libexec/PlistBuddy -c 'Print :UIDesignRequiresCompatibility' "$PLIST" 2>/dev/null || true)"
+            echo "DTSDKName=$(/usr/libexec/PlistBuddy -c 'Print :DTSDKName' "$PLIST" 2>/dev/null || true)"
+            echo "DTPlatformVersion=$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformVersion' "$PLIST" 2>/dev/null || true)"
+          } | tee reports/app-metadata.txt
+
+      - name: Inventory dylibs and frameworks
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          find "$APP" -type f \( -name '*.dylib' -o -path '*/Frameworks/*.framework/*' \) -print0 \
+            | xargs -0 -I{} sh -c 'printf "%12s  %s\n" "$(stat -f%z "{}")" "{}"' \
+            | sort -n > reports/macho-inventory.txt || true
+          cat reports/macho-inventory.txt
+
+      - name: Locate Infinitok settings strings
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          : > reports/string-hit-files.txt
+          for needle in \
+            'Infinitok Settings' \
+            'Enable Liquid Glass UI' \
+            'Liquid Glass: Buttons/Menus/Panels' \
+            'Liquid Glass: Toasts/Notices' \
+            'Liquid Glass: Modals/Sheets' \
+            'Liquid glass tab bar' \
+            'Liquid glass bar: full size'; do
+            echo "=== $needle ===" | tee -a reports/string-hit-files.txt
+            find "$APP" -type f -size -80M -print0 \
+              | xargs -0 grep -aIlF "$needle" 2>/dev/null \
+              | tee -a reports/string-hit-files.txt || true
+          done
+
+          awk '/^work\/extracted\// {print}' reports/string-hit-files.txt | sort -u > work/candidate-paths.txt
+          echo '=== CANDIDATES ===' | tee reports/candidates.txt
+          cat work/candidate-paths.txt | tee -a reports/candidates.txt
+
+      - name: Analyze candidate tweak binaries
+        run: |
+          set -euo pipefail
+          : > reports/candidate-analysis.txt
+          while IFS= read -r F; do
+            [ -f "$F" ] || continue
+            BASE="$(basename "$F")"
+            SAFE="$(echo "$BASE" | tr ' /' '__')"
+            echo "===== $F =====" | tee -a reports/candidate-analysis.txt
+            file "$F" | tee -a reports/candidate-analysis.txt || true
+            shasum -a 256 "$F" | tee -a reports/candidate-analysis.txt || true
+            echo '--- OTOOL -L ---' | tee -a reports/candidate-analysis.txt
+            otool -L "$F" | tee -a reports/candidate-analysis.txt || true
+            echo '--- RELEVANT STRINGS ---' | tee -a reports/candidate-analysis.txt
+            strings -a "$F" \
+              | grep -Ei 'Infinitok|Liquid.?Glass|TTKTabBar|TTKFakeTabBar|TabBar|cellHeight|lastStableCellHeight|FeedTable|AWEFeed|BottomMask|fullscreen|full.?screen|immersive|tux_liquid|ttk_tabbar|IOS26|supportLiquidGlass|isLiquidGlass' \
+              | sort -u | tee -a reports/candidate-analysis.txt || true
+            strings -a "$F" > "reports/${SAFE}.strings.txt" || true
+            nm -m "$F" > "reports/${SAFE}.nm.txt" 2>&1 || true
+            otool -l "$F" > "reports/${SAFE}.loadcommands.txt" 2>&1 || true
+            cp "$F" "candidates/$BASE" || true
+          done < work/candidate-paths.txt
+
+      - name: Find where candidate dylibs are loaded
+        run: |
+          set -euo pipefail
+          APP="$(cat work/app-path.txt)"
+          EXE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          EXE="$APP/$EXE_NAME"
+          {
+            echo '===== MAIN EXECUTABLE ====='
+            otool -L "$EXE" || true
+            echo
+            echo '===== MUSICALLYCORE ====='
+            CORE="$(find "$APP/Frameworks" -path '*/MusicallyCore.framework/MusicallyCore' -type f -print -quit || true)"
+            if [ -n "$CORE" ]; then otool -L "$CORE" || true; fi
+          } > reports/core-loads.txt
+
+          : > reports/reverse-load-map.txt
+          while IFS= read -r C; do
+            [ -f "$C" ] || continue
+            BN="$(basename "$C")"
+            echo "===== REFERENCES TO $BN =====" | tee -a reports/reverse-load-map.txt
+            find "$APP" -type f -size -900M -print0 | while IFS= read -r -d '' F; do
+              if file "$F" | grep -q 'Mach-O'; then
+                if otool -L "$F" 2>/dev/null | grep -Fq "$BN"; then
+                  echo "$F" | tee -a reports/reverse-load-map.txt
+                  otool -L "$F" 2>/dev/null | grep -F "$BN" | tee -a reports/reverse-load-map.txt
+                fi
+              fi
+            done
+          done < work/candidate-paths.txt
+
+      - name: Focused class and selector extraction
+        run: |
+          set -euo pipefail
+          : > reports/focused-symbols.txt
+          while IFS= read -r F; do
+            [ -f "$F" ] || continue
+            echo "===== $F =====" | tee -a reports/focused-symbols.txt
+            strings -a "$F" | grep -E '^(_OBJC_CLASS_\$_)?(TTK|TUX|AWE)|TTK[A-Za-z0-9_]+|AWE[A-Za-z0-9_]+|LiquidGlass|liquid_glass|tabBar|TabBar|cellHeight|BottomMask|FullScreen|fullscreen|immersive' \
+              | sort -u | tee -a reports/focused-symbols.txt || true
+          done < work/candidate-paths.txt
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinitok-0.0.2-static-analysis
+          path: |
+            reports/
+            candidates/
+          if-no-files-found: error
