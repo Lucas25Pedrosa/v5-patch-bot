@@ -1,0 +1,96 @@
+name: Analyze Infinitok Liquid Glass
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - analysis-infinitok-liquid-glass
+    paths:
+      - ".github/workflows/infinitok-liquid-glass-analysis.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download public Infinitok IPA
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 \
+            "https://pub-dd800571175348b6a2745b3396360028.r2.dev/TikTok-47.1.0-Infinitok.ipa" \
+            -o "$RUNNER_TEMP/infinitok.ipa"
+          ls -lh "$RUNNER_TEMP/infinitok.ipa"
+
+      - name: Extract Infinitok dylib
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/extract" analysis-output
+          unzip -l "$RUNNER_TEMP/infinitok.ipa" | grep -i 'Infinitok.*\.dylib' | tee analysis-output/ipa-dylib-location.txt
+          entry="$(unzip -Z1 "$RUNNER_TEMP/infinitok.ipa" | grep -iE '(^|/)Infinitok\.dylib$' | head -1)"
+          test -n "$entry"
+          unzip -p "$RUNNER_TEMP/infinitok.ipa" "$entry" > "$RUNNER_TEMP/Infinitok.dylib"
+          test -s "$RUNNER_TEMP/Infinitok.dylib"
+          file "$RUNNER_TEMP/Infinitok.dylib" | tee analysis-output/file.txt
+          shasum -a 256 "$RUNNER_TEMP/Infinitok.dylib" | tee analysis-output/sha256.txt
+          stat -f 'size=%z' "$RUNNER_TEMP/Infinitok.dylib" | tee analysis-output/size.txt
+
+      - name: Mach-O and Objective-C inventory
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/Infinitok.dylib"
+          otool -L "$D" > analysis-output/otool-L.txt
+          otool -l "$D" > analysis-output/otool-load-commands.txt
+          nm -m "$D" > analysis-output/nm-m.txt || true
+          nm -u "$D" > analysis-output/nm-undefined.txt || true
+          otool -Iv "$D" > analysis-output/otool-indirect.txt || true
+          otool -ov "$D" > analysis-output/otool-objc.txt || true
+          xcrun llvm-objdump --macho --syms "$D" > analysis-output/llvm-syms.txt || true
+          xcrun llvm-objdump --macho --objc-meta-data "$D" > analysis-output/llvm-objc.txt 2>&1 || true
+
+      - name: Extract strings and Liquid Glass targets
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/Infinitok.dylib"
+          strings -a -t x "$D" > analysis-output/strings-offsets.txt
+          strings -a "$D" | sort -u > analysis-output/strings-unique.txt
+          grep -iE 'liquid|glass|tab.?bar|floating|full.?size|fullscreen|immersive|feed|cellHeight|lastStable|BottomMask|player|video|safe.?area|TTK|TUX|AWEFeed|iOS26|solarium' analysis-output/strings-offsets.txt > analysis-output/relevant-strings.txt || true
+          grep -iE 'MSHook|logos|substrate|substitute|ellekit|fishhook|hookMessage|objc_getClass|class_get|method_get|method_set|class_addMethod' analysis-output/strings-offsets.txt > analysis-output/hook-runtime-strings.txt || true
+
+      - name: Focused Objective-C references
+        run: |
+          set -euo pipefail
+          cat analysis-output/otool-objc.txt analysis-output/llvm-objc.txt analysis-output/nm-m.txt > "$RUNNER_TEMP/allmeta.txt"
+          grep -iE -C 5 'TTKIOS26LiquidGlassSwitch|TTKABTest|TUXAppInfoUtils|TUXExperiments|TTKBizUIComponentDependencyImpl|TTKTabBarController|TTKFakeTabBar|TTKTabBar|TTKTabBarConfig|AWENewFeedTableViewController|TTKFeedTableViewService|AWEFeedCellViewController|AWEFeedViewCell|TTKFeedDescBottomMaskView|cellHeight|lastStableCellHeight|heightForRowAtIndexPath|tabBarHeight|heightForTabBar|LiquidGlass' "$RUNNER_TEMP/allmeta.txt" > analysis-output/focused-objc.txt || true
+
+      - name: Disassemble dylib
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/Infinitok.dylib"
+          otool -tvV "$D" > analysis-output/disassembly.txt || true
+          grep -iE -C 8 'TTKIOS26LiquidGlassSwitch|TTKABTest|TUXAppInfoUtils|TUXExperiments|TTKBizUIComponentDependencyImpl|TTKTabBarController|TTKFakeTabBar|AWENewFeedTableViewController|TTKFeedTableViewService|AWEFeedCellViewController|TTKFeedDescBottomMaskView|cellHeight|tabBarHeight|LiquidGlass' analysis-output/disassembly.txt > analysis-output/focused-disassembly.txt || true
+
+      - name: Print concise findings inputs
+        run: |
+          echo '=== FILE ==='
+          cat analysis-output/file.txt analysis-output/sha256.txt analysis-output/size.txt
+          echo '=== RELEVANT STRINGS ==='
+          cat analysis-output/relevant-strings.txt | head -n 500
+          echo '=== HOOK RUNTIME ==='
+          cat analysis-output/hook-runtime-strings.txt | head -n 200
+          echo '=== UNDEFINED SYMBOLS / HOOK APIS ==='
+          grep -iE 'MSHook|substrate|substitute|ellekit|hook|objc_|class_|method_' analysis-output/nm-undefined.txt | head -n 300 || true
+          echo '=== FOCUSED OBJC ==='
+          cat analysis-output/focused-objc.txt | head -n 1200
+
+      - name: Upload analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinitok-LiquidGlass-Binary-Analysis
+          path: analysis-output/
+          if-no-files-found: error
