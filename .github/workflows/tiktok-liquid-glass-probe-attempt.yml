@@ -52,13 +52,14 @@ jobs:
         run: |
           set -euo pipefail
           brew install radare2
-          python3 -m pip install --user r2pipe
+          python3 -m venv "$RUNNER_TEMP/r2venv"
+          "$RUNNER_TEMP/r2venv/bin/python" -m pip install r2pipe
 
       - name: Cross-reference Liquid Glass strings and hook APIs
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/xrefs.py" <<'PY'
-          import json, os, re
+          import os, re
           import r2pipe
 
           path = os.environ['DYLIB']
@@ -78,6 +79,8 @@ jobs:
           seen_funcs=set()
           with open(out,'w',encoding='utf-8') as f:
               def emit_function(at, why):
+                  if not at:
+                      return
                   info=r.cmdj(f'afij @ {at}') or []
                   if not info:
                       f.write(f'  XREF 0x{at:x} no-function {why}\n')
@@ -112,7 +115,7 @@ jobs:
                       emit_function(ref.get('from',0), f'import:{name}')
           r.quit()
           PY
-          DYLIB="$RUNNER_TEMP/Infinitok.dylib" OUT="analysis-output/r2-liquid-glass-xrefs.txt" python3 "$RUNNER_TEMP/xrefs.py"
+          DYLIB="$RUNNER_TEMP/Infinitok.dylib" OUT="analysis-output/r2-liquid-glass-xrefs.txt" "$RUNNER_TEMP/r2venv/bin/python" "$RUNNER_TEMP/xrefs.py"
 
       - name: Extract exact settings neighbourhood
         run: |
