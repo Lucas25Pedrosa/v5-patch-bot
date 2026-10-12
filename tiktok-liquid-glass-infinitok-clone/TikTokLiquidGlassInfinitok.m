@@ -14,6 +14,7 @@ static NSString *const kSettingsIdentifier = @"tiktok_liquid_glass_settings";
 
 static NSMutableDictionary<NSString *, NSValue *> *gOriginals;
 static NSMutableSet<NSString *> *gInstalled;
+static Class gLiquidGlassPluginClass;
 
 static BOOL Pref(NSString *key) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:key];
@@ -49,15 +50,13 @@ static BOOL InstallHook(Class owner, BOOL classMethod, SEL sel, IMP replacement)
     NSString *key = MethodKey(methodOwner, sel);
     @synchronized(gInstalled) {
         if ([gInstalled containsObject:key]) return YES;
-
         IMP original = method_getImplementation(m);
         if (!original || original == replacement) {
             [gInstalled addObject:key];
             return YES;
         }
-        const char *types = method_getTypeEncoding(m);
         gOriginals[key] = [NSValue valueWithPointer:original];
-
+        const char *types = method_getTypeEncoding(m);
         if (!class_addMethod(methodOwner, sel, replacement, types)) {
             method_setImplementation(m, replacement);
         }
@@ -66,7 +65,7 @@ static BOOL InstallHook(Class owner, BOOL classMethod, SEL sel, IMP replacement)
     return YES;
 }
 
-#pragma mark - Exact Infinitok-style Liquid Glass experiment groups
+#pragma mark - Liquid Glass experiment groups
 
 static NSInteger CategoryForSelector(SEL sel) {
     NSString *s = NSStringFromSelector(sel);
@@ -114,15 +113,14 @@ static BOOL TUXButtonReplacement(id self, SEL sel) {
 static void InstallLiquidGlassExperimentHooks(void) {
     Class exp = NSClassFromString(@"TUXSwiftBase.TUXExperiments");
     if (!exp) exp = NSClassFromString(@"_TtC12TUXSwiftBase14TUXExperiments");
-    NSArray *sels = @[
+    for (NSString *name in @[
         @"isLiquidGlassButtonEnabled", @"isLiquidGlassMenuEnabled",
         @"isLiquidGlassIntroPanelEnabled", @"isLiquidGlassPopoverEnabled",
         @"isLiquidGlassToastEnabled", @"isLiquidGlassCenterToastEnabled",
         @"isLiquidGlassBottomToastEnabled", @"isLiquidGlassFloatingNoticeEnabled",
         @"isLiquidGlassInAppPushEnabled", @"isLiquidGlassModalEnabled",
         @"isLiquidGlassSheetEnabled", @"isLiquidGlassDialogEnabled"
-    ];
-    for (NSString *name in sels) {
+    ]) {
         SEL s = NSSelectorFromString(name);
         InstallHook(exp, NO, s, (IMP)TUXExperimentReplacement);
         InstallHook(exp, YES, s, (IMP)TUXExperimentReplacement);
@@ -132,7 +130,7 @@ static void InstallLiquidGlassExperimentHooks(void) {
     InstallHook(button, NO, NSSelectorFromString(@"isLiquidGlassEnabled"), (IMP)TUXButtonReplacement);
 }
 
-#pragma mark - Infinitok glass tab bar path
+#pragma mark - Infinitok-style glass tab bar
 
 static BOOL PadBarBoolReplacement(id self, SEL sel) {
     IMP imp = FindOriginal(self, sel);
@@ -144,15 +142,12 @@ static double PadBarDoubleReplacement(id self, SEL sel) {
     IMP imp = FindOriginal(self, sel);
     double original = imp ? ((double(*)(id,SEL))imp)(self, sel) : 0.0;
     if (!(Pref(kBarKey) && Pref(kBarLargeKey))) return original;
-
     NSString *name = NSStringFromSelector(sel);
     if ([name isEqualToString:@"padPaddingForTab"]) {
         CGFloat target = CGRectGetWidth(UIScreen.mainScreen.bounds) / 5.0 * 0.45;
         return MAX(original, target);
     }
-    if ([name isEqualToString:@"padTabBarImageSize"]) {
-        return original * 1.25;
-    }
+    if ([name isEqualToString:@"padTabBarImageSize"]) return original * 1.25;
     return original;
 }
 
@@ -183,15 +178,12 @@ static UIView *FindRoundedCapsule(UIView *bar) {
     UIView *best = nil;
     CGFloat bestWidth = 0.0;
     NSMutableArray<UIView *> *level = [NSMutableArray arrayWithObject:bar];
-
-    // Infinitok scans three descendant levels and chooses a large, rounded pill.
     for (NSUInteger depth = 0; depth < 3 && level.count; depth++) {
         NSMutableArray<UIView *> *next = [NSMutableArray array];
         for (UIView *parent in level) {
             for (UIView *v in parent.subviews) {
                 [next addObject:v];
-                CGRect b = v.bounds;
-                CGFloat w = CGRectGetWidth(b), h = CGRectGetHeight(b);
+                CGFloat w = CGRectGetWidth(v.bounds), h = CGRectGetHeight(v.bounds);
                 CGFloat r = v.layer.cornerRadius;
                 if (h >= 30.0 && w >= 120.0 && w < barWidth - 24.0 &&
                     r >= (h / 3.0 - 1.0) && w > bestWidth) {
@@ -210,19 +202,17 @@ static void ApplyBarLayout(UIView *bar) {
     bar.opaque = NO;
     bar.backgroundColor = UIColor.clearColor;
     HideLegacyBarDecor(bar);
+    if (!Pref(kBarLargeKey)) return;
 
-    if (Pref(kBarLargeKey)) {
-        UIView *pill = FindRoundedCapsule(bar);
-        UIView *parent = pill.superview;
-        if (pill && parent) {
-            CGFloat targetWidth = MAX(0.0, CGRectGetWidth(parent.bounds) - 32.0);
-            CGRect f = pill.frame;
-            if (targetWidth > CGRectGetWidth(f) + 1.0) {
-                f.origin.x = 16.0;
-                f.size.width = targetWidth;
-                pill.frame = f;
-            }
-        }
+    UIView *pill = FindRoundedCapsule(bar);
+    UIView *parent = pill.superview;
+    if (!pill || !parent) return;
+    CGFloat targetWidth = MAX(0.0, CGRectGetWidth(parent.bounds) - 32.0);
+    CGRect f = pill.frame;
+    if (targetWidth > CGRectGetWidth(f) + 1.0) {
+        f.origin.x = 16.0;
+        f.size.width = targetWidth;
+        pill.frame = f;
     }
 }
 
@@ -240,8 +230,9 @@ static void InstallGlassBarHooks(void) {
         @"isPadCompactTabBarActionsEnabled",
         @"isTabBarLayoutEnabled"
     ]) {
-        InstallHook(pad, NO, NSSelectorFromString(name), (IMP)PadBarBoolReplacement);
-        InstallHook(pad, YES, NSSelectorFromString(name), (IMP)PadBarBoolReplacement);
+        SEL s = NSSelectorFromString(name);
+        InstallHook(pad, NO, s, (IMP)PadBarBoolReplacement);
+        InstallHook(pad, YES, s, (IMP)PadBarBoolReplacement);
     }
     for (NSString *name in @[@"padPaddingForTab", @"padTabBarImageSize"]) {
         InstallHook(pad, NO, NSSelectorFromString(name), (IMP)PadBarDoubleReplacement);
@@ -262,11 +253,7 @@ static void InstallGlassBarHooks(void) {
 @end
 
 @implementation TLGSettingsController
-
-- (instancetype)init {
-    return [super initWithStyle:UITableViewStyleInsetGrouped];
-}
-
+- (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Liquid Glass";
@@ -275,87 +262,63 @@ static void InstallGlassBarHooks(void) {
     self.tableView.rowHeight = UITableViewAutomaticDimension;
     self.tableView.estimatedRowHeight = 72.0;
 }
-
-- (void)closeSettings {
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
+- (void)closeSettings { [self dismissViewControllerAnimated:YES completion:nil]; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section == 0 ? 4 : 2;
-}
-
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section == 0 ? @"Appearance" : @"Feed Content";
-}
-
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { return section == 0 ? 4 : 2; }
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section { return section == 0 ? @"Appearance" : @"Feed Content"; }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if (section == 1) return @"Restart TikTok after changing the Liquid Glass tab bar options.";
-    return nil;
+    return section == 1 ? @"Restart TikTok after changing the Liquid Glass tab bar options." : nil;
 }
-
 - (NSArray<NSDictionary *> *)rowsForSection:(NSInteger)section {
-    if (section == 0) {
-        return @[
-            @{@"title":@"Enable Liquid Glass UI", @"detail":@"Force-enable TikTok's in-development Liquid Glass visual redesign, if present in this app build", @"key":kMasterKey},
-            @{@"title":@"Liquid Glass: Buttons/Menus/Panels", @"detail":@"Applies to buttons, menus, and intro panels — needs Enable Liquid Glass UI on", @"key":kControlsKey},
-            @{@"title":@"Liquid Glass: Toasts/Notices", @"detail":@"Applies to toasts, banners, and in-app push notices — needs Enable Liquid Glass UI on", @"key":kNoticesKey},
-            @{@"title":@"Liquid Glass: Modals/Sheets", @"detail":@"Applies to modals, sheets, and dialogs — needs Enable Liquid Glass UI on", @"key":kOverlaysKey}
-        ];
-    }
+    if (section == 0) return @[
+        @{@"title":@"Enable Liquid Glass UI", @"detail":@"Force-enable TikTok's in-development Liquid Glass visual redesign, if present in this app build", @"key":kMasterKey},
+        @{@"title":@"Liquid Glass: Buttons/Menus/Panels", @"detail":@"Applies to buttons, menus, and intro panels — needs Enable Liquid Glass UI on", @"key":kControlsKey},
+        @{@"title":@"Liquid Glass: Toasts/Notices", @"detail":@"Applies to toasts, banners, and in-app push notices — needs Enable Liquid Glass UI on", @"key":kNoticesKey},
+        @{@"title":@"Liquid Glass: Modals/Sheets", @"detail":@"Applies to modals, sheets, and dialogs — needs Enable Liquid Glass UI on", @"key":kOverlaysKey}
+    ];
     return @[
         @{@"title":@"Liquid glass tab bar", @"detail":@"Uses the rounded iPad-style compact tab bar. Restart TikTok after changing.", @"key":kBarKey},
         @{@"title":@"Liquid glass bar: full size", @"detail":@"Stretches the Liquid Glass tab bar and enlarges its icons. Needs Liquid glass tab bar on.", @"key":kBarLargeKey}
     ];
 }
-
 - (BOOL)rowEnabledAtIndexPath:(NSIndexPath *)ip {
     if (ip.section == 0 && ip.row > 0) return Pref(kMasterKey);
     if (ip.section == 1 && ip.row == 1) return Pref(kBarKey);
     return YES;
 }
-
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)ip {
     static NSString *reuse = @"TLGSwitchCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuse];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:reuse];
-
     NSDictionary *row = [self rowsForSection:ip.section][ip.row];
     cell.textLabel.text = row[@"title"];
     cell.detailTextLabel.text = row[@"detail"];
     cell.detailTextLabel.numberOfLines = 0;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-
     UISwitch *sw = [UISwitch new];
     sw.on = Pref(row[@"key"]);
     sw.enabled = [self rowEnabledAtIndexPath:ip];
     sw.tag = ip.section * 100 + ip.row;
     [sw addTarget:self action:@selector(switchChanged:) forControlEvents:UIControlEventValueChanged];
     cell.accessoryView = sw;
-
     CGFloat alpha = sw.enabled ? 1.0 : 0.45;
     cell.textLabel.alpha = alpha;
     cell.detailTextLabel.alpha = alpha;
     return cell;
 }
-
 - (void)switchChanged:(UISwitch *)sender {
     NSInteger section = sender.tag / 100, rowIndex = sender.tag % 100;
     NSArray *rows = [self rowsForSection:section];
     if (rowIndex < 0 || rowIndex >= (NSInteger)rows.count) return;
     NSString *key = rows[rowIndex][@"key"];
     SetPref(key, sender.isOn);
-
-    if ([key isEqualToString:kMasterKey] || [key isEqualToString:kBarKey]) {
-        [self.tableView reloadData];
-    }
+    if ([key isEqualToString:kMasterKey] || [key isEqualToString:kBarKey]) [self.tableView reloadData];
     InstallLiquidGlassExperimentHooks();
     InstallGlassBarHooks();
 }
 @end
 
-#pragma mark - RXMenuFix-style TikTok settings insertion
+#pragma mark - RXMenuFix-compatible TikTok settings insertion
 
 static id MsgId0(id obj, SEL sel) {
     return obj && [obj respondsToSelector:sel] ? ((id(*)(id,SEL))objc_msgSend)(obj, sel) : nil;
@@ -368,6 +331,53 @@ static void MsgVoid1(id obj, SEL sel, id arg) {
 }
 static void MsgVoidInt(id obj, SEL sel, NSInteger value) {
     if (obj && [obj respondsToSelector:sel]) ((void(*)(id,SEL,NSInteger))objc_msgSend)(obj, sel, value);
+}
+
+static UIViewController *TopViewController(void) {
+    UIWindow *window = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+            if (w.isKeyWindow) { window = w; break; }
+        }
+        if (window) break;
+    }
+    UIViewController *vc = window.rootViewController;
+    while (vc.presentedViewController) vc = vc.presentedViewController;
+    if ([vc isKindOfClass:UITabBarController.class]) vc = ((UITabBarController *)vc).selectedViewController;
+    if ([vc isKindOfClass:UINavigationController.class]) vc = ((UINavigationController *)vc).topViewController;
+    return vc ?: window.rootViewController;
+}
+
+static void LiquidGlassPluginDidSelect(id self, SEL sel, NSInteger index) {
+    (void)self; (void)sel; (void)index;
+    TLGSettingsController *settings = [TLGSettingsController new];
+    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settings];
+    nav.modalPresentationStyle = UIModalPresentationFormSheet;
+    UIViewController *top = TopViewController();
+    if (top) [top presentViewController:nav animated:YES completion:nil];
+}
+
+static Class EnsureLiquidGlassPluginClass(void) {
+    if (gLiquidGlassPluginClass) return gLiquidGlassPluginClass;
+    Class existing = NSClassFromString(@"TLGLiquidGlassSettingsPlugin");
+    if (existing) {
+        gLiquidGlassPluginClass = existing;
+        return existing;
+    }
+
+    Class base = NSClassFromString(@"TTKSettingsBaseCellPlugin");
+    if (!base) return Nil;
+    Class sub = objc_allocateClassPair(base, "TLGLiquidGlassSettingsPlugin", 0);
+    if (!sub) return Nil;
+
+    SEL selectSel = NSSelectorFromString(@"didSelectItemAtIndex:");
+    Method baseMethod = class_getInstanceMethod(base, selectSel);
+    const char *types = baseMethod ? method_getTypeEncoding(baseMethod) : "v@:q";
+    class_addMethod(sub, selectSel, (IMP)LiquidGlassPluginDidSelect, types);
+    objc_registerClassPair(sub);
+    gLiquidGlassPluginClass = sub;
+    return sub;
 }
 
 static BOOL IsAccountSection(id section) {
@@ -389,14 +399,14 @@ static NSArray *SectionModels(id section) {
 
 static void AddLiquidGlassSettingsRowIfNeeded(id section) {
     if (!section || !IsAccountSection(section)) return;
-
-    for (id plugin in SectionModels(section)) {
+    NSArray *models = SectionModels(section);
+    for (id plugin in models) {
         id item = MsgId0(plugin, NSSelectorFromString(@"itemModel"));
         id ident = MsgId0(item, NSSelectorFromString(@"identifier"));
         if ([ident isKindOfClass:NSString.class] && [(NSString *)ident isEqualToString:kSettingsIdentifier]) return;
     }
 
-    Class pluginClass = NSClassFromString(@"TTKSettingsBaseCellPlugin");
+    Class pluginClass = EnsureLiquidGlassPluginClass();
     Class modelClass = NSClassFromString(@"AWESettingItemModel");
     if (!pluginClass || !modelClass) return;
 
@@ -415,9 +425,11 @@ static void AddLiquidGlassSettingsRowIfNeeded(id section) {
     MsgVoidInt(model, NSSelectorFromString(@"setType:"), 99);
     MsgVoid1(plugin, NSSelectorFromString(@"setItemModel:"), model);
 
+    // Never modify or replace RX's item. We only append our own plugin to the same section.
+    NSInteger insertIndex = models.count;
     SEL insert = NSSelectorFromString(@"insertModel:atIndex:animated:");
     if ([section respondsToSelector:insert]) {
-        ((void(*)(id,SEL,id,NSInteger,BOOL))objc_msgSend)(section, insert, plugin, 0, NO);
+        ((void(*)(id,SEL,id,NSInteger,BOOL))objc_msgSend)(section, insert, plugin, insertIndex, NO);
     }
 }
 
@@ -433,43 +445,13 @@ static void SettingsSectionSetModels(id self, SEL sel, id models) {
     AddLiquidGlassSettingsRowIfNeeded(self);
 }
 
-static UIViewController *TopViewController(void) {
-    UIWindow *window = nil;
-    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-        if (![scene isKindOfClass:UIWindowScene.class]) continue;
-        for (UIWindow *w in ((UIWindowScene *)scene).windows) {
-            if (w.isKeyWindow) { window = w; break; }
-        }
-        if (window) break;
-    }
-    UIViewController *vc = window.rootViewController;
-    while (vc.presentedViewController) vc = vc.presentedViewController;
-    if ([vc isKindOfClass:UINavigationController.class]) vc = ((UINavigationController *)vc).topViewController;
-    if ([vc isKindOfClass:UITabBarController.class]) vc = ((UITabBarController *)vc).selectedViewController;
-    return vc ?: window.rootViewController;
-}
-
-static void SettingsPluginDidSelect(id self, SEL sel, NSInteger index) {
-    id item = MsgId0(self, NSSelectorFromString(@"itemModel"));
-    id ident = MsgId0(item, NSSelectorFromString(@"identifier"));
-    if ([ident isKindOfClass:NSString.class] && [(NSString *)ident isEqualToString:kSettingsIdentifier]) {
-        TLGSettingsController *settings = [TLGSettingsController new];
-        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:settings];
-        nav.modalPresentationStyle = UIModalPresentationFormSheet;
-        [TopViewController() presentViewController:nav animated:YES completion:nil];
-        return;
-    }
-    IMP imp = FindOriginal(self, sel);
-    if (imp) ((void(*)(id,SEL,NSInteger))imp)(self, sel, index);
-}
-
 static void InstallSettingsHooks(void) {
+    EnsureLiquidGlassPluginClass();
     Class section = NSClassFromString(@"AWESettingsNormalSectionViewModel");
     InstallHook(section, NO, @selector(viewDidLoad), (IMP)SettingsSectionViewDidLoad);
     InstallHook(section, NO, NSSelectorFromString(@"setModelsArray:"), (IMP)SettingsSectionSetModels);
-
-    Class plugin = NSClassFromString(@"TTKSettingsBaseCellPlugin");
-    InstallHook(plugin, NO, NSSelectorFromString(@"didSelectItemAtIndex:"), (IMP)SettingsPluginDidSelect);
+    InstallHook(section, NO, NSSelectorFromString(@"setModels:"), (IMP)SettingsSectionSetModels);
+    // Deliberately no global didSelectItemAtIndex: hook: RXMenuFix keeps full ownership of its own plugin.
 }
 
 #pragma mark - Installer
@@ -496,6 +478,6 @@ static void TLGInit(void) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{ InstallAll(); });
         }
-        NSLog(@"[TikTokLiquidGlass] 0.2 menu replica loaded");
+        NSLog(@"[TikTokLiquidGlass] 0.2.1 RX-compatible loaded");
     }
 }
