@@ -1,0 +1,83 @@
+name: Analyze Infinitok Binary
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - infinitok-binary-analysis
+    paths:
+      - ".github/workflows/infinitok-binary-analysis.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download public IPA Vault build
+        run: |
+          set -euo pipefail
+          curl -L --fail --retry 3 \
+            'https://pub-dd800571175348b6a2745b3396360028.r2.dev/TikTok-47.1.0-Infinitok.ipa' \
+            -o /tmp/Infinitok.ipa
+          mkdir -p /tmp/infinitok
+          unzip -q /tmp/Infinitok.ipa -d /tmp/infinitok
+
+      - name: Locate Infinitok dylib
+        run: |
+          set -euo pipefail
+          mkdir -p analysis
+          find /tmp/infinitok -type f \( -iname '*Infinitok*.dylib' -o -iname '*Infini*.dylib' \) -print | tee analysis/candidates.txt
+          DYLIB="$(find /tmp/infinitok -type f \( -iname '*Infinitok*.dylib' -o -iname '*Infini*.dylib' \) -print -quit)"
+          test -n "$DYLIB"
+          cp "$DYLIB" analysis/Infinitok-public.dylib
+          echo "$DYLIB" > analysis/original-path.txt
+
+      - name: Analyze Mach-O
+        run: |
+          set -euo pipefail
+          D=analysis/Infinitok-public.dylib
+          {
+            echo '=== FILE ==='
+            file "$D"
+            echo
+            echo '=== SIZE ==='
+            stat -f '%z bytes' "$D"
+            echo
+            echo '=== SHA256 ==='
+            shasum -a 256 "$D"
+            echo
+            echo '=== LOAD LIBRARIES ==='
+            otool -L "$D" || true
+            echo
+            echo '=== UUID / HEADERS ==='
+            dwarfdump --uuid "$D" || true
+            otool -hv "$D" || true
+            echo
+            echo '=== SYMBOLS (nm) ==='
+            nm -m "$D" || true
+          } > analysis/report.txt 2>&1
+
+          strings -a "$D" > analysis/all_strings.txt
+          grep -Eai 'infinitok|liquid|glass|tab.?bar|floating|full.?size|tux|ttk|awefeed|feed|cellheight|bottommask|safearea|immers|fullscreen|ios26|platter|mshook|substrate|method_|class_' \
+            analysis/all_strings.txt > analysis/relevant_strings.txt || true
+
+          otool -ov "$D" > analysis/objc.txt 2>&1 || true
+          otool -l "$D" > analysis/load-commands.txt 2>&1 || true
+          otool -tvV "$D" > analysis/disasm.txt 2>&1 || true
+
+          echo >> analysis/report.txt
+          echo '=== RELEVANT STRINGS ===' >> analysis/report.txt
+          cat analysis/relevant_strings.txt >> analysis/report.txt
+
+      - name: Upload analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: Infinitok-Binary-Analysis
+          path: analysis/
+          if-no-files-found: error
