@@ -7,6 +7,7 @@ LIBRARY_NAME = iQKeepDeletedExceptionsProbe
 
 iQKeepDeletedExceptionsProbe_FILES = Probe.m
 iQKeepDeletedExceptionsProbe_FRAMEWORKS = Foundation
+iQKeepDeletedExceptionsProbe_LIBRARIES = sqlite3
 iQKeepDeletedExceptionsProbe_CFLAGS = -fobjc-arc -Wall -Wextra
 iQKeepDeletedExceptionsProbe_LDFLAGS = -Wl,-install_name,@rpath/iQKeepDeletedExceptionsProbe.dylib
 iQKeepDeletedExceptionsProbe_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
