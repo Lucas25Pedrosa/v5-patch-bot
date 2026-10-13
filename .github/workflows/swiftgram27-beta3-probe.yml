@@ -1,0 +1,67 @@
+name: Build Swiftgram 27 Beta 3 Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "swiftgram27-beta3-probe/**"
+      - ".github/workflows/swiftgram27-beta3-probe.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: swiftgram27-beta3-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 probe
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name Swiftgram27Beta3Probe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/Swiftgram27Beta3Probe.dylib
+          strings artifacts/Swiftgram27Beta3Probe.dylib | grep -q "BETA3_LAYOUT_OK"
+          strings artifacts/Swiftgram27Beta3Probe.dylib | grep -q "BRK22_SEEN_AT_TELEGRAMCORE_PEER_GETTER"
+          shasum -a 256 artifacts/Swiftgram27Beta3Probe.dylib > artifacts/Swiftgram27Beta3Probe.SHA256.txt
+          file artifacts/Swiftgram27Beta3Probe.dylib
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Swiftgram27Beta3Probe-0.1-arm64
+          path: swiftgram27-beta3-probe/artifacts/
+          if-no-files-found: error
+
+      - name: Publish test build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-output/iqtele
+          cp swiftgram27-beta3-probe/artifacts/Swiftgram27Beta3Probe.dylib build-output/iqtele/Swiftgram27Beta3Probe.dylib
+          cp swiftgram27-beta3-probe/artifacts/Swiftgram27Beta3Probe.SHA256.txt build-output/iqtele/Swiftgram27Beta3Probe.SHA256.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-output/iqtele/Swiftgram27Beta3Probe.dylib build-output/iqtele/Swiftgram27Beta3Probe.SHA256.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Build Swiftgram 27 Beta 3 probe"
+            git push
+          fi
