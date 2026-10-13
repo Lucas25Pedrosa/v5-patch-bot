@@ -1,1 +1,1 @@
-8b7549e6f2edc7b04b661b8337352891c13de24fe308225b5bf4f0291deda8a3  artifacts/iQTeleLocation.dylib
+ddc45b27c6170ffd931e1521997930cdc4ade383559b61557cea8813370813a8  artifacts/iQTeleLocation.dylib
