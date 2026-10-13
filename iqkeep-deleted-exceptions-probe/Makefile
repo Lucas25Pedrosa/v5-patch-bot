@@ -5,7 +5,7 @@ include $(THEOS)/makefiles/common.mk
 
 LIBRARY_NAME = iQKeepDeletedExceptionsProbe
 
-iQKeepDeletedExceptionsProbe_FILES = Probe.m ProbeHooks.S
+iQKeepDeletedExceptionsProbe_FILES = Probe.m
 iQKeepDeletedExceptionsProbe_FRAMEWORKS = Foundation
 iQKeepDeletedExceptionsProbe_CFLAGS = -fobjc-arc -Wall -Wextra
 iQKeepDeletedExceptionsProbe_LDFLAGS = -Wl,-install_name,@rpath/iQKeepDeletedExceptionsProbe.dylib
