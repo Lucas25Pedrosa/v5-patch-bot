@@ -1,0 +1,9 @@
+Package: com.lucas.iqkeepdeletedexceptionsprobe
+Name: iQKeepDeleted Exceptions Probe
+Version: 0.1
+Architecture: iphoneos-arm
+Description: Probe passiva para observar o ledger de exclusoes recusadas do iqKeepDeleted sem alterar o comportamento do Telegram.
+Maintainer: Lucas
+Author: Lucas
+Section: Tweaks
+Depends: firmware (>= 14.0)
