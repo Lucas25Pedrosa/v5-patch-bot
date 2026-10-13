@@ -1,0 +1,67 @@
+name: Build Swiftgram Postbox Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "swiftgram-postbox-probe/**"
+      - ".github/workflows/swiftgram-postbox-probe.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: swiftgram-postbox-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: |
+          brew install ldid
+
+      - name: Build arm64 diagnostic dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name SwiftgramPostboxProbe.dylib -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/SwiftgramPostboxProbe.dylib
+          shasum -a 256 artifacts/SwiftgramPostboxProbe.dylib > artifacts/SwiftgramPostboxProbe.SHA256.txt
+          file artifacts/SwiftgramPostboxProbe.dylib
+          strings -a artifacts/SwiftgramPostboxProbe.dylib | grep -F "SwiftgramPostboxProbe 0.1"
+          strings -a artifacts/SwiftgramPostboxProbe.dylib | grep -F "DIRECT_RUNTIME_PATCH_DETECTED"
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwiftgramPostboxProbe-0.1-arm64
+          path: swiftgram-postbox-probe/artifacts/
+          if-no-files-found: error
+
+      - name: Publish test build
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p build-output/iqtele
+          cp swiftgram-postbox-probe/artifacts/SwiftgramPostboxProbe.dylib build-output/iqtele/SwiftgramPostboxProbe.dylib
+          cp swiftgram-postbox-probe/artifacts/SwiftgramPostboxProbe.SHA256.txt build-output/iqtele/SwiftgramPostboxProbe.SHA256.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-output/iqtele/SwiftgramPostboxProbe.dylib build-output/iqtele/SwiftgramPostboxProbe.SHA256.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Build Swiftgram Postbox diagnostic probe"
+            git push
+          fi
