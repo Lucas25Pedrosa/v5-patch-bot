@@ -4,9 +4,11 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-// XLiquidGlassNative 3.1 Beta 2
-// Single extra feature over 3.0: Tab Bar icon tint.
-// No badge, sidebar, label, pill/platter, blur, navigation or legacy-host fixes.
+// XLiquidGlassNative 3.1 Beta 6
+// Based directly on Beta 2, the last runtime-validated tint baseline.
+// Keeps Beta 2 icon discovery unchanged.
+// Active-tab refresh is passive and reads only UIAccessibilityTraitSelected.
+// No hooks into selection/update methods.
 
 static NSString *const kXLG31TabTintModeKey = @"XLiquidGlassTabBarTintMode";
 
@@ -25,6 +27,10 @@ static IMP gXLG31OrigSettingsCell = NULL;
 static IMP gXLG31OrigSettingsFooter = NULL;
 static IMP gXLG31OrigSettingsDidSelect = NULL;
 static BOOL gXLG31SettingsHooked = NO;
+
+static NSString *gXLG31LastSelectionSignature = nil;
+static NSUInteger gXLG31SelectionPollGeneration = 0;
+static const NSTimeInterval kXLG31SelectionPollInterval = 0.12;
 
 #pragma mark - Helpers
 
@@ -146,6 +152,16 @@ static UIColor *XLG31ResolvedThemeColor(void) {
     return UIColor.systemBlueColor;
 }
 
+static UIColor *XLG31NativeInactiveTabColor(void) {
+    Class tabViewClass = NSClassFromString(@"T1TabView");
+    SEL itemColorSEL = NSSelectorFromString(@"itemColor");
+    if (tabViewClass && [tabViewClass respondsToSelector:itemColorSEL]) {
+        id color = ((id(*)(id,SEL))objc_msgSend)(tabViewClass, itemColorSEL);
+        if ([color isKindOfClass:UIColor.class]) return color;
+    }
+    return UIColor.secondaryLabelColor;
+}
+
 #pragma mark - XNavigation.TabBarItemView
 
 static UIView *XLG31AncestorNamed(UIView *view, NSString *name) {
@@ -193,16 +209,13 @@ static UIImageView *XLG31FindImageViewRecursive(UIView *root, NSUInteger depth) 
 static UIImageView *XLG31ImageViewForItem(UIView *item) {
     if (!item) return nil;
 
-    // This is the path that worked in the previous implementation:
-    // the icon is commonly an immediate UIImageView child of TabBarItemView.
+    // Beta 2 validated path: keep this resolver unchanged.
     for (UIView *subview in item.subviews ?: @[]) {
         if ([subview isKindOfClass:UIImageView.class]) {
             return (UIImageView *)subview;
         }
     }
 
-    // 12.35 can expose the glyph through fields/containers, so keep these
-    // as compatibility fallbacks without touching any other visual element.
     id direct = XLG31SafeValueForKey(item, @"imageView");
     if ([direct isKindOfClass:UIImageView.class]) {
         return (UIImageView *)direct;
@@ -219,8 +232,12 @@ static UIImageView *XLG31ImageViewForItem(UIView *item) {
 
 static BOOL XLG31ItemIsSelected(UIView *item) {
     if (!item) return NO;
+
+    // X 12.35 probe validated this as the reliable active-tab signal.
     if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) return YES;
 
+    // Keep Beta 2 fallbacks for compatibility, but the passive refresh uses
+    // the accessibility trait as its change signal.
     for (NSString *key in @[@"selected", @"isSelected"]) {
         id value = XLG31SafeValueForKey(item, key);
         if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
@@ -247,24 +264,14 @@ static BOOL XLG31ItemIsSelected(UIView *item) {
     return NO;
 }
 
-static void XLG31ApplyTintToItem(UIView *item) {
-    if (!item || XLG31ItemIsProfile(item)) return;
+static void XLG31SetTintColorForItem(UIView *item, UIColor *color) {
+    if (!item || !color) return;
 
-    XLG31TabTintMode mode = XLG31TintMode();
-    if (mode == XLG31TabTintModeNative) return;
-
-    BOOL selected = XLG31ItemIsSelected(item);
-    if (mode == XLG31TabTintModeActive && !selected) return;
-
-    UIColor *themeColor = XLG31ResolvedThemeColor();
-
-    // Set the semantic tint chain first. On 12.35 the glyph may inherit tint
-    // from its item/container even when the UIImageView is not directly exposed.
-    item.tintColor = themeColor;
+    item.tintColor = color;
 
     id glyphContainer = XLG31SafeValueForKey(item, @"glyphContainer");
     if ([glyphContainer isKindOfClass:UIView.class]) {
-        ((UIView *)glyphContainer).tintColor = themeColor;
+        ((UIView *)glyphContainer).tintColor = color;
     }
 
     UIImageView *imageView = XLG31ImageViewForItem(item);
@@ -275,7 +282,26 @@ static void XLG31ApplyTintToItem(UIView *item) {
         imageView.image =
             [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     }
-    imageView.tintColor = themeColor;
+    imageView.tintColor = color;
+}
+
+static void XLG31ApplyTintToItem(UIView *item) {
+    if (!item || XLG31ItemIsProfile(item)) return;
+
+    XLG31TabTintMode mode = XLG31TintMode();
+    if (mode == XLG31TabTintModeNative) return;
+
+    BOOL selected = XLG31ItemIsSelected(item);
+
+    if (mode == XLG31TabTintModeActive) {
+        UIColor *color = selected
+            ? XLG31ResolvedThemeColor()
+            : XLG31NativeInactiveTabColor();
+        XLG31SetTintColorForItem(item, color);
+        return;
+    }
+
+    XLG31SetTintColorForItem(item, XLG31ResolvedThemeColor());
 }
 
 static void XLG31ItemLayout(id self, SEL _cmd) {
@@ -316,6 +342,79 @@ static BOOL XLG31ViewIsItem(UIView *view, Class itemClass) {
            [name hasSuffix:@".TabBarItemView"];
 }
 
+static void XLG31CollectVisibleItems(UIView *view,
+                                     Class itemClass,
+                                     NSMutableArray<UIView *> *items) {
+    if (!view || view.hidden || view.alpha <= 0.01) return;
+
+    if (XLG31ViewIsItem(view, itemClass) && view.window) {
+        [items addObject:view];
+    }
+
+    for (UIView *subview in view.subviews ?: @[]) {
+        XLG31CollectVisibleItems(subview, itemClass, items);
+    }
+}
+
+static NSArray<UIView *> *XLG31VisibleTabItems(void) {
+    NSMutableArray<UIView *> *items = [NSMutableArray array];
+    Class itemClass = XLG31ItemClass();
+
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+            if (!window.hidden && window.alpha > 0.01) {
+                XLG31CollectVisibleItems(window, itemClass, items);
+            }
+        }
+    }
+    return items;
+}
+
+static NSString *XLG31SelectionSignature(NSArray<UIView *> *items) {
+    NSMutableString *signature = [NSMutableString string];
+    for (UIView *item in items) {
+        BOOL selected = (item.accessibilityTraits & UIAccessibilityTraitSelected) != 0;
+        [signature appendFormat:@"%p:%d|", item, selected];
+    }
+    return signature;
+}
+
+static void XLG31ApplyActiveModeToVisibleItems(NSArray<UIView *> *items) {
+    if (XLG31TintMode() != XLG31TabTintModeActive) return;
+    for (UIView *item in items) {
+        XLG31ApplyTintToItem(item);
+    }
+}
+
+static void XLG31ScheduleSelectionPoll(NSUInteger generation) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(kXLG31SelectionPollInterval * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (generation != gXLG31SelectionPollGeneration) return;
+
+        if (XLG31TintMode() == XLG31TabTintModeActive) {
+            NSArray<UIView *> *items = XLG31VisibleTabItems();
+            NSString *signature = XLG31SelectionSignature(items);
+            if (![signature isEqualToString:gXLG31LastSelectionSignature]) {
+                gXLG31LastSelectionSignature = [signature copy];
+                XLG31ApplyActiveModeToVisibleItems(items);
+            }
+        } else {
+            gXLG31LastSelectionSignature = nil;
+        }
+
+        XLG31ScheduleSelectionPoll(generation);
+    });
+}
+
+static void XLG31StartSelectionPoll(void) {
+    gXLG31SelectionPollGeneration++;
+    NSUInteger generation = gXLG31SelectionPollGeneration;
+    gXLG31LastSelectionSignature = nil;
+    XLG31ScheduleSelectionPoll(generation);
+}
+
 static void XLG31RefreshViewTree(UIView *view, Class itemClass) {
     if (!view) return;
 
@@ -331,12 +430,19 @@ static void XLG31RefreshViewTree(UIView *view, Class itemClass) {
 
 static void XLG31RefreshTabItems(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        gXLG31LastSelectionSignature = nil;
         Class itemClass = XLG31ItemClass();
         for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
             if (![scene isKindOfClass:UIWindowScene.class]) continue;
             for (UIWindow *window in ((UIWindowScene *)scene).windows) {
                 if (!window.hidden) XLG31RefreshViewTree(window, itemClass);
             }
+        }
+
+        if (XLG31TintMode() == XLG31TabTintModeActive) {
+            NSArray<UIView *> *items = XLG31VisibleTabItems();
+            XLG31ApplyActiveModeToVisibleItems(items);
+            gXLG31LastSelectionSignature = [XLG31SelectionSignature(items) copy];
         }
     });
 }
@@ -561,8 +667,9 @@ static void XLG31ScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlass31TabTintInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassNative] 3.1 Beta 2 tab icon tint module loaded");
+        NSLog(@"[XLiquidGlassNative] 3.1 Beta 6 tab icon tint module loaded - Beta 2 resolver + passive active refresh");
         XLG31Install();
+        XLG31StartSelectionPoll();
         XLG31ScheduleRetry(0.00);
         XLG31ScheduleRetry(0.05);
         XLG31ScheduleRetry(0.20);
