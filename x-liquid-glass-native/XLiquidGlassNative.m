@@ -17,10 +17,6 @@ static BOOL gInstallGateHooked = NO;
 static BOOL gInstallGateForAccountHooked = NO;
 static BOOL gAccountGateHooked = NO;
 
-static BOOL XLGNativeEnabled(void) {
-    return YES;
-}
-
 static BOOL XLGNativeHookMethod(Class cls,
                                 SEL sel,
                                 BOOL classMethod,
