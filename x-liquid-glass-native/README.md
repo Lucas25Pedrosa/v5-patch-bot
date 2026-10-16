@@ -22,10 +22,12 @@ Inside the submenu there is only one option: enable or disable Liquid Glass. The
 
 ## Distribution credits
 
-The NeoFreeBird root settings page receives the same two credit sections used by the previous distribution build:
+The NeoFreeBird root settings page receives the same two credit sections used by the previous distribution build, with polished public labels:
 
-- `LiquidGlass` -> `Lucas25Pedrosa` (`@Lucas25Pedrosa`), avatar from GitHub and tap action to `https://github.com/Lucas25Pedrosa`
+- `Liquid Glass` -> `Lucas` (`@Lucas25Pedrosa`), avatar from GitHub and tap action to `https://github.com/Lucas25Pedrosa`
 - `IPA Source` -> `IPA Vault` (`@ipavault`), avatar from GitHub and tap action to `https://t.me/ipavault`
+
+The public display name is `Lucas`, while the username and redirect remain `Lucas25Pedrosa`.
 
 The credits are implemented in the separate `XLiquidGlassDistributionCredits.m` source file so they remain isolated from the Liquid Glass activation code and can be audited independently.
 
