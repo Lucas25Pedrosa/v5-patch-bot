@@ -1,0 +1,127 @@
+name: RX pt-BR build
+
+on:
+  push:
+    branches:
+      - tmp-rx-ptbr-2.0.1
+    paths:
+      - .github/workflows/rx_ptbr_build.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-rx-ptbr-2.0.1
+          fetch-depth: 0
+      - name: Build and validate pt-BR localization
+        run: |
+          python3 - <<'PY'
+          import collections, json, pathlib, plistlib, re, urllib.request, zipfile
+
+          ref='829f66e7b3f052605484796aa1ec56ad2e999d5a'
+          base=f'https://raw.githubusercontent.com/raulsaeed/RXTikTok-Localization/{ref}/'
+          def get(path):
+              return urllib.request.urlopen(base+path).read().decode('utf-8')
+
+          en=get('en.lproj/Localizable.strings')
+          pt_old=get('pt-BR.lproj/Localizable.strings')
+          root=pathlib.Path('tmp/rx-ptbr-2.0.1')
+          new='\n'.join((root/f'new_ptbr_part{i}.strings').read_text(encoding='utf-8') for i in (1,2,3))
+
+          entry_re=re.compile(r'^\s*"((?:\\.|[^"\\])*)"\s*=\s*"((?:\\.|[^"\\])*)"\s*;\s*$', re.M)
+          line_re=re.compile(r'^(\s*)"((?:\\.|[^"\\])*)"\s*=\s*"((?:\\.|[^"\\])*)"\s*;\s*$', re.M)
+          def parse(txt):
+              pairs=entry_re.findall(txt)
+              d={}
+              dup=[]
+              for k,v in pairs:
+                  if k in d: dup.append(k)
+                  d[k]=v
+              if dup: raise SystemExit(f'Duplicate keys: {dup}')
+              return d
+
+          E=parse(en); P=parse(pt_old); T=parse(new)
+          missing=[k for k in E if k not in P]
+          obsolete=[k for k in P if k not in E]
+          if len(E)!=739 or len(P)!=451 or len(missing)!=297 or len(obsolete)!=9:
+              raise SystemExit(f'Unexpected source counts: E={len(E)} P={len(P)} missing={len(missing)} obsolete={len(obsolete)}')
+          if set(T)!=set(missing):
+              absent=sorted(set(missing)-set(T))
+              extra=sorted(set(T)-set(missing))
+              raise SystemExit(f'Translation coverage mismatch. Missing={absent} Extra={extra}')
+
+          ph_re=re.compile(r'%(?:\d+\$)?[-+0 #\']*\d*(?:\.\d+)?(?:hh|h|ll|l|L|z|t|j)?[@diuoxXfFeEgGaAcCsSp]')
+          def placeholders(s): return collections.Counter(ph_re.findall(s))
+          bad=[]
+          for k in E:
+              target=P[k] if k in P else T[k]
+              if placeholders(E[k]) != placeholders(target):
+                  bad.append((k, placeholders(E[k]), placeholders(target)))
+          if bad:
+              raise SystemExit('Placeholder mismatch: '+repr(bad))
+
+          def repl(m):
+              indent,key,_=m.groups()
+              val=P[key] if key in P else T[key]
+              return f'{indent}"{key}" = "{val}";'
+          final_text=line_re.sub(repl,en)
+          F=parse(final_text)
+          if len(F)!=739 or set(F)!=set(E):
+              raise SystemExit(f'Final key validation failed: {len(F)}')
+
+          def decode_strings(s):
+              out=[]; i=0
+              while i<len(s):
+                  if s[i] != '\\':
+                      out.append(s[i]); i+=1; continue
+                  if i+1>=len(s): out.append('\\'); break
+                  c=s[i+1]
+                  table={'n':'\n','r':'\r','t':'\t','"':'"','\\':'\\'}
+                  out.append(table.get(c, '\\'+c)); i+=2
+              return ''.join(out)
+
+          binary_dict={decode_strings(k):decode_strings(v) for k,v in F.items()}
+          outdir=root/'RXTikTok-2.0.1-pt-BR'
+          lproj=outdir/'pt-BR.lproj'; src=outdir/'SOURCE'
+          lproj.mkdir(parents=True,exist_ok=True); src.mkdir(parents=True,exist_ok=True)
+          (lproj/'Localizable.strings').write_bytes(plistlib.dumps(binary_dict,fmt=plistlib.FMT_BINARY,sort_keys=False))
+          (src/'Localizable.strings').write_text(final_text,encoding='utf-8',newline='\n')
+          readme=(
+              'RXTikTok 2.0.1 - Tradução pt-BR completa\n'
+              'Base: Localizable 2.0.1 / 739 chaves\n'
+              'Reaproveitadas da tradução anterior: 442\n'
+              'Novas traduzidas: 297\n'
+              'Chaves obsoletas removidas: 9\n'
+              'Placeholders validados: OK\n'
+              'pt-BR.lproj/Localizable.strings está em binary plist, igual ao formato distribuído no IPA.\n'
+          )
+          (outdir/'README.txt').write_text(readme,encoding='utf-8')
+          report={'total_keys':739,'reused':442,'new_translated':297,'obsolete_removed':9,'placeholder_validation':'ok','binary_plist':True}
+          (outdir/'validation.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+
+          zip_path=root/'RXTikTok-2.0.1-pt-BR.zip'
+          if zip_path.exists(): zip_path.unlink()
+          with zipfile.ZipFile(zip_path,'w',zipfile.ZIP_DEFLATED) as z:
+              for p in outdir.rglob('*'):
+                  if p.is_file(): z.write(p,p.relative_to(root))
+          print(json.dumps(report,ensure_ascii=False))
+          print('ZIP',zip_path,zip_path.stat().st_size)
+          PY
+      - name: Commit generated package
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmp/rx-ptbr-2.0.1/RXTikTok-2.0.1-pt-BR.zip tmp/rx-ptbr-2.0.1/RXTikTok-2.0.1-pt-BR
+          git commit -m "Build complete RX 2.0.1 pt-BR localization" || true
+          git push origin HEAD:tmp-rx-ptbr-2.0.1
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RXTikTok-2.0.1-pt-BR
+          path: tmp/rx-ptbr-2.0.1/RXTikTok-2.0.1-pt-BR.zip
+          if-no-files-found: error
