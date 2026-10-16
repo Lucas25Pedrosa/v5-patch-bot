@@ -1,46 +1,50 @@
 name: Build XLiquidGlassNative
 
-on:
+# XLiquidGlassNative 3.1 Beta 6 Distribution Edition:
+# Beta 2 runtime-validated tint baseline + passive active-tab refresh only.
+"on":
   workflow_dispatch:
   push:
     paths:
-      - 'x-liquid-glass-native/**'
-      - '.github/workflows/x-liquid-glass-native.yml'
+      - "x-liquid-glass-native/**"
+      - ".github/workflows/x-liquid-glass-native.yml"
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-native
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Theos
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git make perl clang lld libplist-utils
-          git clone --recursive https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
 
       - name: Install signing tool
-        run: |
-          sudo apt-get install -y ldid
+        run: brew install ldid
 
       - name: Build XLiquidGlassNative dylib
         run: |
-          set -e
-          cd x-liquid-glass-native
-          make clean
-          make FINALPACKAGE=1
-          DYLIB=$(find .theos -type f -name 'XLiquidGlassNative.dylib' | head -n 1)
-          test -n "$DYLIB"
-          mkdir -p "$GITHUB_WORKSPACE/artifact"
-          cp "$DYLIB" "$GITHUB_WORKSPACE/artifact/XLiquidGlassNative.dylib"
-          sha256sum "$GITHUB_WORKSPACE/artifact/XLiquidGlassNative.dylib" | tee "$GITHUB_WORKSPACE/artifact/SHA256SUMS.txt"
-          file "$GITHUB_WORKSPACE/artifact/XLiquidGlassNative.dylib"
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassNative.dylib ! -path '*/XLiquidGlassNative.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassNative.dylib
+          file artifacts/XLiquidGlassNative.dylib
+          shasum -a 256 artifacts/XLiquidGlassNative.dylib > artifacts/SHA256SUMS.txt
 
       - name: Upload XLiquidGlassNative dylib
         uses: actions/upload-artifact@v4
         with:
           name: XLiquidGlassNative-3.1-Beta6-Distribution-Edition-arm64
-          path: artifact/*
+          path: x-liquid-glass-native/artifacts/
           if-no-files-found: error
