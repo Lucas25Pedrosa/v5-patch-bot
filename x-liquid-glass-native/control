@@ -1,8 +1,8 @@
 Package: com.lucas.xliquidglassnative
 Name: XLiquidGlassNative
-Version: 1.0.0
+Version: 1.1.0
 Architecture: iphoneos-arm
-Description: Activation-only native Liquid Glass path for X. No navigation, badge, sidebar, blur, legacy-host or visual fixes.
+Description: Native Liquid Glass activation for X with a NeoFreeBird on/off toggle. No navigation, badge, sidebar, blur, legacy-host or visual fixes.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
