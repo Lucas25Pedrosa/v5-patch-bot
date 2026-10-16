@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := XLiquidGlassNative
 XLiquidGlassNative_FILES := XLiquidGlassNative.m
-XLiquidGlassNative_FRAMEWORKS := Foundation
+XLiquidGlassNative_FRAMEWORKS := Foundation UIKit
 XLiquidGlassNative_CFLAGS := -fobjc-arc -fblocks -Wall -Wextra -Wno-unused-parameter
 
 include $(THEOS_MAKE_PATH)/tweak.mk
