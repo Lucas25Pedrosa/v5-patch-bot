@@ -1,8 +1,8 @@
 Package: com.lucas.xliquidglassnative
 Name: XLiquidGlassNative
-Version: 3.1.0-beta2
+Version: 3.1.0-beta7
 Architecture: iphoneos-arm
-Description: XLiquidGlassNative 3.1 Beta 2. Preserves the clean 3.0 native Liquid Glass activation, localized NeoFreeBird Appearance submenu and Distribution Edition credits, adding only Tab Bar icon tint modes adapted for X 12.35. Beta 2 moves tint application to XNavigation.TabBarItemView, matching the previously working icon path. No badge, sidebar, blur, tab-label, pill/platter, legacy-host or navigation fixes.
+Description: XLiquidGlassNative 3.1 Beta 7. Preserves the clean 3.0 native Liquid Glass activation, localized NeoFreeBird Appearance submenu and Distribution Edition credits. Tab Bar tint is based directly on the proven Beta 2 icon resolver and ports the validated 2.0.2 Portal/Carried active-tab coloring model for X 12.35. No polling, selection hooks, badge, sidebar, blur, tab-label, pill/platter, legacy-host or navigation fixes.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
