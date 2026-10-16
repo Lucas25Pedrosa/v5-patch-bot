@@ -1,8 +1,8 @@
 name: Build XLiquidGlassNative
 
-# XLiquidGlassNative 3.1 Beta 2 Distribution Edition:
+# XLiquidGlassNative 3.1 Beta 7 Distribution Edition:
 # 3.0 native activation + localized NFB Appearance submenu + isolated credits
-# + only the X 12.35 Tab Bar icon tint feature, hooked on TabBarItemView.
+# + Beta 2 icon resolver + validated 2.0.2 Portal/Carried active-tab tint model.
 "on":
   workflow_dispatch:
   push:
@@ -46,6 +46,6 @@ jobs:
       - name: Upload XLiquidGlassNative dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlassNative-3.1-Beta2-Distribution-Edition-arm64
+          name: XLiquidGlassNative-3.1-Beta7-Distribution-Edition-arm64
           path: x-liquid-glass-native/artifacts/
           if-no-files-found: error
