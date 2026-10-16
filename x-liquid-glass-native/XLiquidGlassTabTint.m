@@ -4,11 +4,12 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-// XLiquidGlassNative 3.1 Beta 7
-// Built directly from the proven Beta 2 icon resolver.
-// Active-tab tint ports the validated XLiquidGlass 2.0.2 Portal/Carried model:
+// XLiquidGlassNative 3.1 Beta 8
+// Built directly from the proven Beta 7 / Beta 2 icon resolver.
+// Active-tab tint keeps the validated XLiquidGlass 2.0.2 Portal/Carried model:
 // labeled primary items keep X's native inactive tint, while unlabeled
 // Portal/Carried copies keep the NFB accent and X reveals the active copy.
+// Beta 8 only adds a restart notice when switching back to Native mode.
 // No polling, selection hooks, badge/sidebar/blur/label/navigation fixes.
 
 static NSString *const kXLG31TabTintModeKey = @"XLiquidGlassTabBarTintMode";
@@ -378,9 +379,27 @@ static void XLG31RefreshTabItems(void) {
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    XLG31SetTintMode((XLG31TabTintMode)indexPath.row);
+
+    XLG31TabTintMode selectedMode = (XLG31TabTintMode)indexPath.row;
+    XLG31SetTintMode(selectedMode);
     [tableView reloadData];
     XLG31RefreshTabItems();
+
+    if (selectedMode == XLG31TabTintModeNative) {
+        NSString *title = XLG31IsPortuguese() ? @"Reiniciar o X" : @"Restart X";
+        NSString *message = XLG31IsPortuguese()
+            ? @"Reinicie o X para restaurar completamente a coloração nativa da Tab Bar."
+            : @"Restart X to fully restore the native Tab Bar coloring.";
+
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:title
+                                                message:message
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+                                                 style:UIAlertActionStyleDefault
+                                               handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
 }
 
 @end
@@ -551,7 +570,7 @@ static void XLG31ScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlass31TabTintInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassNative] 3.1 Beta 7 tab tint - 2.0.2 Portal/Carried model loaded");
+        NSLog(@"[XLiquidGlassNative] 3.1 Beta 8 tab tint - 2.0.2 Portal/Carried model loaded");
         XLG31Install();
         XLG31ScheduleRetry(0.00);
         XLG31ScheduleRetry(0.05);
