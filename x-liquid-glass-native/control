@@ -1,8 +1,8 @@
 Package: com.lucas.xliquidglassnative
 Name: XLiquidGlassNative
-Version: 3.0.0-distribution
+Version: 3.1.0-beta1
 Architecture: iphoneos-arm
-Description: XLiquidGlassNative 3.0 Distribution Edition. Clean native Liquid Glass activation for X with the localized NeoFreeBird Appearance submenu toggle plus Lucas25Pedrosa and IPA Vault credits. No navigation, badge, sidebar, blur, legacy-host or visual fixes.
+Description: XLiquidGlassNative 3.1 Beta 1. Preserves the clean 3.0 native Liquid Glass activation, localized NeoFreeBird Appearance submenu and Distribution Edition credits, adding only Tab Bar icon tint modes adapted for X 12.35: Native, Active tab and All tabs. No badge, sidebar, blur, tab-label, pill/platter, legacy-host or navigation fixes.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
