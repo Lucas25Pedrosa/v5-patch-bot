@@ -4,10 +4,9 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-// XLiquidGlassNative 3.1 Beta 1
-// Isolated Tab Bar icon tint module for X 12.35+.
-// Intentionally does NOT implement badges, sidebar, tab labels, pill/platter
-// tinting, navigation fixes, blur fixes, legacy hosts or any other visual fix.
+// XLiquidGlassNative 3.1 Beta 2
+// Single extra feature over 3.0: Tab Bar icon tint.
+// No badge, sidebar, label, pill/platter, blur, navigation or legacy-host fixes.
 
 static NSString *const kXLG31TabTintModeKey = @"XLiquidGlassTabBarTintMode";
 
@@ -17,8 +16,8 @@ typedef NS_ENUM(NSInteger, XLG31TabTintMode) {
     XLG31TabTintModeAll = 2,
 };
 
-static IMP gXLG31OrigTabBarLayout = NULL;
-static BOOL gXLG31TabBarHooked = NO;
+static IMP gXLG31OrigItemLayout = NULL;
+static BOOL gXLG31ItemHooked = NO;
 
 static IMP gXLG31OrigSettingsSections = NULL;
 static IMP gXLG31OrigSettingsRows = NULL;
@@ -27,7 +26,7 @@ static IMP gXLG31OrigSettingsFooter = NULL;
 static IMP gXLG31OrigSettingsDidSelect = NULL;
 static BOOL gXLG31SettingsHooked = NO;
 
-#pragma mark - Small helpers
+#pragma mark - Helpers
 
 static id XLG31SafeValueForKey(id object, NSString *key) {
     if (!object || !key.length) return nil;
@@ -43,6 +42,7 @@ static BOOL XLG31HookMethod(Class cls,
                             IMP replacement,
                             IMP *originalOut) {
     if (!cls || !sel || !replacement) return NO;
+
     Method method = class_getInstanceMethod(cls, sel);
     if (!method) return NO;
 
@@ -146,14 +146,29 @@ static UIColor *XLG31ResolvedThemeColor(void) {
     return UIColor.systemBlueColor;
 }
 
-#pragma mark - X 12.35 Tab Bar icon path
+#pragma mark - XNavigation.TabBarItemView
+
+static UIView *XLG31AncestorNamed(UIView *view, NSString *name) {
+    UIView *cursor = view.superview;
+    while (cursor) {
+        NSString *className = NSStringFromClass(cursor.class);
+        if ([className isEqualToString:name] ||
+            [className hasSuffix:[@"." stringByAppendingString:name.lastPathComponent]]) {
+            return cursor;
+        }
+        if ([className isEqualToString:@"XNavigation.TabBarView"]) return cursor;
+        cursor = cursor.superview;
+    }
+    return nil;
+}
 
 static BOOL XLG31ItemIsProfile(UIView *item) {
     NSMutableString *identity = [NSMutableString string];
     for (NSString *part in @[
         item.accessibilityLabel ?: @"",
         item.accessibilityIdentifier ?: @"",
-        item.accessibilityHint ?: @""
+        item.accessibilityHint ?: @"",
+        item.accessibilityValue ?: @""
     ]) {
         if (part.length) [identity appendFormat:@" %@", part.lowercaseString];
     }
@@ -165,11 +180,8 @@ static BOOL XLG31ItemIsProfile(UIView *item) {
 }
 
 static UIImageView *XLG31FindImageViewRecursive(UIView *root, NSUInteger depth) {
-    if (!root || depth > 5) return nil;
-
-    if ([root isKindOfClass:UIImageView.class]) {
-        return (UIImageView *)root;
-    }
+    if (!root || depth > 6) return nil;
+    if ([root isKindOfClass:UIImageView.class]) return (UIImageView *)root;
 
     for (UIView *subview in root.subviews ?: @[]) {
         UIImageView *found = XLG31FindImageViewRecursive(subview, depth + 1);
@@ -181,9 +193,16 @@ static UIImageView *XLG31FindImageViewRecursive(UIView *root, NSUInteger depth) 
 static UIImageView *XLG31ImageViewForItem(UIView *item) {
     if (!item) return nil;
 
-    // X 12.35 exposes an imageView field but may place it under glyphContainer.
-    // Prefer the semantic field; fall back to a recursive view walk so the tint
-    // survives small internal hierarchy changes without touching other UI.
+    // This is the path that worked in the previous implementation:
+    // the icon is commonly an immediate UIImageView child of TabBarItemView.
+    for (UIView *subview in item.subviews ?: @[]) {
+        if ([subview isKindOfClass:UIImageView.class]) {
+            return (UIImageView *)subview;
+        }
+    }
+
+    // 12.35 can expose the glyph through fields/containers, so keep these
+    // as compatibility fallbacks without touching any other visual element.
     id direct = XLG31SafeValueForKey(item, @"imageView");
     if ([direct isKindOfClass:UIImageView.class]) {
         return (UIImageView *)direct;
@@ -191,95 +210,132 @@ static UIImageView *XLG31ImageViewForItem(UIView *item) {
 
     id glyphContainer = XLG31SafeValueForKey(item, @"glyphContainer");
     if ([glyphContainer isKindOfClass:UIView.class]) {
-        UIImageView *insideGlyph = XLG31FindImageViewRecursive(
-            (UIView *)glyphContainer, 0);
-        if (insideGlyph) return insideGlyph;
+        UIImageView *inside = XLG31FindImageViewRecursive((UIView *)glyphContainer, 0);
+        if (inside) return inside;
     }
 
     return XLG31FindImageViewRecursive(item, 0);
 }
 
-static void XLG31ApplyTintToTabBar(UIView *tabBar) {
+static BOOL XLG31ItemIsSelected(UIView *item) {
+    if (!item) return NO;
+    if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) return YES;
+
+    for (NSString *key in @[@"selected", @"isSelected"]) {
+        id value = XLG31SafeValueForKey(item, key);
+        if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
+            return YES;
+        }
+    }
+
+    UIView *bar = XLG31AncestorNamed(item, @"XNavigation.TabBarView");
+    if (!bar) return NO;
+
+    id selectedItem = XLG31SafeValueForKey(bar, @"selectedItemView");
+    if (selectedItem == item) return YES;
+
+    id itemViewsValue = XLG31SafeValueForKey(bar, @"itemViews");
+    id selectedIndexValue = XLG31SafeValueForKey(bar, @"selectedIndex");
+    if ([itemViewsValue isKindOfClass:NSArray.class] &&
+        [selectedIndexValue respondsToSelector:@selector(integerValue)]) {
+        NSArray *items = (NSArray *)itemViewsValue;
+        NSUInteger index = [items indexOfObjectIdenticalTo:item];
+        NSInteger selectedIndex = [selectedIndexValue integerValue];
+        if (index != NSNotFound && (NSInteger)index == selectedIndex) return YES;
+    }
+
+    return NO;
+}
+
+static void XLG31ApplyTintToItem(UIView *item) {
+    if (!item || XLG31ItemIsProfile(item)) return;
+
     XLG31TabTintMode mode = XLG31TintMode();
-    if (mode == XLG31TabTintModeNative || !tabBar) return;
+    if (mode == XLG31TabTintModeNative) return;
 
-    id itemViewsValue = XLG31SafeValueForKey(tabBar, @"itemViews");
-    id selectedValue = XLG31SafeValueForKey(tabBar, @"selectedIndex");
-    if (![itemViewsValue isKindOfClass:NSArray.class]) return;
-
-    NSArray *itemViews = (NSArray *)itemViewsValue;
-    NSInteger selectedIndex = [selectedValue respondsToSelector:@selector(integerValue)]
-        ? [selectedValue integerValue]
-        : NSNotFound;
+    BOOL selected = XLG31ItemIsSelected(item);
+    if (mode == XLG31TabTintModeActive && !selected) return;
 
     UIColor *themeColor = XLG31ResolvedThemeColor();
 
-    [itemViews enumerateObjectsUsingBlock:^(id object, NSUInteger index, BOOL *stop) {
-        (void)stop;
-        if (![object isKindOfClass:UIView.class]) return;
+    // Set the semantic tint chain first. On 12.35 the glyph may inherit tint
+    // from its item/container even when the UIImageView is not directly exposed.
+    item.tintColor = themeColor;
 
-        UIView *item = (UIView *)object;
-        if (XLG31ItemIsProfile(item)) return;
+    id glyphContainer = XLG31SafeValueForKey(item, @"glyphContainer");
+    if ([glyphContainer isKindOfClass:UIView.class]) {
+        ((UIView *)glyphContainer).tintColor = themeColor;
+    }
 
-        BOOL selected = ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) ||
-                        ((NSInteger)index == selectedIndex);
-        BOOL shouldTint = (mode == XLG31TabTintModeAll) ||
-                          (mode == XLG31TabTintModeActive && selected);
-        if (!shouldTint) return;
+    UIImageView *imageView = XLG31ImageViewForItem(item);
+    if (!imageView) return;
 
-        UIImageView *imageView = XLG31ImageViewForItem(item);
-        if (!imageView || !imageView.image) return;
-
-        if (imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
-            imageView.image = [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        }
-        imageView.tintColor = themeColor;
-    }];
+    if (imageView.image &&
+        imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+        imageView.image =
+            [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+    imageView.tintColor = themeColor;
 }
 
-static void XLG31TabBarLayout(id self, SEL _cmd) {
-    if (gXLG31OrigTabBarLayout) {
-        ((void(*)(id,SEL))gXLG31OrigTabBarLayout)(self, _cmd);
+static void XLG31ItemLayout(id self, SEL _cmd) {
+    if (gXLG31OrigItemLayout) {
+        ((void(*)(id,SEL))gXLG31OrigItemLayout)(self, _cmd);
     }
+
     if ([self isKindOfClass:UIView.class]) {
-        XLG31ApplyTintToTabBar((UIView *)self);
+        XLG31ApplyTintToItem((UIView *)self);
     }
 }
 
-static void XLG31InstallTabBarHook(void) {
-    if (gXLG31TabBarHooked) return;
+static Class XLG31ItemClass(void) {
+    Class cls = NSClassFromString(@"XNavigation.TabBarItemView");
+    if (!cls) cls = NSClassFromString(@"_TtC11XNavigation14TabBarItemView");
+    return cls;
+}
 
-    Class cls = NSClassFromString(@"_TtC11XNavigation10TabBarView");
-    if (!cls) cls = NSClassFromString(@"XNavigation.TabBarView");
+static void XLG31InstallItemHook(void) {
+    if (gXLG31ItemHooked) return;
+
+    Class cls = XLG31ItemClass();
     if (!cls) return;
 
-    gXLG31TabBarHooked = XLG31HookMethod(
+    gXLG31ItemHooked = XLG31HookMethod(
         cls,
         @selector(layoutSubviews),
-        (IMP)XLG31TabBarLayout,
-        &gXLG31OrigTabBarLayout
+        (IMP)XLG31ItemLayout,
+        &gXLG31OrigItemLayout
     );
 }
 
-static void XLG31RefreshViewTree(UIView *view, Class tabBarClass) {
+static BOOL XLG31ViewIsItem(UIView *view, Class itemClass) {
+    if (!view) return NO;
+    if (itemClass && [view isKindOfClass:itemClass]) return YES;
+    NSString *name = NSStringFromClass(view.class);
+    return [name isEqualToString:@"XNavigation.TabBarItemView"] ||
+           [name hasSuffix:@".TabBarItemView"];
+}
+
+static void XLG31RefreshViewTree(UIView *view, Class itemClass) {
     if (!view) return;
-    if ((tabBarClass && [view isKindOfClass:tabBarClass]) ||
-        [NSStringFromClass(view.class) isEqualToString:@"XNavigation.TabBarView"]) {
+
+    if (XLG31ViewIsItem(view, itemClass)) {
         [view setNeedsLayout];
         [view layoutIfNeeded];
     }
+
     for (UIView *subview in view.subviews ?: @[]) {
-        XLG31RefreshViewTree(subview, tabBarClass);
+        XLG31RefreshViewTree(subview, itemClass);
     }
 }
 
-static void XLG31RefreshTabBars(void) {
+static void XLG31RefreshTabItems(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        Class tabBarClass = NSClassFromString(@"_TtC11XNavigation10TabBarView");
+        Class itemClass = XLG31ItemClass();
         for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
             if (![scene isKindOfClass:UIWindowScene.class]) continue;
             for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                if (!window.hidden) XLG31RefreshViewTree(window, tabBarClass);
+                if (!window.hidden) XLG31RefreshViewTree(window, itemClass);
             }
         }
     });
@@ -334,7 +390,7 @@ static void XLG31RefreshTabBars(void) {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     XLG31SetTintMode((XLG31TabTintMode)indexPath.row);
     [tableView reloadData];
-    XLG31RefreshTabBars();
+    XLG31RefreshTabItems();
 }
 
 @end
@@ -491,7 +547,7 @@ static void XLG31InstallSettingsIntegration(void) {
 }
 
 static void XLG31Install(void) {
-    XLG31InstallTabBarHook();
+    XLG31InstallItemHook();
     XLG31InstallSettingsIntegration();
 }
 
@@ -505,7 +561,7 @@ static void XLG31ScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlass31TabTintInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassNative] 3.1 Beta 1 tab icon tint module loaded");
+        NSLog(@"[XLiquidGlassNative] 3.1 Beta 2 tab icon tint module loaded");
         XLG31Install();
         XLG31ScheduleRetry(0.00);
         XLG31ScheduleRetry(0.05);
