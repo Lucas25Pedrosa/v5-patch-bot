@@ -1,5 +1,6 @@
 name: Build XLiquidGlassNative
 
+# Activation-only X Liquid Glass build.
 "on":
   workflow_dispatch:
   push:
