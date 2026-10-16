@@ -1,0 +1,1190 @@
+[
+  {
+    "key": "Download Format",
+    "english": "Download Format"
+  },
+  {
+    "key": "This album contains Live Photos. How would you like to download them?",
+    "english": "This Album Contains Live Photos. How Would You Like to Download Them?"
+  },
+  {
+    "key": "Live Photo",
+    "english": "Live Photo"
+  },
+  {
+    "key": "MP4",
+    "english": "MP4"
+  },
+  {
+    "key": "PLAY_IN_NATIVE_PLAYER",
+    "english": "Play in Native Player"
+  },
+  {
+    "key": "Share Panel Options",
+    "english": "Share Panel Options"
+  },
+  {
+    "key": "Share Panel Items",
+    "english": "Share Panel Items"
+  },
+  {
+    "key": "FEATURE_SHARE_PANEL_ITEMS",
+    "english": "Show RX Download Options in Share Panel"
+  },
+  {
+    "key": "FEATURE_SHOW_DL_VIDEO",
+    "english": "Show Download Video Option"
+  },
+  {
+    "key": "FEATURE_SHOW_DL_HD_VIDEO",
+    "english": "Show Download HD Video Option"
+  },
+  {
+    "key": "FEATURE_SHOW_DL_MUSIC",
+    "english": "Show Download Music Option"
+  },
+  {
+    "key": "FEATURE_SHOW_DL_PHOTOS",
+    "english": "Show Download Photos Option"
+  },
+  {
+    "key": "FEATURE_SHOW_COPY_MUSIC",
+    "english": "Show Copy Music Link Option"
+  },
+  {
+    "key": "FEATURE_SHOW_COPY_VIDEO",
+    "english": "Show Copy Video Link Option"
+  },
+  {
+    "key": "FEATURE_SHOW_COPY_DESC",
+    "english": "Show Copy Description Option"
+  },
+  {
+    "key": "Post Information",
+    "english": "Post Information"
+  },
+  {
+    "key": "FEATURE_SHOW_POST_INFO",
+    "english": "Show Post Info Option"
+  },
+  {
+    "key": "FEATURE_SHOW_NATIVE_PLAYER",
+    "english": "Show Play in Native Player Option"
+  },
+  {
+    "key": "Hide Elements",
+    "english": "Hide Elements"
+  },
+  {
+    "key": "Show Elements",
+    "english": "Show Elements"
+  },
+  {
+    "key": "FEATURE_SHOW_HIDE_ELEMENTS",
+    "english": "Show Hide/Show Elements Toggle"
+  },
+  {
+    "key": "Active Items",
+    "english": "Active Items"
+  },
+  {
+    "key": "Available Items",
+    "english": "Available Items"
+  },
+  {
+    "key": "the video doesn't have music to download",
+    "english": "This Video Has No Music to Download"
+  },
+  {
+    "key": "AUTO_PIP",
+    "english": "Auto Picture-in-Picture"
+  },
+  {
+    "key": "FEATURE_AUTO_PIP",
+    "english": "Automatically enters PiP when leaving the app"
+  },
+  {
+    "key": "DISABLE_SCREENSHOT_DETECTION",
+    "english": "Disable Screenshot Detection"
+  },
+  {
+    "key": "FEATURE_HIDE_CALL_BUTTON",
+    "english": "Hides the call button in direct messages navigation bar."
+  },
+  {
+    "key": "HIDE_CALL_BUTTON",
+    "english": "Hide Call Button"
+  },
+  {
+    "key": "HIDE_RX_UI",
+    "english": "Hide RX UI"
+  },
+  {
+    "key": "FEATURE_HIDE_RX_UI",
+    "english": "Hide RX UI From screen shots"
+  },
+  {
+    "key": "ANON_STORY_DOWNLOAD",
+    "english": "Download Stories Anonymously"
+  },
+  {
+    "key": "FEATURE_ANON_STORY_DOWNLOAD",
+    "english": "Download or View Stories Anonymously. by using the new download button on users profile."
+  },
+  {
+    "key": "ENABLE_VOICE_SWAP",
+    "english": "Custom Voice Message Upload"
+  },
+  {
+    "key": "FEATURE_ENABLE_VOICE_SWAP",
+    "english": "Enables a button in chat to upload videos as voice notes"
+  },
+  {
+    "key": "ENABLE_SOUND_BLOCKING",
+    "english": "Block Sounds"
+  },
+  {
+    "key": "FEATURE_ENABLE_SOUND_BLOCKING",
+    "english": "Blocks sounds using a button in the sound section of TikTok. Note: this makes posts with the sound unavailable. Blocked sounds can also be removed below."
+  },
+  {
+    "key": "DISABLE_FILTERING_FRIEND_POSTS",
+    "english": "Disable Filtering In DM"
+  },
+  {
+    "key": "FEATURE_DISABLE_FILTERING_FRIEND_POSTS",
+    "english": "Disables filtering for posts shared in Direct Messages. Note: Disabling this option makes videos sent to you show 'Post unavailable'."
+  },
+  {
+    "key": "KEEP_DELETED_MESSAGES",
+    "english": "Keep Deleted Messages"
+  },
+  {
+    "key": "FEATURE_KEEP_DELETED_MESSAGES",
+    "english": "Stop the app from removing deleted messages from chats. Careful this feature only works when the app is foreground. also restarting or refreshing the app will sometimes removes media-files (mp3, etc...) from the apps data directory and this renders some types of media as unavailable or unplayable."
+  },
+  {
+    "key": "SHOW_DELETED_BADGE",
+    "english": "Show Deleted Indicator"
+  },
+  {
+    "key": "FEATURE_SHOW_DELETED_BADGE",
+    "english": "Displays a trash icon indicator next to recalled messages and media."
+  },
+  {
+    "key": "FULL_LAST_SEEN",
+    "english": "Full Last Seen Time"
+  },
+  {
+    "key": "FEATURE_FULL_LAST_SEEN",
+    "english": "Shows Exact Date and Time for Last Active Status"
+  },
+  {
+    "key": "Yesterday",
+    "english": "Yesterday"
+  },
+  {
+    "key": "%ld days ago",
+    "english": "%ld days ago"
+  },
+  {
+    "key": "Deleted message",
+    "english": "Deleted message"
+  },
+  {
+    "key": "%@ deleted a message",
+    "english": "%@ deleted a message"
+  },
+  {
+    "key": "You",
+    "english": "You"
+  },
+  {
+    "key": "A/B Overrides",
+    "english": "A/B Overrides"
+  },
+  {
+    "key": "A/B Overrides Options",
+    "english": "A/B Overrides Options"
+  },
+  {
+    "key": "Add",
+    "english": "Add"
+  },
+  {
+    "key": "Add Custom Override",
+    "english": "Add Custom Override"
+  },
+  {
+    "key": "Add Force Override",
+    "english": "Add Force Override"
+  },
+  {
+    "key": "Add Item to Array",
+    "english": "Add Item to Array"
+  },
+  {
+    "key": "Add Number Item",
+    "english": "Add Number Item"
+  },
+  {
+    "key": "Add String Item",
+    "english": "Add String Item"
+  },
+  {
+    "key": "All Configs",
+    "english": "All Configs"
+  },
+  {
+    "key": "Array Override",
+    "english": "Array Override"
+  },
+  {
+    "key": "Arrays",
+    "english": "Arrays"
+  },
+  {
+    "key": "Boolean (false)",
+    "english": "Boolean (false)"
+  },
+  {
+    "key": "Boolean (true)",
+    "english": "Boolean (true)"
+  },
+  {
+    "key": "Booleans (true/false)",
+    "english": "Booleans (true/false)"
+  },
+  {
+    "key": "Choose override mode:",
+    "english": "Choose override mode:"
+  },
+  {
+    "key": "Clear All",
+    "english": "Clear All"
+  },
+  {
+    "key": "Clear All Forced Overrides",
+    "english": "Clear All Forced Overrides"
+  },
+  {
+    "key": "Clear All Overrides?",
+    "english": "Clear All Overrides?"
+  },
+  {
+    "key": "Connecting to TikTok AB Runtime...",
+    "english": "Connecting to TikTok AB Runtime..."
+  },
+  {
+    "key": "Copy Key",
+    "english": "Copy Key"
+  },
+  {
+    "key": "Copy Key Name",
+    "english": "Copy Key Name"
+  },
+  {
+    "key": "Copy Value",
+    "english": "Copy Value"
+  },
+  {
+    "key": "Could not format because the text is not valid JSON.",
+    "english": "Could not format because the text is not valid JSON."
+  },
+  {
+    "key": "Delete Item",
+    "english": "Delete Item"
+  },
+  {
+    "key": "Dictionaries",
+    "english": "Dictionaries"
+  },
+  {
+    "key": "Edit as JSON",
+    "english": "Edit as JSON"
+  },
+  {
+    "key": "Edit Forced Value",
+    "english": "Edit Forced Value"
+  },
+  {
+    "key": "Edit Text",
+    "english": "Edit Text"
+  },
+  {
+    "key": "Enter an A/B key and value.\\n(true/false -> bool, numbers -> int/double, otherwise string)",
+    "english": "Enter an A/B key and value.\\n(true/false -> bool, numbers -> int/double, otherwise string)"
+  },
+  {
+    "key": "Enter the key name to create an Array override for:",
+    "english": "Enter the key name to create an Array override for:"
+  },
+  {
+    "key": "Enter the key name to create with the Text Editor:",
+    "english": "Enter the key name to create with the Text Editor:"
+  },
+  {
+    "key": "Extracting live configurations...",
+    "english": "Extracting live configurations..."
+  },
+  {
+    "key": "Filter",
+    "english": "Filter"
+  },
+  {
+    "key": "Filter (ON)",
+    "english": "Filter (ON)"
+  },
+  {
+    "key": "Filter Configurations",
+    "english": "Filter Configurations"
+  },
+  {
+    "key": "Force Set",
+    "english": "Force Set"
+  },
+  {
+    "key": "Force Set Value",
+    "english": "Force Set Value"
+  },
+  {
+    "key": "Forced Overrides Only",
+    "english": "Forced Overrides Only"
+  },
+  {
+    "key": "Format JSON",
+    "english": "Format JSON"
+  },
+  {
+    "key": "Indexing configuration keys...",
+    "english": "Indexing configuration keys..."
+  },
+  {
+    "key": "Invalid JSON",
+    "english": "Invalid JSON"
+  },
+  {
+    "key": "JSON",
+    "english": "JSON"
+  },
+  {
+    "key": "JSON Object / Sub-Array",
+    "english": "JSON Object / Sub-Array"
+  },
+  {
+    "key": "Live Refresh from Runtime",
+    "english": "Live Refresh from Runtime"
+  },
+  {
+    "key": "Loading A/B Configurations",
+    "english": "Loading A/B Configurations"
+  },
+  {
+    "key": "Master Switch: Turn OFF",
+    "english": "Master Switch: Turn OFF"
+  },
+  {
+    "key": "Master Switch: Turn ON",
+    "english": "Master Switch: Turn ON"
+  },
+  {
+    "key": "New A/B Override Key",
+    "english": "New A/B Override Key"
+  },
+  {
+    "key": "New Array Override Key",
+    "english": "New Array Override Key"
+  },
+  {
+    "key": "No entries dumped for getAllConfig.\\nRun TikTok to allow dump passes.",
+    "english": "No entries dumped for getAllConfig.\\nRun TikTok to allow dump passes."
+  },
+  {
+    "key": "No matching A/B keys found.",
+    "english": "No matching A/B keys found."
+  },
+  {
+    "key": "Not an Array",
+    "english": "Not an Array"
+  },
+  {
+    "key": "Number",
+    "english": "Number"
+  },
+  {
+    "key": "Numbers (int/double)",
+    "english": "Numbers (int/double)"
+  },
+  {
+    "key": "Open Array Editor",
+    "english": "Open Array Editor"
+  },
+  {
+    "key": "Open Text Editor",
+    "english": "Open Text Editor"
+  },
+  {
+    "key": "Paste",
+    "english": "Paste"
+  },
+  {
+    "key": "Quick Key-Value Input",
+    "english": "Quick Key-Value Input"
+  },
+  {
+    "key": "Reset to Default",
+    "english": "Reset to Default"
+  },
+  {
+    "key": "Search (e.g. profile*ui)...",
+    "english": "Search (e.g. profile*ui)..."
+  },
+  {
+    "key": "Select item type:",
+    "english": "Select item type:"
+  },
+  {
+    "key": "String",
+    "english": "String"
+  },
+  {
+    "key": "Strings",
+    "english": "Strings"
+  },
+  {
+    "key": "Text / JSON Editor",
+    "english": "Text / JSON Editor"
+  },
+  {
+    "key": "The JSON must be a top-level array '[ ... ]'.",
+    "english": "The JSON must be a top-level array '[ ... ]'."
+  },
+  {
+    "key": "This will remove all forced A/B entries and revert to TikTok defaults.",
+    "english": "This will remove all forced A/B entries and revert to TikTok defaults."
+  },
+  {
+    "key": "All Photos",
+    "english": "All Photos"
+  },
+  {
+    "key": "BULK DOWNLOAD",
+    "english": "Bulk Download"
+  },
+  {
+    "key": "Collapse this section's actions behind a single entry",
+    "english": "Collapse this section's actions behind a single entry"
+  },
+  {
+    "key": "Configure Download Menu",
+    "english": "Configure Download Menu"
+  },
+  {
+    "key": "Configure Share Panel",
+    "english": "Configure Share Panel"
+  },
+  {
+    "key": "Configure: Download Menu",
+    "english": "Configure: Download Menu"
+  },
+  {
+    "key": "Configure: Share Panel",
+    "english": "Configure: Share Panel"
+  },
+  {
+    "key": "COPY",
+    "english": "Copy"
+  },
+  {
+    "key": "Current Photo",
+    "english": "Current Photo"
+  },
+  {
+    "key": "Default Tap Action",
+    "english": "Default Tap Action"
+  },
+  {
+    "key": "DOWNLOAD",
+    "english": "Download"
+  },
+  {
+    "key": "Download",
+    "english": "Download"
+  },
+  {
+    "key": "Download Current Photo",
+    "english": "Download Current Photo"
+  },
+  {
+    "key": "Download Live Photo",
+    "english": "Download Live Photo"
+  },
+  {
+    "key": "Download Options",
+    "english": "Download Options"
+  },
+  {
+    "key": "Download Sticker",
+    "english": "Download Sticker"
+  },
+  {
+    "key": "Downloading...",
+    "english": "Downloading..."
+  },
+  {
+    "key": "GENERAL DOWNLOAD",
+    "english": "General Download"
+  },
+  {
+    "key": "General Download",
+    "english": "General Download"
+  },
+  {
+    "key": "Open Menu (Default)",
+    "english": "Open Menu (Default)"
+  },
+  {
+    "key": "OTHER OPTIONS",
+    "english": "Other Options"
+  },
+  {
+    "key": "Photo",
+    "english": "Photo"
+  },
+  {
+    "key": "Show as submenu",
+    "english": "Show as submenu"
+  },
+  {
+    "key": "Video",
+    "english": "Video"
+  },
+  {
+    "key": "For Photos",
+    "english": "For Photos"
+  },
+  {
+    "key": "For Videos",
+    "english": "For Videos"
+  },
+  {
+    "key": "Select an action to auto-run on tap. When Download is selected, customize specific automated actions for video and photo posts. Holding the button will always open the full menu.",
+    "english": "Select an action to auto-run on tap. When Download is selected, customize specific automated actions for video and photo posts. Holding the button will always open the full menu."
+  },
+  {
+    "key": "Copied",
+    "english": "Copied"
+  },
+  {
+    "key": "Could Not Copy Music.",
+    "english": "Could Not Copy Music."
+  },
+  {
+    "key": "Download Failed",
+    "english": "Download Failed"
+  },
+  {
+    "key": "Photo library access denied",
+    "english": "Photo library access denied"
+  },
+  {
+    "key": "Photo library access denied. Enable Photos access in Settings to save downloads.",
+    "english": "Photo library access denied. Enable Photos access in Settings to save downloads."
+  },
+  {
+    "key": "Save failed (io error).",
+    "english": "Save Failed (I/O Error)."
+  },
+  {
+    "key": "BLOCK_STORY_VIEW_REPORT",
+    "english": "Block Story View Report"
+  },
+  {
+    "key": "FEATURE_BLOCK_STORY_VIEW_REPORT",
+    "english": "Prevents Story Views from Being Reported to the Uploader"
+  },
+  {
+    "key": "LOCAL_STORY_SEEN",
+    "english": "Mark Story Seen Locally"
+  },
+  {
+    "key": "FEATURE_LOCAL_STORY_SEEN",
+    "english": "Marks Stories as Seen on Your Device Only"
+  },
+  {
+    "key": "PROFILE_INFO_BUTTON",
+    "english": "Story Download Button"
+  },
+  {
+    "key": "FEATURE_PROFILE_INFO_BUTTON",
+    "english": "Adds a Download Button to User Profiles to Save Stories"
+  },
+  {
+    "key": "REMOVE_STAR_BUTTON",
+    "english": "Remove Star Button"
+  },
+  {
+    "key": "FEATURE_REMOVE_STAR_BUTTON",
+    "english": "Removes the 'Add to Favorites' Star Button in Chats"
+  },
+  {
+    "key": "Call Confirmation",
+    "english": "Call Confirmation"
+  },
+  {
+    "key": "FEATURE_CONFIRM_CALL",
+    "english": "Asks for Confirmation Before Making Calls in Chats"
+  },
+  {
+    "key": "FEATURE_CONFIGURE_DOWNLOAD_MENU",
+    "english": "Customizes the Options Shown in the Download Menu"
+  },
+  {
+    "key": "FEATURE_CONFIGURE_SHARE_PANEL",
+    "english": "Customizes the Options Shown in the Share Panel"
+  },
+  {
+    "key": "Download Comment Photo",
+    "english": "Download Comment Photo"
+  },
+  {
+    "key": "Download Comment Sticker",
+    "english": "Download Comment Sticker"
+  },
+  {
+    "key": "DOWNLOAD_COMMENT_PHOTO",
+    "english": "Adds a Download Button to Photos in Comments"
+  },
+  {
+    "key": "DOWNLOAD_COMMENT_STICKER",
+    "english": "Adds a Download Button to Stickers in Comments"
+  },
+  {
+    "key": "Blocked Sounds",
+    "english": "Blocked Sounds"
+  },
+  {
+    "key": "Direct Messages / Chat",
+    "english": "Direct Messages / Chat"
+  },
+  {
+    "key": "FEATURE_FILTER_LOCATIONS",
+    "english": "Applies Content Filtering to Additional Sections of the App"
+  },
+  {
+    "key": "Filter Locations",
+    "english": "Filter Locations"
+  },
+  {
+    "key": "Following Tab",
+    "english": "Following Tab"
+  },
+  {
+    "key": "For You Page (FYP)",
+    "english": "For You Page (FYP)"
+  },
+  {
+    "key": "FYP filtering is mandatory and always active. Additional locations can be enabled below.",
+    "english": "FYP filtering is mandatory and always active. Additional locations can be enabled below."
+  },
+  {
+    "key": "Select Feeds to Filter",
+    "english": "Select Feeds to Filter"
+  },
+  {
+    "key": "User Profiles",
+    "english": "User Profiles"
+  },
+  {
+    "key": "Be careful!",
+    "english": "Be careful!"
+  },
+  {
+    "key": "Data Size",
+    "english": "Data Size"
+  },
+  {
+    "key": "Feature Settings",
+    "english": "Feature Settings"
+  },
+  {
+    "key": "Inspect & force set A/B experiment flags",
+    "english": "Inspect & force set A/B experiment flags"
+  },
+  {
+    "key": "Music Blocked",
+    "english": "Music Blocked"
+  },
+  {
+    "key": "Music Unblocked",
+    "english": "Music Unblocked"
+  },
+  {
+    "key": "Downloading Photo...",
+    "english": "Downloading Photo..."
+  },
+  {
+    "key": "Language has been applied immediately!\\n Please restart the app for changes to fully take effect.",
+    "english": "Language has been applied immediately!\\n Please restart the app for changes to fully take effect."
+  },
+  {
+    "key": "Discord",
+    "english": "Discord"
+  },
+  {
+    "key": "GitHub",
+    "english": "GitHub"
+  },
+  {
+    "key": "Reddit",
+    "english": "Reddit"
+  },
+  {
+    "key": "Telegram",
+    "english": "Telegram"
+  },
+  {
+    "key": "Twitter",
+    "english": "Twitter"
+  },
+  {
+    "key": "Website",
+    "english": "Website"
+  },
+  {
+    "key": "Save stories",
+    "english": "Save stories"
+  },
+  {
+    "key": "Kept as you see them, so they stay even after they expire or are deleted.",
+    "english": "Kept as you see them, so they stay even after they expire or are deleted."
+  },
+  {
+    "key": "Saved Stories",
+    "english": "Saved Stories"
+  },
+  {
+    "key": "View, export and delete stories kept on this device.",
+    "english": "View, export and delete stories kept on this device."
+  },
+  {
+    "key": "Stories",
+    "english": "Stories"
+  },
+  {
+    "key": "Select",
+    "english": "Select"
+  },
+  {
+    "key": "Search accounts",
+    "english": "Search accounts"
+  },
+  {
+    "key": "No stories yet.\\nOpen a story and it will appear here.",
+    "english": "No stories yet.\\nOpen a story and it will appear here."
+  },
+  {
+    "key": "Nothing matches this filter.",
+    "english": "Nothing matches this filter."
+  },
+  {
+    "key": "Group by account",
+    "english": "Group by account"
+  },
+  {
+    "key": "All kinds",
+    "english": "All kinds"
+  },
+  {
+    "key": "Videos only",
+    "english": "Videos only"
+  },
+  {
+    "key": "Photos only",
+    "english": "Photos only"
+  },
+  {
+    "key": "Storage",
+    "english": "Storage"
+  },
+  {
+    "key": "Delete all",
+    "english": "Delete all"
+  },
+  {
+    "key": "Delete all stories",
+    "english": "Delete all stories"
+  },
+  {
+    "key": "Delete every story?",
+    "english": "Delete every story?"
+  },
+  {
+    "key": "Delete these stories?",
+    "english": "Delete these stories?"
+  },
+  {
+    "key": "Save to album",
+    "english": "Save to album"
+  },
+  {
+    "key": "Select all",
+    "english": "Select all"
+  },
+  {
+    "key": "Keep stories forever",
+    "english": "Keep stories forever"
+  },
+  {
+    "key": "Keep stories for",
+    "english": "Keep stories for"
+  },
+  {
+    "key": "This clip has not finished downloading yet.",
+    "english": "This clip has not finished downloading yet."
+  },
+  {
+    "key": "Deleted",
+    "english": "Deleted"
+  },
+  {
+    "key": "Saving",
+    "english": "Saving"
+  },
+  {
+    "key": "Saved",
+    "english": "Saved"
+  },
+  {
+    "key": "Couldn't save",
+    "english": "Couldn't save"
+  },
+  {
+    "key": "SAVE_TO_PHOTOS",
+    "english": "Save to Photos"
+  },
+  {
+    "key": "SERVER_CONNECTION_REQUIRED",
+    "english": "Server Connection Required"
+  },
+  {
+    "key": "REGION_SERVER_REQUIRED_BODY",
+    "english": "Region spoofing requires an active connection to the helper server."
+  },
+  {
+    "key": "ACTIVATING_REGION",
+    "english": "Activating %@..."
+  },
+  {
+    "key": "REGION_UNAVAILABLE",
+    "english": "Region Unavailable"
+  },
+  {
+    "key": "REGION_PROFILE_FETCH_FAILED",
+    "english": "Failed to retrieve authorized profile for %@ (%@) from server. Selection was not applied."
+  },
+  {
+    "key": "VIDEO_INFO_UNAVAILABLE",
+    "english": "Video info is currently unavailable (server required)."
+  },
+  {
+    "key": "APP_NAME",
+    "english": "RXTikTok"
+  },
+  {
+    "key": "DOWNLOAD_PHOTOS",
+    "english": "Download Photos"
+  },
+  {
+    "key": "PROFILE_INFO",
+    "english": "Profile Info"
+  },
+  {
+    "key": "PROFILE_INFO_UNAVAILABLE",
+    "english": "Profile info is currently unavailable (server required)."
+  },
+  {
+    "key": "DOWNLOAD_STORY",
+    "english": "Download Story"
+  },
+  {
+    "key": "MARK_SEEN_SERVER_REQUIRED",
+    "english": "Mark as seen requires the server"
+  },
+  {
+    "key": "MARK_SEEN_FAILED",
+    "english": "Mark as seen failed"
+  },
+  {
+    "key": "MARKED_AS_SEEN",
+    "english": "Marked as seen"
+  },
+  {
+    "key": "FILES",
+    "english": "Files"
+  },
+  {
+    "key": "VIDEOS",
+    "english": "Videos"
+  },
+  {
+    "key": "SEND_VOICE_MESSAGE",
+    "english": "Send Voice Message"
+  },
+  {
+    "key": "SELECT_VOICE_SOURCE",
+    "english": "Select audio or video source"
+  },
+  {
+    "key": "CHOOSE_FROM_FILES",
+    "english": "Choose from Files"
+  },
+  {
+    "key": "CHOOSE_FROM_VIDEOS",
+    "english": "Choose from Videos"
+  },
+  {
+    "key": "VOICE_AUDIO_READY",
+    "english": "Audio Ready - Sending natively..."
+  },
+  {
+    "key": "VOICE_CONVERSATION_NOT_FOUND",
+    "english": "Error: Conversation object not found"
+  },
+  {
+    "key": "VOICE_SENT",
+    "english": "Voice Message Sent!"
+  },
+  {
+    "key": "VOICE_SEND_FAILED",
+    "english": "Failed to send natively"
+  },
+  {
+    "key": "VOICE_EXTRACTION_FAILED",
+    "english": "Audio Extraction Failed"
+  },
+  {
+    "key": "VOICE_PROCESSING",
+    "english": "Processing Audio..."
+  },
+  {
+    "key": "NO_FILE_SELECTED",
+    "english": "No file selected"
+  },
+  {
+    "key": "DM_DOWNLOADING_PERCENT",
+    "english": "Downloading %.0f%%"
+  },
+  {
+    "key": "DM_SAVE_FAILED_COPY",
+    "english": "Save Failed (copy error)"
+  },
+  {
+    "key": "SAVING_TO_PHOTOS",
+    "english": "Saving to Photos..."
+  },
+  {
+    "key": "SAVED_TO_PHOTOS",
+    "english": "Saved to Photos!"
+  },
+  {
+    "key": "DM_SAVE_FAILED_PHOTOS",
+    "english": "Save Failed (Photos Error)"
+  },
+  {
+    "key": "SAVE_FAILED_PHOTO_ACCESS_DENIED",
+    "english": "Save Failed: Photo Access Denied"
+  },
+  {
+    "key": "DM_DOWNLOAD_FAILED_NO_TOKEN",
+    "english": "Download Failed: No URL/Token"
+  },
+  {
+    "key": "STARTING_DOWNLOAD",
+    "english": "Starting Download..."
+  },
+  {
+    "key": "DM_SAVE_FAILED_MOVE",
+    "english": "Save Failed (Move Error)"
+  },
+  {
+    "key": "DM_SAVING",
+    "english": "Saving..."
+  },
+  {
+    "key": "DM_SAVE_FAILED_NO_IMAGE",
+    "english": "Save Failed: No Image"
+  },
+  {
+    "key": "SAVE_FAILED",
+    "english": "Save Failed."
+  },
+  {
+    "key": "STREAK_DURATION_FORMAT",
+    "english": "%ldd %ldh %ldm %lds"
+  },
+  {
+    "key": "STREAK_TIME_REMAINING_BODY",
+    "english": "Time Remaining:\\n\\nExpires in:  %@\\nRestorable Before:%@"
+  },
+  {
+    "key": "BLOCKED_PROFILE_VIEW_REPORT",
+    "english": "Blocked Profile View Report"
+  },
+  {
+    "key": "ACCOUNT_REGION",
+    "english": "Account region"
+  },
+  {
+    "key": "PROFILE_PICTURE",
+    "english": "Profile picture"
+  },
+  {
+    "key": "RESOLVING_PROFILE_PICTURE",
+    "english": "Resolving profile picture…"
+  },
+  {
+    "key": "PROFILE_NO_USERNAME",
+    "english": "This profile has no username to look up."
+  },
+  {
+    "key": "PROFILE_PICTURE_SERVER_REQUIRED",
+    "english": "Could not load this profile picture. The lookup requires the RXTikTok server."
+  },
+  {
+    "key": "PROFILE_COPY_BIO_PROMPT",
+    "english": "Do you want to copy this text to clipboard"
+  },
+  {
+    "key": "SAVE_IMAGE_FAILED",
+    "english": "Failed to save image"
+  },
+  {
+    "key": "AUTH_REQUIRED",
+    "english": "Authentication Required"
+  },
+  {
+    "key": "UNLOCK_USING_FORMAT",
+    "english": "Unlock using %@"
+  },
+  {
+    "key": "AUTHENTICATE",
+    "english": "Authenticate"
+  },
+  {
+    "key": "PASSCODE",
+    "english": "Passcode"
+  },
+  {
+    "key": "AUTHENTICATE_WITH_FORMAT",
+    "english": "Authenticate with %@"
+  },
+  {
+    "key": "USE_PASSCODE",
+    "english": "Use Passcode"
+  },
+  {
+    "key": "ENTER_PASSCODE",
+    "english": "Enter your passcode"
+  },
+  {
+    "key": "PASSCODE_AUTH_FAILED",
+    "english": "Passcode authentication failed"
+  },
+  {
+    "key": "AUTHENTICATION",
+    "english": "Authentication"
+  },
+  {
+    "key": "DOWNLOADING_ITEM",
+    "english": "Downloading Item..."
+  },
+  {
+    "key": "INVALID_VIDEO_URL",
+    "english": "Invalid video URL received."
+  },
+  {
+    "key": "UNKNOWN",
+    "english": "Unknown"
+  },
+  {
+    "key": "STORY_USER_INFO_SERVER_REQUIRED",
+    "english": "User info requires an active server connection"
+  },
+  {
+    "key": "STORY_DOWNLOAD_SERVER_REQUIRED",
+    "english": "Story download requires an active server connection"
+  },
+  {
+    "key": "STORY_NO_USERNAME",
+    "english": "Error: No username provided."
+  },
+  {
+    "key": "STORY_FETCHING_FORMAT",
+    "english": "Fetching stories for %@..."
+  },
+  {
+    "key": "ERROR_FORMAT",
+    "english": "Error: %@"
+  },
+  {
+    "key": "STORY_NONE_FOUND",
+    "english": "No stories found."
+  },
+  {
+    "key": "STORY_FOUND_FORMAT",
+    "english": "Found %lu stories for %@."
+  },
+  {
+    "key": "VIEW_STORIES",
+    "english": "View Stories"
+  },
+  {
+    "key": "DOWNLOAD_ALL",
+    "english": "Download All"
+  },
+  {
+    "key": "STORY_DOWNLOADING_PROGRESS_FORMAT",
+    "english": "Downloading %lu of %lu..."
+  },
+  {
+    "key": "STORY_FINISHED_FORMAT",
+    "english": "Finished! Saved %lu stories."
+  },
+  {
+    "key": "SAVE_NO_WATERMARK_LABEL",
+    "english": "Save posts with no watermark (RX)"
+  },
+  {
+    "key": "BACKUP_INFO_FORMAT",
+    "english": "Version: %@\\nSaved: %@"
+  },
+  {
+    "key": "KEYCHAIN_BACKUP_INFO_FORMAT",
+    "english": "%@\\n\\nKeychain backup info:\\n%@"
+  },
+  {
+    "key": "VERSION_LABEL_FORMAT",
+    "english": "%@  RX: v%@ \\n Device: %@ iOS: %@\\n Bundle: %@"
+  },
+  {
+    "key": "FILTER_LOC_FYP",
+    "english": "FYP"
+  },
+  {
+    "key": "FILTER_LOC_PROFILES",
+    "english": "Profiles"
+  },
+  {
+    "key": "FILTER_LOC_CHAT",
+    "english": "Chat"
+  },
+  {
+    "key": "ENABLE_PROFILE_BACKGROUND",
+    "english": "Enable Profile Background"
+  },
+  {
+    "key": "FEATURE_ENABLE_PROFILE_BACKGROUND",
+    "english": "Force enables the profile background feature"
+  }
+]

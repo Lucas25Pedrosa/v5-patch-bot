@@ -1,0 +1,38 @@
+[
+  {
+    "key": "Extended Bio",
+    "portuguese": "Bio estendida"
+  },
+  {
+    "key": "FEATURE_EXTENDED_BIO",
+    "portuguese": "Bio com mais caracteres"
+  },
+  {
+    "key": "Creator Profile Pull",
+    "portuguese": "Puxar perfil do criador"
+  },
+  {
+    "key": "FEATURE_CREATOR_PROFILE_PULL",
+    "portuguese": "Ver perfil ao puxar para atualizar"
+  },
+  {
+    "key": "DISBALE_SCREENSHOT_DETECTION",
+    "portuguese": "Desativar detecção de captura de tela"
+  },
+  {
+    "key": "BLOCK_SHOP_VIDOES",
+    "portuguese": "Bloquear vídeos da Loja"
+  },
+  {
+    "key": "BLOCK_SHOP_VIDOES_FEATURE",
+    "portuguese": "Remove vídeos da Loja do feed."
+  },
+  {
+    "key": "BLOCK_POI",
+    "portuguese": "Bloquear anúncios de localização"
+  },
+  {
+    "key": "FEATURE_BLOCK_POI",
+    "portuguese": "Bloqueia vídeos com anúncios de localização"
+  }
+]
