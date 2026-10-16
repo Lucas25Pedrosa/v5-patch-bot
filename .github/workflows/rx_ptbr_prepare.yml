@@ -1,0 +1,52 @@
+name: RX pt-BR prepare
+
+on:
+  push:
+    branches:
+      - tmp-rx-ptbr-2.0.1
+    paths:
+      - .github/workflows/rx_ptbr_prepare.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-rx-ptbr-2.0.1
+          fetch-depth: 0
+      - name: Compare localization keys
+        run: |
+          python3 - <<'PY'
+          import json, re, urllib.request, pathlib
+          base='https://raw.githubusercontent.com/raulsaeed/RXTikTok-Localization/829f66e7b3f052605484796aa1ec56ad2e999d5a/'
+          def get(path):
+              return urllib.request.urlopen(base+path).read().decode('utf-8')
+          en=get('en.lproj/Localizable.strings')
+          pt=get('pt-BR.lproj/Localizable.strings')
+          pat=re.compile(r'^\s*"((?:\\.|[^"\\])*)"\s*=\s*"((?:\\.|[^"\\])*)"\s*;\s*$', re.M)
+          def parse(txt):
+              out={}
+              for k,v in pat.findall(txt):
+                  out[k]=v
+              return out
+          E=parse(en); P=parse(pt)
+          missing=[{'key':k,'english':v} for k,v in E.items() if k not in P]
+          obsolete=[{'key':k,'portuguese':v} for k,v in P.items() if k not in E]
+          common=[k for k in E if k in P]
+          d=pathlib.Path('tmp/rx-ptbr-2.0.1'); d.mkdir(parents=True,exist_ok=True)
+          (d/'missing.json').write_text(json.dumps(missing,ensure_ascii=False,indent=2),encoding='utf-8')
+          (d/'obsolete.json').write_text(json.dumps(obsolete,ensure_ascii=False,indent=2),encoding='utf-8')
+          (d/'counts.json').write_text(json.dumps({'english':len(E),'portuguese_old':len(P),'common':len(common),'missing':len(missing),'obsolete':len(obsolete)},ensure_ascii=False,indent=2),encoding='utf-8')
+          print({'english':len(E),'portuguese_old':len(P),'common':len(common),'missing':len(missing),'obsolete':len(obsolete)})
+          PY
+      - name: Commit comparison
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmp/rx-ptbr-2.0.1
+          git commit -m "Prepare RX pt-BR 2.0.1 localization diff" || exit 0
+          git push origin HEAD:tmp-rx-ptbr-2.0.1
