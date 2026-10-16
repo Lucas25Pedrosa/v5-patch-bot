@@ -63,7 +63,7 @@ static NSInteger XLGDistMapSectionToOriginal(id controller,
 
 static NSArray *XLGDistLiquidGlassCreditRows(void) {
     return @[@{
-        @"title": @"Lucas25Pedrosa",
+        @"title": @"Lucas",
         @"username": @"Lucas25Pedrosa",
         @"avatarURL": @"https://github.com/Lucas25Pedrosa.png"
     }];
@@ -117,7 +117,7 @@ static UIView *XLGDistViewForHeader(id self,
     NSInteger ipaSection = XLGDistIPASourceSection(self, tableView);
 
     if (section == liquidSection || section == ipaSection) {
-        NSString *title = section == liquidSection ? @"LiquidGlass" : @"IPA Source";
+        NSString *title = section == liquidSection ? @"Liquid Glass" : @"IPA Source";
         SEL headerSEL = NSSelectorFromString(@"headerViewWithTitle:");
         if ([self respondsToSelector:headerSEL]) {
             return ((id (*)(id, SEL, id))objc_msgSend)(self, headerSEL, title);
