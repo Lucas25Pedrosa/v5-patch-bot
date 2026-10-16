@@ -1,12 +1,12 @@
-# XLiquidGlassNative 3.0
+# XLiquidGlassNative 3.0 - Distribution Edition
 
-Clean native Liquid Glass activation variant for X.
+Clean native Liquid Glass activation variant for X, based directly on XLiquidGlassNative 3.0.
 
 ## Goal
 
 Expose the native Liquid Glass redesign already present inside X without adding compatibility, navigation, badge, sidebar, blur or other visual/runtime fixes of our own.
 
-Version 3.0 keeps the activation path from the clean 1.1.0 build and changes only the NeoFreeBird settings integration.
+The Distribution Edition keeps the 3.0 activation code and Appearance submenu unchanged. Its only additional behavior is the NeoFreeBird credits block used for distribution.
 
 ## NeoFreeBird integration
 
@@ -20,9 +20,20 @@ The `Liquid Glass` button is inserted in the native NeoFreeBird Appearance page 
 
 Inside the submenu there is only one option: enable or disable Liquid Glass. The default state is ON. Restart X after changing the switch so the full interface is rebuilt with the selected state.
 
+## Distribution credits
+
+The NeoFreeBird root settings page receives the same two credit sections used by the previous distribution build, with polished public labels:
+
+- `Liquid Glass` -> `Lucas` (`@Lucas25Pedrosa`), avatar from GitHub and tap action to `https://github.com/Lucas25Pedrosa`
+- `IPA Source` -> `IPA Vault` (`@ipavault`), avatar from GitHub and tap action to `https://t.me/ipavault`
+
+The public display name is `Lucas`, while the username and redirect remain `Lucas25Pedrosa`.
+
+The credits are implemented in the separate `XLiquidGlassDistributionCredits.m` source file so they remain isolated from the Liquid Glass activation code and can be audited independently.
+
 ## Compact settings UI
 
-The Liquid Glass row uses smaller title/detail typography than the previous 1.1.0 page, allows the description to use two lines, scales long titles when necessary and uses a smaller footer so translations do not overflow the cell.
+The Liquid Glass row uses smaller title/detail typography, allows the description to use two lines, scales long titles when necessary and uses a smaller footer so translations do not overflow the cell.
 
 ## Languages
 
@@ -65,7 +76,7 @@ When disabled, the persisted Liquid Glass gate is removed and the activation hoo
 
 No sidebar fix, edge-swipe fix, badge bridge/fix, multi-account badge logic, navigation routing/host fix, tab-label behavior, selection chrome changes, avatar styling changes, blur changes, root-tab routing, legacy navigation compatibility or any other visual/runtime patch.
 
-The retry schedule exists only because X loads some native gate and NeoFreeBird settings classes after tweak construction; it does not alter UI behavior.
+The retry schedules exist only because X loads some native gate and NeoFreeBird settings classes after tweak construction; they do not alter X UI behavior outside the requested settings/credits integration.
 
 ## Usage
 
