@@ -4,8 +4,10 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-// XLiquidGlassNative 3.1 Beta 2
+// XLiquidGlassNative 3.1 Beta 3
 // Single extra feature over 3.0: Tab Bar icon tint.
+// X 12.35+ semantic icon path only: imageView / glyphContainer.
+// No legacy direct-child icon path and no whole-item recursive fallback.
 // No badge, sidebar, label, pill/platter, blur, navigation or legacy-host fixes.
 
 static NSString *const kXLG31TabTintModeKey = @"XLiquidGlassTabBarTintMode";
@@ -193,16 +195,8 @@ static UIImageView *XLG31FindImageViewRecursive(UIView *root, NSUInteger depth) 
 static UIImageView *XLG31ImageViewForItem(UIView *item) {
     if (!item) return nil;
 
-    // This is the path that worked in the previous implementation:
-    // the icon is commonly an immediate UIImageView child of TabBarItemView.
-    for (UIView *subview in item.subviews ?: @[]) {
-        if ([subview isKindOfClass:UIImageView.class]) {
-            return (UIImageView *)subview;
-        }
-    }
-
-    // 12.35 can expose the glyph through fields/containers, so keep these
-    // as compatibility fallbacks without touching any other visual element.
+    // X 12.35+ semantic path only. The legacy assumption that the icon is an
+    // immediate UIImageView child of TabBarItemView was intentionally removed.
     id direct = XLG31SafeValueForKey(item, @"imageView");
     if ([direct isKindOfClass:UIImageView.class]) {
         return (UIImageView *)direct;
@@ -210,11 +204,10 @@ static UIImageView *XLG31ImageViewForItem(UIView *item) {
 
     id glyphContainer = XLG31SafeValueForKey(item, @"glyphContainer");
     if ([glyphContainer isKindOfClass:UIView.class]) {
-        UIImageView *inside = XLG31FindImageViewRecursive((UIView *)glyphContainer, 0);
-        if (inside) return inside;
+        return XLG31FindImageViewRecursive((UIView *)glyphContainer, 0);
     }
 
-    return XLG31FindImageViewRecursive(item, 0);
+    return nil;
 }
 
 static BOOL XLG31ItemIsSelected(UIView *item) {
@@ -258,8 +251,6 @@ static void XLG31ApplyTintToItem(UIView *item) {
 
     UIColor *themeColor = XLG31ResolvedThemeColor();
 
-    // Set the semantic tint chain first. On 12.35 the glyph may inherit tint
-    // from its item/container even when the UIImageView is not directly exposed.
     item.tintColor = themeColor;
 
     id glyphContainer = XLG31SafeValueForKey(item, @"glyphContainer");
@@ -561,7 +552,7 @@ static void XLG31ScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlass31TabTintInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassNative] 3.1 Beta 2 tab icon tint module loaded");
+        NSLog(@"[XLiquidGlassNative] 3.1 Beta 3 tab icon tint module loaded");
         XLG31Install();
         XLG31ScheduleRetry(0.00);
         XLG31ScheduleRetry(0.05);
