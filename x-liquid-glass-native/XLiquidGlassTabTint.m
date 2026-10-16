@@ -4,9 +4,12 @@
 #import <objc/message.h>
 #import <dispatch/dispatch.h>
 
-// XLiquidGlassNative 3.1 Beta 2
-// Single extra feature over 3.0: Tab Bar icon tint.
-// No badge, sidebar, label, pill/platter, blur, navigation or legacy-host fixes.
+// XLiquidGlassNative 3.1 Beta 7
+// Built directly from the proven Beta 2 icon resolver.
+// Active-tab tint ports the validated XLiquidGlass 2.0.2 Portal/Carried model:
+// labeled primary items keep X's native inactive tint, while unlabeled
+// Portal/Carried copies keep the NFB accent and X reveals the active copy.
+// No polling, selection hooks, badge/sidebar/blur/label/navigation fixes.
 
 static NSString *const kXLG31TabTintModeKey = @"XLiquidGlassTabBarTintMode";
 
@@ -102,7 +105,7 @@ static NSString *XLG31ModeTitle(XLG31TabTintMode mode) {
     }
 }
 
-#pragma mark - NFB theme color
+#pragma mark - Colors
 
 static UIColor *XLG31ResolvedThemeColor(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
@@ -144,6 +147,17 @@ static UIColor *XLG31ResolvedThemeColor(void) {
     }
 
     return UIColor.systemBlueColor;
+}
+
+// Exact 2.0.2 inactive-color path.
+static UIColor *XLG31NativeInactiveTabColor(void) {
+    Class tabViewClass = NSClassFromString(@"T1TabView");
+    SEL itemColorSEL = NSSelectorFromString(@"itemColor");
+    if (tabViewClass && [tabViewClass respondsToSelector:itemColorSEL]) {
+        id color = ((id(*)(id,SEL))objc_msgSend)(tabViewClass, itemColorSEL);
+        if ([color isKindOfClass:UIColor.class]) return color;
+    }
+    return UIColor.secondaryLabelColor;
 }
 
 #pragma mark - XNavigation.TabBarItemView
@@ -190,19 +204,17 @@ static UIImageView *XLG31FindImageViewRecursive(UIView *root, NSUInteger depth) 
     return nil;
 }
 
+// Keep the Beta 2 resolver intact: this is the resolver that actually painted
+// all tabs on X 12.35 in device testing.
 static UIImageView *XLG31ImageViewForItem(UIView *item) {
     if (!item) return nil;
 
-    // This is the path that worked in the previous implementation:
-    // the icon is commonly an immediate UIImageView child of TabBarItemView.
     for (UIView *subview in item.subviews ?: @[]) {
         if ([subview isKindOfClass:UIImageView.class]) {
             return (UIImageView *)subview;
         }
     }
 
-    // 12.35 can expose the glyph through fields/containers, so keep these
-    // as compatibility fallbacks without touching any other visual element.
     id direct = XLG31SafeValueForKey(item, @"imageView");
     if ([direct isKindOfClass:UIImageView.class]) {
         return (UIImageView *)direct;
@@ -217,65 +229,43 @@ static UIImageView *XLG31ImageViewForItem(UIView *item) {
     return XLG31FindImageViewRecursive(item, 0);
 }
 
-static BOOL XLG31ItemIsSelected(UIView *item) {
-    if (!item) return NO;
-    if ((item.accessibilityTraits & UIAccessibilityTraitSelected) != 0) return YES;
-
-    for (NSString *key in @[@"selected", @"isSelected"]) {
-        id value = XLG31SafeValueForKey(item, key);
-        if ([value respondsToSelector:@selector(boolValue)] && [value boolValue]) {
-            return YES;
-        }
-    }
-
-    UIView *bar = XLG31AncestorNamed(item, @"XNavigation.TabBarView");
-    if (!bar) return NO;
-
-    id selectedItem = XLG31SafeValueForKey(bar, @"selectedItemView");
-    if (selectedItem == item) return YES;
-
-    id itemViewsValue = XLG31SafeValueForKey(bar, @"itemViews");
-    id selectedIndexValue = XLG31SafeValueForKey(bar, @"selectedIndex");
-    if ([itemViewsValue isKindOfClass:NSArray.class] &&
-        [selectedIndexValue respondsToSelector:@selector(integerValue)]) {
-        NSArray *items = (NSArray *)itemViewsValue;
-        NSUInteger index = [items indexOfObjectIdenticalTo:item];
-        NSInteger selectedIndex = [selectedIndexValue integerValue];
-        if (index != NSNotFound && (NSInteger)index == selectedIndex) return YES;
-    }
-
-    return NO;
-}
-
 static void XLG31ApplyTintToItem(UIView *item) {
     if (!item || XLG31ItemIsProfile(item)) return;
 
     XLG31TabTintMode mode = XLG31TintMode();
     if (mode == XLG31TabTintModeNative) return;
 
-    BOOL selected = XLG31ItemIsSelected(item);
-    if (mode == XLG31TabTintModeActive && !selected) return;
+    UIImageView *imageView = XLG31ImageViewForItem(item);
+    if (!imageView || !imageView.image) return;
 
-    UIColor *themeColor = XLG31ResolvedThemeColor();
+    UIColor *accent = XLG31ResolvedThemeColor();
+    UIColor *inactive = XLG31NativeInactiveTabColor();
+    UIView *bar = XLG31AncestorNamed(item, @"XNavigation.TabBarView");
 
-    // Set the semantic tint chain first. On 12.35 the glyph may inherit tint
-    // from its item/container even when the UIImageView is not directly exposed.
-    item.tintColor = themeColor;
-
-    id glyphContainer = XLG31SafeValueForKey(item, @"glyphContainer");
-    if ([glyphContainer isKindOfClass:UIView.class]) {
-        ((UIView *)glyphContainer).tintColor = themeColor;
+    UIColor *color = nil;
+    if (mode == XLG31TabTintModeAll) {
+        color = accent;
+    } else {
+        // Ported literally from the validated 2.0.2 Test7/Test8 model.
+        // Primary visible row items carry accessibility labels and stay native.
+        // Unlabeled Portal/Carried copies carry the accent. X's Liquid Glass
+        // portal reveals the accented copy only for the currently active tab.
+        color = item.accessibilityLabel.length ? inactive : accent;
     }
 
-    UIImageView *imageView = XLG31ImageViewForItem(item);
-    if (!imageView) return;
-
-    if (imageView.image &&
-        imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
+    if (imageView.image.renderingMode != UIImageRenderingModeAlwaysTemplate) {
         imageView.image =
             [imageView.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
     }
-    imageView.tintColor = themeColor;
+    imageView.tintColor = color;
+
+    if (mode == XLG31TabTintModeAll) {
+        item.tintColor = accent;
+    } else {
+        // Also mirrors 2.0.2: the item itself remains on the bar/native tint;
+        // only the Portal/Carried UIImageView copies hold the accent.
+        item.tintColor = bar.tintColor ?: inactive;
+    }
 }
 
 static void XLG31ItemLayout(id self, SEL _cmd) {
@@ -561,7 +551,7 @@ static void XLG31ScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlass31TabTintInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassNative] 3.1 Beta 2 tab icon tint module loaded");
+        NSLog(@"[XLiquidGlassNative] 3.1 Beta 7 tab tint - 2.0.2 Portal/Carried model loaded");
         XLG31Install();
         XLG31ScheduleRetry(0.00);
         XLG31ScheduleRetry(0.05);
