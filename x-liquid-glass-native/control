@@ -1,0 +1,9 @@
+Package: com.lucas.xliquidglassnative
+Name: XLiquidGlassNative
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Activation-only native Liquid Glass path for X. No navigation, badge, sidebar, blur, legacy-host or visual fixes.
+Maintainer: Lucas
+Author: Lucas
+Section: Tweaks
+Depends: mobilesubstrate
