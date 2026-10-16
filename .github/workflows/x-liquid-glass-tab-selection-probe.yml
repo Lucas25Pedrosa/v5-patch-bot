@@ -1,0 +1,48 @@
+name: Build XLiquidGlass Tab Selection Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-tab-selection-probe/**"
+      - ".github/workflows/x-liquid-glass-tab-selection-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-liquid-glass-tab-selection-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build Tab Selection Probe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XLiquidGlassTabSelectionProbe.dylib ! -path '*/XLiquidGlassTabSelectionProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XLiquidGlassTabSelectionProbe.dylib
+          file artifacts/XLiquidGlassTabSelectionProbe.dylib
+          shasum -a 256 artifacts/XLiquidGlassTabSelectionProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload Tab Selection Probe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlassTabSelectionProbe-1.0-arm64
+          path: x-liquid-glass-tab-selection-probe/artifacts/
+          if-no-files-found: error
