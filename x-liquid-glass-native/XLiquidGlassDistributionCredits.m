@@ -3,8 +3,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-// XLiquidGlassNative 3.0 - Distribution Edition
-// Credits integration only.
+// XLiquidGlassNative 3.1 Beta 8
+// Credits integration only: Lucas25Pedrosa.
 // This file does not touch Liquid Glass activation, navigation, badges,
 // sidebar, blur, tab bar, routing, or any visual/runtime behavior in X.
 
@@ -48,16 +48,11 @@ static NSInteger XLGDistLiquidGlassSection(id controller,
     return MAX((NSInteger)0, XLGDistOriginalSectionCount(controller, tableView) - 1);
 }
 
-static NSInteger XLGDistIPASourceSection(id controller,
-                                         UITableView *tableView) {
-    return XLGDistLiquidGlassSection(controller, tableView) + 1;
-}
-
 static NSInteger XLGDistMapSectionToOriginal(id controller,
                                              UITableView *tableView,
                                              NSInteger section) {
-    NSInteger ipaSection = XLGDistIPASourceSection(controller, tableView);
-    if (section > ipaSection) return section - 2;
+    NSInteger liquidSection = XLGDistLiquidGlassSection(controller, tableView);
+    if (section > liquidSection) return section - 1;
     return section;
 }
 
@@ -66,14 +61,6 @@ static NSArray *XLGDistLiquidGlassCreditRows(void) {
         @"title": @"Lucas",
         @"username": @"Lucas25Pedrosa",
         @"avatarURL": @"https://github.com/Lucas25Pedrosa.png"
-    }];
-}
-
-static NSArray *XLGDistIPASourceCreditRows(void) {
-    return @[@{
-        @"title": @"IPA Vault",
-        @"username": @"ipavault",
-        @"avatarURL": @"https://github.com/927tx.png"
     }];
 }
 
@@ -92,7 +79,7 @@ static NSInteger XLGDistNumberOfSections(id self,
                                          UITableView *tableView) {
     (void)_cmd;
     NSInteger original = XLGDistOriginalSectionCount(self, tableView);
-    return original > 0 ? original + 2 : 8;
+    return original > 0 ? original + 1 : 7;
 }
 
 static NSInteger XLGDistNumberOfRows(id self,
@@ -100,8 +87,7 @@ static NSInteger XLGDistNumberOfRows(id self,
                                      UITableView *tableView,
                                      NSInteger section) {
     NSInteger liquidSection = XLGDistLiquidGlassSection(self, tableView);
-    NSInteger ipaSection = XLGDistIPASourceSection(self, tableView);
-    if (section == liquidSection || section == ipaSection) return 1;
+    if (section == liquidSection) return 1;
 
     NSInteger mapped = XLGDistMapSectionToOriginal(self, tableView, section);
     if (!gXLGDistOrigNumberOfRows) return 0;
@@ -114,13 +100,11 @@ static UIView *XLGDistViewForHeader(id self,
                                     UITableView *tableView,
                                     NSInteger section) {
     NSInteger liquidSection = XLGDistLiquidGlassSection(self, tableView);
-    NSInteger ipaSection = XLGDistIPASourceSection(self, tableView);
 
-    if (section == liquidSection || section == ipaSection) {
-        NSString *title = section == liquidSection ? @"Liquid Glass" : @"IPA Source";
+    if (section == liquidSection) {
         SEL headerSEL = NSSelectorFromString(@"headerViewWithTitle:");
         if ([self respondsToSelector:headerSEL]) {
-            return ((id (*)(id, SEL, id))objc_msgSend)(self, headerSEL, title);
+            return ((id (*)(id, SEL, id))objc_msgSend)(self, headerSEL, @"Liquid Glass");
         }
         return nil;
     }
@@ -136,9 +120,8 @@ static CGFloat XLGDistHeightForHeader(id self,
                                       UITableView *tableView,
                                       NSInteger section) {
     NSInteger liquidSection = XLGDistLiquidGlassSection(self, tableView);
-    NSInteger ipaSection = XLGDistIPASourceSection(self, tableView);
 
-    if (section == liquidSection || section == ipaSection) {
+    if (section == liquidSection) {
         return UITableViewAutomaticDimension;
     }
 
@@ -168,12 +151,9 @@ static UITableViewCell *XLGDistCellForRow(id self,
                                           UITableView *tableView,
                                           NSIndexPath *indexPath) {
     NSInteger liquidSection = XLGDistLiquidGlassSection(self, tableView);
-    NSInteger ipaSection = XLGDistIPASourceSection(self, tableView);
 
-    if (indexPath.section == liquidSection || indexPath.section == ipaSection) {
-        NSArray *rows = indexPath.section == liquidSection
-            ? XLGDistLiquidGlassCreditRows()
-            : XLGDistIPASourceCreditRows();
+    if (indexPath.section == liquidSection) {
+        NSArray *rows = XLGDistLiquidGlassCreditRows();
 
         SEL cellSEL = NSSelectorFromString(@"developerCellForTableView:atIndexPath:fromArray:");
         if ([self respondsToSelector:cellSEL]) {
@@ -200,17 +180,10 @@ static void XLGDistDidSelectRow(id self,
                                 UITableView *tableView,
                                 NSIndexPath *indexPath) {
     NSInteger liquidSection = XLGDistLiquidGlassSection(self, tableView);
-    NSInteger ipaSection = XLGDistIPASourceSection(self, tableView);
 
     if (indexPath.section == liquidSection) {
         [tableView deselectRowAtIndexPath:indexPath animated:YES];
         XLGDistOpenExternalURL(@"https://github.com/Lucas25Pedrosa");
-        return;
-    }
-
-    if (indexPath.section == ipaSection) {
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-        XLGDistOpenExternalURL(@"https://t.me/ipavault");
         return;
     }
 
@@ -283,7 +256,7 @@ static void XLGDistScheduleRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassDistributionCreditsInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlassNative] 3.0 Distribution Edition credits loaded");
+        NSLog(@"[XLiquidGlassNative] 3.1 Beta 8 Lucas credit loaded");
         XLGDistInstallCredits();
         XLGDistScheduleRetry(0.00);
         XLGDistScheduleRetry(0.05);
