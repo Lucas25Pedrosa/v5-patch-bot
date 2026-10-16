@@ -1,6 +1,6 @@
 name: Build XLiquidGlassNative
 
-# Activation-only X Liquid Glass build.
+# Native X Liquid Glass activation + NeoFreeBird toggle. No UI/runtime fixes.
 "on":
   workflow_dispatch:
   push:
@@ -44,6 +44,6 @@ jobs:
       - name: Upload XLiquidGlassNative dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlassNative-1.0.0-arm64
+          name: XLiquidGlassNative-1.1.0-NFBToggle-arm64
           path: x-liquid-glass-native/artifacts/
           if-no-files-found: error
