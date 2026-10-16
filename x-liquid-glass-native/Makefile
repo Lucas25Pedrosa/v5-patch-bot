@@ -5,7 +5,7 @@ INSTALL_TARGET_PROCESSES := Twitter
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME := XLiquidGlassNative
-XLiquidGlassNative_FILES := XLiquidGlassNative.m XLiquidGlassDistributionCredits.m XLiquidGlassTabTint.m
+XLiquidGlassNative_FILES := XLiquidGlassNative.m XLiquidGlassDistributionCredits.m XLiquidGlassTabTint.m XLiquidGlassTabActiveRefresh.m
 XLiquidGlassNative_FRAMEWORKS := Foundation UIKit
 XLiquidGlassNative_CFLAGS := -fobjc-arc -fblocks -Wall -Wextra -Wno-unused-parameter
 
