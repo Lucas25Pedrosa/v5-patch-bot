@@ -1,0 +1,47 @@
+name: Build X 12.36 Tab Capacity Probe
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-tabbar-capacity-probe/**"
+      - ".github/workflows/x-tabbar-capacity-probe.yml"
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: x-tabbar-capacity-probe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Build and validate arm64 probe
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          p="$(find .theos -name XTabBarCapacityProbe.dylib -print | head -1)"
+          test -n "$p"
+          cp "$p" artifacts/XTabBarCapacityProbe.dylib
+          file artifacts/XTabBarCapacityProbe.dylib | tee artifacts/file.txt
+          file artifacts/XTabBarCapacityProbe.dylib | grep -F "Mach-O 64-bit"
+          file artifacts/XTabBarCapacityProbe.dylib | grep -F "arm64"
+          strings -a artifacts/XTabBarCapacityProbe.dylib | tee artifacts/strings.txt
+          grep -F "XTabBarCapacityProbe.log" artifacts/strings.txt
+          grep -F "T1BottomTabBarItemCapacity" artifacts/strings.txt
+          grep -F "TabCustomizationToastViewModel" artifacts/strings.txt
+          grep -F "mode=PASSIVE" artifacts/strings.txt
+          otool -D artifacts/XTabBarCapacityProbe.dylib | tee artifacts/install-name.txt
+          shasum -a 256 artifacts/XTabBarCapacityProbe.dylib > artifacts/SHA256SUMS.txt
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XTabBarCapacityProbe-X12.36-arm64
+          path: x-tabbar-capacity-probe/artifacts/
+          if-no-files-found: error
