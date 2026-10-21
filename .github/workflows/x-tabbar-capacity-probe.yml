@@ -33,7 +33,8 @@ jobs:
           file artifacts/XTabBarCapacityProbe.dylib | grep -F "Mach-O 64-bit"
           file artifacts/XTabBarCapacityProbe.dylib | grep -F "arm64"
           strings -a artifacts/XTabBarCapacityProbe.dylib | tee artifacts/strings.txt
-          grep -F "XTabBarCapacityProbe.log" artifacts/strings.txt
+          grep -F "Copiar relatório" artifacts/strings.txt
+          grep -F "ModernSettingsViewController" artifacts/strings.txt
           grep -F "T1BottomTabBarItemCapacity" artifacts/strings.txt
           grep -F "TabCustomizationToastViewModel" artifacts/strings.txt
           grep -F "mode=PASSIVE" artifacts/strings.txt
