@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
+// X 12.36 compact bottom-tab capacity restoration: 5 -> 6.
 static NSInteger XTSix(id self, SEL _cmd) {
     (void)self; (void)_cmd;
     return 6;
