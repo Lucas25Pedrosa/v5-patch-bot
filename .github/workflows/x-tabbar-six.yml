@@ -1,0 +1,48 @@
+name: Build X 12.36 Six Tab Fix
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-tabbar-six/**"
+      - ".github/workflows/x-tabbar-six.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: x-tabbar-six
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Build and validate
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -name XTabBarSix.dylib -print | head -1)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XTabBarSix.dylib
+          file artifacts/XTabBarSix.dylib | tee artifacts/file.txt
+          file artifacts/XTabBarSix.dylib | grep -F "Mach-O 64-bit"
+          file artifacts/XTabBarSix.dylib | grep -F "arm64"
+          strings -a artifacts/XTabBarSix.dylib | tee artifacts/strings.txt
+          grep -F "T1BottomTabBarItemCapacity" artifacts/strings.txt
+          grep -F "compact tab capacity forced to 6" artifacts/strings.txt
+          otool -D artifacts/XTabBarSix.dylib | tee artifacts/install-name.txt
+          shasum -a 256 artifacts/XTabBarSix.dylib > artifacts/SHA256SUMS.txt
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XTabBarSix-X12.36-arm64
+          path: x-tabbar-six/artifacts/
+          if-no-files-found: error
