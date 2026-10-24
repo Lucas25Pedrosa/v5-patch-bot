@@ -1,0 +1,48 @@
+name: Build XSoccerGamedayProbe
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-soccer-gameday-probe/**"
+      - ".github/workflows/x-soccer-gameday-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: x-soccer-gameday-probe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build XSoccerGamedayProbe dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name XSoccerGamedayProbe.dylib ! -path '*/XSoccerGamedayProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/XSoccerGamedayProbe.dylib
+          file artifacts/XSoccerGamedayProbe.dylib
+          shasum -a 256 artifacts/XSoccerGamedayProbe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload XSoccerGamedayProbe dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: XSoccerGamedayProbe-1.0.0-arm64
+          path: x-soccer-gameday-probe/artifacts/
+          if-no-files-found: error
