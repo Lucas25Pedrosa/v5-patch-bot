@@ -15,6 +15,12 @@ static void PLog(NSString *fmt, ...) {
     NSLog(@"[XSoccerGamedayProbe] %@", s ?: @"");
 }
 
+static void FeatureLog(NSString *line) {
+    PLog(@"%@", line ?: @"");
+}
+
+extern void XSGRunFeatureScan(void (*logger)(NSString *));
+
 static void DumpFlags(void) {
     NSArray *keys = @[
         @"x_sports_soccer_gameday_enabled",
@@ -115,28 +121,29 @@ static void DumpUI(void) {
 @interface XSGProbeController : UITableViewController @end
 @implementation XSGProbeController
 - (void)viewDidLoad { [super viewDidLoad]; self.title = @"Soccer Gameday Probe"; }
-- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { (void)t; (void)s; return 5; }
+- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s { (void)t; (void)s; return 6; }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { (void)t; return 1; }
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s { (void)t; (void)s; return @"Diagnóstico X 12.37"; }
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)p {
     UITableViewCell *c = [t dequeueReusableCellWithIdentifier:@"xsg"];
     if (!c) c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"xsg"];
-    NSArray *a = @[@"Capturar flags", @"Probe de runtime", @"Capturar tela", @"Copiar relatório", @"Limpar relatório"];
-    NSArray *b = @[@"Lê as chaves Soccer/Sports visíveis ao app.", @"Procura classes XSports e Soccer carregadas.", @"Procura elementos de Sports/Soccer na UI atual.", @"Copia o relatório completo.", @"Inicia uma nova sessão limpa."];
+    NSArray *a = @[@"Capturar flags", @"Probe de runtime", @"Feature switch scan", @"Capturar tela", @"Copiar relatório", @"Limpar relatório"];
+    NSArray *b = @[@"Lê as chaves Soccer/Sports visíveis ao app.", @"Procura classes XSports e Soccer carregadas.", @"Mapeia classes e seletores ligados a flags/experimentos sem alterar valores.", @"Procura elementos de Sports/Soccer na UI atual.", @"Copia o relatório completo.", @"Inicia uma nova sessão limpa."];
     c.textLabel.text = a[p.row]; c.detailTextLabel.text = b[p.row]; return c;
 }
 - (void)tableView:(UITableView *)t didSelectRowAtIndexPath:(NSIndexPath *)p {
     [t deselectRowAtIndexPath:p animated:YES];
     if (p.row == 0) DumpFlags();
     else if (p.row == 1) DumpRuntime();
-    else if (p.row == 2) DumpUI();
-    else if (p.row == 3) {
+    else if (p.row == 2) XSGRunFeatureScan(FeatureLog);
+    else if (p.row == 3) DumpUI();
+    else if (p.row == 4) {
         NSString *r = [gReport copy] ?: @"";
         UIPasteboard.generalPasteboard.string = r;
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Relatório copiado" message:[NSString stringWithFormat:@"%lu caracteres.", (unsigned long)r.length] preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
-    } else { gReport = [NSMutableString string]; PLog(@"NEW_SESSION version=1.0 mode=PASSIVE"); }
+    } else { gReport = [NSMutableString string]; PLog(@"NEW_SESSION version=1.1 mode=PASSIVE_FEATURE_SCAN"); }
 }
 @end
 
@@ -172,7 +179,7 @@ static void InstallNFB(void) {
 __attribute__((constructor)) static void Init(void) {
     @autoreleasepool {
         gReport = [NSMutableString string];
-        PLog(@"BOOT version=1.0 mode=PASSIVE app=%@ build=%@ iOS=%@", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"], [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"], UIDevice.currentDevice.systemVersion);
+        PLog(@"BOOT version=1.1 mode=PASSIVE_FEATURE_SCAN app=%@ build=%@ iOS=%@", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"], [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"], UIDevice.currentDevice.systemVersion);
         InstallNFB();
         DumpFlags();
     }
