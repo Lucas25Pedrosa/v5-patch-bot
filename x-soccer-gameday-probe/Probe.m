@@ -55,9 +55,9 @@ static void DumpRuntime(void) {
         @"XSports.SportsGameStatsViewController",
         @"XSports.SportsGamePlaysViewController",
         @"XSports.SportsPlayerLeadersViewController",
-        @"T1SportsHubHomeFeedViewController",
-        @"SportsGameChatContainerViewController",
-        @"SportsGameFeedContainerViewController"
+        @"T1TwitterSwift.T1SportsHubHomeFeedViewController",
+        @"T1TwitterSwift.SportsGameChatContainerViewController",
+        @"T1TwitterSwift.SportsGameFeedContainerViewController"
     ];
     for (NSString *name in targets) DumpClass(name);
 
