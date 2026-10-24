@@ -9,23 +9,27 @@ static BOOL XSGContainsAny(NSString *value, NSArray<NSString *> *needles) {
     return NO;
 }
 
-__attribute__((constructor))
-static void XSGFeatureScanInit(void) {
-    @autoreleasepool {
-        NSArray<NSString *> *classNeedles = @[@"FeatureSwitch", @"FeatureFlag", @"Experiment", @"Gate", @"Sports", @"Soccer"];
-        NSArray<NSString *> *selectorNeedles = @[@"bool", @"enabled", @"value", @"feature", @"switch", @"experiment", @"sports", @"soccer"];
+static void XSGEmit(void (*logger)(NSString *), NSString *line) {
+    if (logger) logger(line);
+    else NSLog(@"[XSoccerGamedayProbe][FEATURE_SCAN] %@", line);
+}
 
-        NSLog(@"[XSoccerGamedayProbe][FEATURE_SCAN] BEGIN");
+void XSGRunFeatureScan(void (*logger)(NSString *)) {
+    @autoreleasepool {
+        NSArray<NSString *> *classNeedles = @[@"FeatureSwitch", @"FeatureFlag", @"Experiment", @"Gate", @"Decider", @"Sports", @"Soccer"];
+        NSArray<NSString *> *selectorNeedles = @[@"bool", @"enabled", @"value", @"feature", @"switch", @"experiment", @"gate", @"decider", @"sports", @"soccer"];
+
+        XSGEmit(logger, @"FEATURE_SCAN_BEGIN");
 
         int count = objc_getClassList(NULL, 0);
         if (count <= 0) {
-            NSLog(@"[XSoccerGamedayProbe][FEATURE_SCAN] no runtime classes");
+            XSGEmit(logger, @"FEATURE_SCAN no runtime classes");
             return;
         }
 
         __unsafe_unretained Class *classes = (__unsafe_unretained Class *)calloc((size_t)count, sizeof(Class));
         if (!classes) {
-            NSLog(@"[XSoccerGamedayProbe][FEATURE_SCAN] allocation failed");
+            XSGEmit(logger, @"FEATURE_SCAN allocation failed");
             return;
         }
 
@@ -39,16 +43,15 @@ static void XSGFeatureScanInit(void) {
             if (!XSGContainsAny(className, classNeedles)) continue;
 
             matchedClasses++;
-            NSLog(@"[XSoccerGamedayProbe][FEATURE_CLASS] %@", className);
+            XSGEmit(logger, [NSString stringWithFormat:@"FEATURE_CLASS %@", className]);
 
             unsigned methodCount = 0;
             Method *methods = class_copyMethodList(cls, &methodCount);
             for (unsigned j = 0; j < methodCount; j++) {
-                SEL selector = method_getName(methods[j]);
-                NSString *selectorName = NSStringFromSelector(selector);
+                NSString *selectorName = NSStringFromSelector(method_getName(methods[j]));
                 if (!XSGContainsAny(selectorName, selectorNeedles)) continue;
                 matchedSelectors++;
-                NSLog(@"[XSoccerGamedayProbe][FEATURE_METHOD] class=%@ selector=%@", className, selectorName);
+                XSGEmit(logger, [NSString stringWithFormat:@"FEATURE_METHOD class=%@ selector=%@", className, selectorName]);
             }
             free(methods);
 
@@ -56,16 +59,15 @@ static void XSGFeatureScanInit(void) {
             unsigned classMethodCount = 0;
             Method *classMethods = class_copyMethodList(meta, &classMethodCount);
             for (unsigned j = 0; j < classMethodCount; j++) {
-                SEL selector = method_getName(classMethods[j]);
-                NSString *selectorName = NSStringFromSelector(selector);
+                NSString *selectorName = NSStringFromSelector(method_getName(classMethods[j]));
                 if (!XSGContainsAny(selectorName, selectorNeedles)) continue;
                 matchedSelectors++;
-                NSLog(@"[XSoccerGamedayProbe][FEATURE_CLASS_METHOD] class=%@ selector=%@", className, selectorName);
+                XSGEmit(logger, [NSString stringWithFormat:@"FEATURE_CLASS_METHOD class=%@ selector=%@", className, selectorName]);
             }
             free(classMethods);
         }
 
         free(classes);
-        NSLog(@"[XSoccerGamedayProbe][FEATURE_SCAN] END classes=%lu selectors=%lu", (unsigned long)matchedClasses, (unsigned long)matchedSelectors);
+        XSGEmit(logger, [NSString stringWithFormat:@"FEATURE_SCAN_END classes=%lu selectors=%lu", (unsigned long)matchedClasses, (unsigned long)matchedSelectors]);
     }
 }
