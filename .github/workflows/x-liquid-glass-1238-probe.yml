@@ -1,10 +1,10 @@
-name: Build XLiquidGlass 12.38 Probe v2.8
+name: Build XLiquidGlass 12.38 Probe v2.7
 
 "on":
   workflow_dispatch:
   push:
     paths:
-      - "x-liquid-glass-1238-probe-v28/**"
+      - "x-liquid-glass-1238-probe-v27/**"
       - ".github/workflows/x-liquid-glass-1238-probe.yml"
 
 permissions:
@@ -22,8 +22,8 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build probe v2.8 dylib
-        working-directory: x-liquid-glass-1238-probe-v28
+      - name: Build probe v2.7 dylib
+        working-directory: x-liquid-glass-1238-probe-v27
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
