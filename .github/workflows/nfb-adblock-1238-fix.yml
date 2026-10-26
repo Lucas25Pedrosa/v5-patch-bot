@@ -1,0 +1,62 @@
+name: Build NFB AdBlock 12.38 Fix
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nfb-adblock-1238-fix/**"
+      - ".github/workflows/nfb-adblock-1238-fix.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build NFB AdBlock 12.38 fix
+        working-directory: nfb-adblock-1238-fix
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib \
+            -fobjc-arc \
+            -fblocks \
+            -framework Foundation \
+            -Wl,-undefined,dynamic_lookup \
+            NFBAdBlock1238Fix.m \
+            -o NFBAdBlock1238Fix.dylib
+
+          ldid -S NFBAdBlock1238Fix.dylib
+          mkdir -p artifacts
+          cp NFBAdBlock1238Fix.dylib artifacts/
+          file artifacts/NFBAdBlock1238Fix.dylib
+          shasum -a 256 artifacts/NFBAdBlock1238Fix.dylib > artifacts/SHA256SUMS.txt
+          printf 'NFBAdBlock1238Fix\nVersion: 1.0\nTarget: X 12.38\nRequires NeoFreeBird: yes\nSetting respected: hide_promoted\nScope: only URTTimelineStatusItemViewModel status.isPromoted filtering\nPurpose: verify/fix the T1URTTimelineStatusItemViewModel -> URTTimelineStatusItemViewModel runtime rename\nLog: Documents/NFBAdBlock1238Fix.log\n' > artifacts/BUILD_INFO.txt
+
+      - name: Verify symbols and markers
+        working-directory: nfb-adblock-1238-fix
+        run: |
+          set -euo pipefail
+          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "URTTimelineStatusItemViewModel"
+          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "hide_promoted"
+          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "NFBAdBlock1238Fix.log"
+
+      - name: Upload fix
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFBAdBlock1238Fix-1.0-X12.38-arm64
+          path: nfb-adblock-1238-fix/artifacts/
+          if-no-files-found: error
