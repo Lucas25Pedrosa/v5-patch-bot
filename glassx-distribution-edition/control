@@ -1,0 +1,9 @@
+Package: com.lucas.glassxde
+Name: GlassXDistributionEdition
+Version: 3.0.0a
+Architecture: iphoneos-arm
+Description: GlassX Distribution Edition 3.0.0a for X 12.38. Native Liquid Glass activation using the validated pre-TabBar engine, with NeoFreeBird Appearance integration and the existing Lucas25Pedrosa and IPA Vault credits. No Tab Tint module or tint behavior is included.
+Maintainer: Lucas
+Author: Lucas
+Section: Tweaks
+Depends: mobilesubstrate

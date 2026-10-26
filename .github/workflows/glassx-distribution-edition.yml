@@ -1,0 +1,72 @@
+name: Build GlassXDistributionEdition 3.0.0a
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "glassx-distribution-edition/**"
+      - ".github/workflows/glassx-distribution-edition.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        working-directory: glassx-distribution-edition
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Install signing tool
+        run: brew install ldid
+
+      - name: Build GlassXDE dylib
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name GlassXDE.dylib ! -path '*/GlassXDE.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/GlassXDE.dylib
+
+          # Enforce the requested Mach-O install name and resign after the edit.
+          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassXDE.dylib artifacts/GlassXDE.dylib
+          ldid -S artifacts/GlassXDE.dylib
+
+          file artifacts/GlassXDE.dylib
+          otool -D artifacts/GlassXDE.dylib | tee artifacts/LC_ID_DYLIB.txt
+          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassXDE.dylib"
+
+          # Distribution Edition must not contain the Tab Tint module.
+          if strings artifacts/GlassXDE.dylib | grep -Eqi 'XLiquidGlassTabTint|Tab Bar Tint|Tab Tint'; then
+            echo "Unexpected Tab Tint content found in GlassXDE.dylib"
+            exit 1
+          fi
+
+          shasum -a 256 artifacts/GlassXDE.dylib > artifacts/SHA256SUMS.txt
+          cat > artifacts/BUILD_INFO.txt <<'EOF'
+          Name: GlassXDistributionEdition
+          Version: 3.0.0a
+          Package: com.lucas.glassxde
+          File: GlassXDE.dylib
+          LC_ID_DYLIB: /Library/MobileSubstrate/DynamicLibraries/GlassXDE.dylib
+          Engine: GlassX 3.0 X 12.38 validated pre-TabBar engine
+          Credits: preserved (Lucas25Pedrosa + IPA Vault)
+          Tab Tint: not included
+          EOF
+
+      - name: Upload GlassXDistributionEdition artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GlassXDistributionEdition-3.0.0a-X12.38-arm64
+          path: glassx-distribution-edition/artifacts/
+          if-no-files-found: error
