@@ -1,0 +1,53 @@
+name: Build XLiquidGlass 12.38 Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-1238-probe/**"
+      - ".github/workflows/x-liquid-glass-1238-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build probe dylib
+        working-directory: x-liquid-glass-1238-probe
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib \
+            -fobjc-arc \
+            -fblocks \
+            -framework Foundation \
+            -framework UIKit \
+            -Wl,-undefined,dynamic_lookup \
+            XLiquidGlass1238Probe.m \
+            -o XLiquidGlass1238Probe.dylib
+          ldid -S XLiquidGlass1238Probe.dylib
+          mkdir -p artifacts
+          cp XLiquidGlass1238Probe.dylib artifacts/
+          file artifacts/XLiquidGlass1238Probe.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238Probe.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass1238Probe-1.0-X12.38-arm64
+          path: x-liquid-glass-1238-probe/artifacts/
+          if-no-files-found: error
