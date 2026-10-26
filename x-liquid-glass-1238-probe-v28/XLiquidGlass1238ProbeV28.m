@@ -3,6 +3,8 @@
 #import <dlfcn.h>
 
 static NSString *const kVersion = @"2.8";
+static const uintptr_t kExpectedEnabledGetterOffset = 0x21079dc;
+static const uintptr_t kRedesignGateWriterOffset = 0x2107b34;
 
 static void InspectAppearance(void) {
     Class c = NSClassFromString(@"XAppearance.Appearance");
