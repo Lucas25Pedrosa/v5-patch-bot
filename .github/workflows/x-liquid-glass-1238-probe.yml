@@ -22,7 +22,7 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build probe dylib
+      - name: Build probe v2 dylib
         working-directory: x-liquid-glass-1238-probe
         run: |
           set -euo pipefail
@@ -38,16 +38,17 @@ jobs:
             -framework UIKit \
             -Wl,-undefined,dynamic_lookup \
             XLiquidGlass1238Probe.m \
-            -o XLiquidGlass1238Probe.dylib
-          ldid -S XLiquidGlass1238Probe.dylib
+            XLiquidGlassFeatureSwitchProbe.m \
+            -o XLiquidGlass1238ProbeV2.dylib
+          ldid -S XLiquidGlass1238ProbeV2.dylib
           mkdir -p artifacts
-          cp XLiquidGlass1238Probe.dylib artifacts/
-          file artifacts/XLiquidGlass1238Probe.dylib
-          shasum -a 256 artifacts/XLiquidGlass1238Probe.dylib > artifacts/SHA256SUMS.txt
+          cp XLiquidGlass1238ProbeV2.dylib artifacts/
+          file artifacts/XLiquidGlass1238ProbeV2.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238ProbeV2.dylib > artifacts/SHA256SUMS.txt
 
-      - name: Upload probe
+      - name: Upload probe v2
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass1238Probe-1.0-X12.38-arm64
+          name: XLiquidGlass1238Probe-2.0-X12.38-arm64
           path: x-liquid-glass-1238-probe/artifacts/
           if-no-files-found: error
