@@ -1,8 +1,8 @@
-Package: com.lucas.xliquidglassnative
-Name: XLiquidGlassNative
-Version: 3.0.0-beta1
+Package: com.lucas.glassx
+Name: GlassX
+Version: 3.0.0
 Architecture: iphoneos-arm
-Description: XLiquidGlass 3.0 Beta 1 for X 12.38. Keeps the existing NeoFreeBird Appearance toggle, Lucas25Pedrosa credit and Tab Bar Tint modes (Native, Active tab and All tabs), while replacing the Liquid Glass activation path with the validated pre-TabBar X 12.38 engine. The active-tab mode keeps the validated Portal/Carried coloring model. No badge, sidebar, blur, tab-label, pill/platter, legacy-host or navigation fixes.
+Description: GlassX 3.0 for X 12.38. Native Liquid Glass activation using the validated pre-TabBar engine, with NeoFreeBird Appearance integration, Lucas25Pedrosa credit and Tab Bar Tint modes: Native, Active tab and All tabs. The active-tab mode keeps the validated Portal/Carried coloring model. No badge, sidebar, blur, tab-label, pill/platter, legacy-host or navigation fixes.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
