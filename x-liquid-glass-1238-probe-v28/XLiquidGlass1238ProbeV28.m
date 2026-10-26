@@ -7,6 +7,10 @@ static const uintptr_t kExpectedEnabledGetterOffset = 0x21079dc;
 static const uintptr_t kRedesignGateWriterOffset = 0x2107b34;
 
 typedef void (*XLGRedesignGateWriter)(BOOL);
+typedef union {
+    uintptr_t raw;
+    XLGRedesignGateWriter fn;
+} XLGWriterAddress;
 
 static void InspectAppearance(void) {
     Class c = NSClassFromString(@"XAppearance.Appearance");
