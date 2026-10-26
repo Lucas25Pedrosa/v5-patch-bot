@@ -1,0 +1,53 @@
+name: Build XLiquidGlass 12.38 PreTabBar v3.0
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-1238-pretabbar-v30/**"
+      - ".github/workflows/x-liquid-glass-1238-pretabbar-v30.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build pre-tabbar v3.0
+        working-directory: x-liquid-glass-1238-pretabbar-v30
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib \
+            -fobjc-arc \
+            -fblocks \
+            -framework Foundation \
+            -framework UIKit \
+            -Wl,-undefined,dynamic_lookup \
+            XLiquidGlass1238PreTabBarV30.m \
+            -o XLiquidGlass1238PreTabBarV30.dylib
+          ldid -S XLiquidGlass1238PreTabBarV30.dylib
+          mkdir -p artifacts
+          cp XLiquidGlass1238PreTabBarV30.dylib artifacts/
+          file artifacts/XLiquidGlass1238PreTabBarV30.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238PreTabBarV30.dylib > artifacts/SHA256SUMS.txt
+          printf 'XLiquidGlass1238PreTabBarV30\nVersion: 3.0\nTarget: X 12.38\nMode: dyld + gate installer + pre-tabbar loadView\nUUID: FD661AA4-7047-3C70-960A-6499C800D728\n' > artifacts/BUILD_INFO.txt
+
+      - name: Upload pre-tabbar v3.0
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass1238PreTabBar-3.0-X12.38-arm64
+          path: x-liquid-glass-1238-pretabbar-v30/artifacts/
+          if-no-files-found: error
