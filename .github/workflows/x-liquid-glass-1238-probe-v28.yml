@@ -2,6 +2,10 @@ name: Build XLiquidGlass 12.38 Probe v2.8
 
 "on":
   workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-1238-probe-v28/**"
+      - ".github/workflows/x-liquid-glass-1238-probe-v28.yml"
 
 permissions:
   contents: read
