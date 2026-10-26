@@ -1,7 +1,7 @@
-name: Build XLiquidGlass Beta1 Cache Test
+name: Build GlassX 3.0
 
-# XLiquidGlass 3.0 Beta 1 for X 12.38.
-# Cache-isolation build: same code, different tweak/dylib identity.
+# GlassX 3.0 for X 12.38.
+# Final distribution build from the validated cache-test/tint-fix code.
 "on":
   workflow_dispatch:
   push:
@@ -31,20 +31,20 @@ jobs:
       - name: Install signing tool
         run: brew install ldid
 
-      - name: Build renamed XLiquidGlass dylib
+      - name: Build GlassX dylib
         run: |
           set -euo pipefail
           make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
           mkdir -p artifacts
-          dylib_path="$(find .theos -type f -name XLiquidGlassB1X1238.dylib ! -path '*/XLiquidGlassB1X1238.dylib.dSYM/*' -print -quit)"
+          dylib_path="$(find .theos -type f -name GlassX.dylib ! -path '*/GlassX.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
-          cp "$dylib_path" artifacts/XLiquidGlassB1X1238.dylib
-          file artifacts/XLiquidGlassB1X1238.dylib
-          shasum -a 256 artifacts/XLiquidGlassB1X1238.dylib > artifacts/SHA256SUMS.txt
+          cp "$dylib_path" artifacts/GlassX.dylib
+          file artifacts/GlassX.dylib
+          shasum -a 256 artifacts/GlassX.dylib > artifacts/SHA256SUMS.txt
 
-      - name: Upload renamed XLiquidGlass dylib
+      - name: Upload GlassX dylib
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass-3.0-Beta1-X12.38-CACHE-TEST-arm64
+          name: GlassX-3.0-X12.38-arm64
           path: x-liquid-glass-native/artifacts/
           if-no-files-found: error
