@@ -53,7 +53,7 @@ jobs:
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "URTTimelineStatusItemViewModel"
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "TFNDataViewItem"
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "hide_promoted"
-          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "Version"
+          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "wrapperClass"
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "NFBAdBlock1238Fix.log"
 
       - name: Upload fix
