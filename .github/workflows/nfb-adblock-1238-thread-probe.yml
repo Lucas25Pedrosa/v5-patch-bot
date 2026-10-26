@@ -1,0 +1,43 @@
+name: Build NFB AdBlock X 12.38 Thread Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "nfb-adblock-1238-thread-probe/**"
+      - ".github/workflows/nfb-adblock-1238-thread-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: nfb-adblock-1238-thread-probe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Install Theos
+        run: git clone --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+      - name: Install signing tool
+        run: brew install ldid
+      - name: Build probe
+        run: |
+          set -euo pipefail
+          make clean all FINALPACKAGE=1 THEOS="$RUNNER_TEMP/theos"
+          mkdir -p artifacts
+          dylib_path="$(find .theos -type f -name NFBAdBlock1238ThreadProbe.dylib ! -path '*/NFBAdBlock1238ThreadProbe.dylib.dSYM/*' -print -quit)"
+          test -n "$dylib_path"
+          cp "$dylib_path" artifacts/NFBAdBlock1238ThreadProbe.dylib
+          file artifacts/NFBAdBlock1238ThreadProbe.dylib
+          shasum -a 256 artifacts/NFBAdBlock1238ThreadProbe.dylib > artifacts/SHA256SUMS.txt
+          printf 'NFBAdBlock1238ThreadProbe\nTarget: X 12.38\nPurpose: map ads that appear after opening a post/thread\nDoes not remove ads\nLog: Documents/NFBAdBlock1238ThreadProbe.log\n' > artifacts/BUILD_INFO.txt
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFBAdBlock1238ThreadProbe-X12.38-arm64
+          path: nfb-adblock-1238-thread-probe/artifacts/
+          if-no-files-found: error
