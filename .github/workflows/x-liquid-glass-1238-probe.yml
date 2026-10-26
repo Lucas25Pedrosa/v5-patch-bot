@@ -1,10 +1,10 @@
-name: Build XLiquidGlass 12.38 Probe v2.5
+name: Build XLiquidGlass 12.38 Probe v2.6
 
 "on":
   workflow_dispatch:
   push:
     paths:
-      - "x-liquid-glass-1238-probe-v25/**"
+      - "x-liquid-glass-1238-probe-v26/**"
       - ".github/workflows/x-liquid-glass-1238-probe.yml"
 
 permissions:
@@ -22,8 +22,8 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build probe v2.5 dylib
-        working-directory: x-liquid-glass-1238-probe-v25
+      - name: Build probe v2.6 dylib
+        working-directory: x-liquid-glass-1238-probe-v26
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -37,18 +37,18 @@ jobs:
             -framework Foundation \
             -framework UIKit \
             -Wl,-undefined,dynamic_lookup \
-            XLiquidGlass1238ProbeV25.m \
-            -o XLiquidGlass1238ProbeV25.dylib
-          ldid -S XLiquidGlass1238ProbeV25.dylib
+            XLiquidGlass1238ProbeV26.m \
+            -o XLiquidGlass1238ProbeV26.dylib
+          ldid -S XLiquidGlass1238ProbeV26.dylib
           mkdir -p artifacts
-          cp XLiquidGlass1238ProbeV25.dylib artifacts/
-          file artifacts/XLiquidGlass1238ProbeV25.dylib
-          shasum -a 256 artifacts/XLiquidGlass1238ProbeV25.dylib > artifacts/SHA256SUMS.txt
-          printf 'XLiquidGlass1238ProbeV25\nVersion: 2.5\nTarget: X 12.38\nStandalone: yes\nRequires XLiquidGlassNative: no\nPurpose: direct XAppearance.setLiquidGlassRedesignGate(true), no broad runtime scanning\n' > artifacts/BUILD_INFO.txt
+          cp XLiquidGlass1238ProbeV26.dylib artifacts/
+          file artifacts/XLiquidGlass1238ProbeV26.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238ProbeV26.dylib > artifacts/SHA256SUMS.txt
+          printf 'XLiquidGlass1238ProbeV26\nVersion: 2.6\nTarget: X 12.38\nStandalone: yes\nRequires XLiquidGlassNative: no\nPurpose: direct Objective-C runtime call to XAppearance.Appearance setLiquidGlassRedesignGate:\n' > artifacts/BUILD_INFO.txt
 
-      - name: Upload probe v2.5
+      - name: Upload probe v2.6
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass1238Probe-2.5-X12.38-arm64
-          path: x-liquid-glass-1238-probe-v25/artifacts/
+          name: XLiquidGlass1238Probe-2.6-X12.38-arm64
+          path: x-liquid-glass-1238-probe-v26/artifacts/
           if-no-files-found: error
