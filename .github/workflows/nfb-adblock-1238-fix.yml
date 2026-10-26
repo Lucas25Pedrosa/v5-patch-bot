@@ -44,19 +44,21 @@ jobs:
           cp NFBAdBlock1238Fix.dylib artifacts/
           file artifacts/NFBAdBlock1238Fix.dylib
           shasum -a 256 artifacts/NFBAdBlock1238Fix.dylib > artifacts/SHA256SUMS.txt
-          printf 'NFBAdBlock1238Fix\nVersion: 1.0\nTarget: X 12.38\nRequires NeoFreeBird: yes\nSetting respected: hide_promoted\nScope: only URTTimelineStatusItemViewModel status.isPromoted filtering\nPurpose: verify/fix the T1URTTimelineStatusItemViewModel -> URTTimelineStatusItemViewModel runtime rename\nLog: Documents/NFBAdBlock1238Fix.log\n' > artifacts/BUILD_INFO.txt
+          printf 'NFBAdBlock1238Fix\nVersion: 1.1\nTarget: X 12.38\nRequires NeoFreeBird: yes\nSetting respected: hide_promoted\nScope: direct URTTimelineStatusItemViewModel + TFNDataViewItem->_item wrapped status filtering\nPurpose: block promoted posts in home timeline and opened-post conversation/thread timelines\nLog: Documents/NFBAdBlock1238Fix.log\n' > artifacts/BUILD_INFO.txt
 
       - name: Verify symbols and markers
         working-directory: nfb-adblock-1238-fix
         run: |
           set -euo pipefail
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "URTTimelineStatusItemViewModel"
+          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "TFNDataViewItem"
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "hide_promoted"
+          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "Version"
           strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "NFBAdBlock1238Fix.log"
 
       - name: Upload fix
         uses: actions/upload-artifact@v4
         with:
-          name: NFBAdBlock1238Fix-1.0-X12.38-arm64
+          name: NFBAdBlock1238Fix-1.1-X12.38-arm64
           path: nfb-adblock-1238-fix/artifacts/
           if-no-files-found: error
