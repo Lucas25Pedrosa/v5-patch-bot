@@ -22,8 +22,8 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build probe v2.7 dylib
-        working-directory: x-liquid-glass-1238-probe-v27
+      - name: Build probe v2.8 dylib
+        working-directory: x-liquid-glass-1238-probe-v28
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
