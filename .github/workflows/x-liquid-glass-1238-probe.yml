@@ -1,4 +1,4 @@
-name: Build XLiquidGlass 12.38 Probe v2.7
+name: Build XLiquidGlass 12.38 Probe v2.8
 
 "on":
   workflow_dispatch:
