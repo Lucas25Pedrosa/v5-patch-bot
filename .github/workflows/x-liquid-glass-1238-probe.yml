@@ -1,10 +1,10 @@
-name: Build XLiquidGlass 12.38 Probe v2.2
+name: Build XLiquidGlass 12.38 Probe v2.3
 
 "on":
   workflow_dispatch:
   push:
     paths:
-      - "x-liquid-glass-1238-probe-v22/**"
+      - "x-liquid-glass-1238-probe-v23/**"
       - ".github/workflows/x-liquid-glass-1238-probe.yml"
 
 permissions:
@@ -22,8 +22,8 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build probe v2.2 dylib
-        working-directory: x-liquid-glass-1238-probe-v22
+      - name: Build probe v2.3 dylib
+        working-directory: x-liquid-glass-1238-probe-v23
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -37,18 +37,18 @@ jobs:
             -framework Foundation \
             -framework UIKit \
             -Wl,-undefined,dynamic_lookup \
-            XLiquidGlass1238ProbeV22.m \
-            -o XLiquidGlass1238ProbeV22.dylib
-          ldid -S XLiquidGlass1238ProbeV22.dylib
+            XLiquidGlass1238ProbeV23.m \
+            -o XLiquidGlass1238ProbeV23.dylib
+          ldid -S XLiquidGlass1238ProbeV23.dylib
           mkdir -p artifacts
-          cp XLiquidGlass1238ProbeV22.dylib artifacts/
-          file artifacts/XLiquidGlass1238ProbeV22.dylib
-          shasum -a 256 artifacts/XLiquidGlass1238ProbeV22.dylib > artifacts/SHA256SUMS.txt
-          printf 'XLiquidGlass1238ProbeV22\nVersion: 2.2\nTarget: X 12.38\nStandalone: yes\nRequires XLiquidGlassNative: no\n' > artifacts/BUILD_INFO.txt
+          cp XLiquidGlass1238ProbeV23.dylib artifacts/
+          file artifacts/XLiquidGlass1238ProbeV23.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238ProbeV23.dylib > artifacts/SHA256SUMS.txt
+          printf 'XLiquidGlass1238ProbeV23\nVersion: 2.3\nTarget: X 12.38\nStandalone: yes\nRequires XLiquidGlassNative: no\nPurpose: post-feature-switch diagnostics\n' > artifacts/BUILD_INFO.txt
 
-      - name: Upload probe v2.2
+      - name: Upload probe v2.3
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass1238Probe-2.2-X12.38-arm64
-          path: x-liquid-glass-1238-probe-v22/artifacts/
+          name: XLiquidGlass1238Probe-2.3-X12.38-arm64
+          path: x-liquid-glass-1238-probe-v23/artifacts/
           if-no-files-found: error
