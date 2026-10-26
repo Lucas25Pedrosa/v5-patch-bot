@@ -1,10 +1,10 @@
-name: Build XLiquidGlass 12.38 Probe
+name: Build XLiquidGlass 12.38 Probe v2.2
 
 "on":
   workflow_dispatch:
   push:
     paths:
-      - "x-liquid-glass-1238-probe/**"
+      - "x-liquid-glass-1238-probe-v22/**"
       - ".github/workflows/x-liquid-glass-1238-probe.yml"
 
 permissions:
@@ -22,8 +22,8 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build probe v2 dylib
-        working-directory: x-liquid-glass-1238-probe
+      - name: Build probe v2.2 dylib
+        working-directory: x-liquid-glass-1238-probe-v22
         run: |
           set -euo pipefail
           SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -37,18 +37,18 @@ jobs:
             -framework Foundation \
             -framework UIKit \
             -Wl,-undefined,dynamic_lookup \
-            XLiquidGlass1238Probe.m \
-            XLiquidGlassFeatureSwitchProbe.m \
-            -o XLiquidGlass1238ProbeV2.dylib
-          ldid -S XLiquidGlass1238ProbeV2.dylib
+            XLiquidGlass1238ProbeV22.m \
+            -o XLiquidGlass1238ProbeV22.dylib
+          ldid -S XLiquidGlass1238ProbeV22.dylib
           mkdir -p artifacts
-          cp XLiquidGlass1238ProbeV2.dylib artifacts/
-          file artifacts/XLiquidGlass1238ProbeV2.dylib
-          shasum -a 256 artifacts/XLiquidGlass1238ProbeV2.dylib > artifacts/SHA256SUMS.txt
+          cp XLiquidGlass1238ProbeV22.dylib artifacts/
+          file artifacts/XLiquidGlass1238ProbeV22.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238ProbeV22.dylib > artifacts/SHA256SUMS.txt
+          printf 'XLiquidGlass1238ProbeV22\nVersion: 2.2\nTarget: X 12.38\nStandalone: yes\nRequires XLiquidGlassNative: no\n' > artifacts/BUILD_INFO.txt
 
-      - name: Upload probe v2
+      - name: Upload probe v2.2
         uses: actions/upload-artifact@v4
         with:
-          name: XLiquidGlass1238Probe-2.0-X12.38-arm64
-          path: x-liquid-glass-1238-probe/artifacts/
+          name: XLiquidGlass1238Probe-2.2-X12.38-arm64
+          path: x-liquid-glass-1238-probe-v22/artifacts/
           if-no-files-found: error
