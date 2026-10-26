@@ -34,14 +34,16 @@ static void InspectAppearance(void) {
         BOOL buildMatch = [image isEqualToString:@"XServiceLibraries"] && offset == kExpectedEnabledGetterOffset;
         uintptr_t writerAddress = (uintptr_t)info.dli_fbase + kRedesignGateWriterOffset;
         XLGRedesignGateWriter writer = NULL;
-        NSLog(@"[XLiquidGlass1238ProbeV28] RUNTIME class=1 getter=1 image=%@ offset=0x%llx expected=0x%llx buildMatch=%d writerOffset=0x%llx writerAddress=0x%llx writer=%d",
+        XLGWriterAddress resolved = {0};
+        NSLog(@"[XLiquidGlass1238ProbeV28] RUNTIME class=1 getter=1 image=%@ offset=0x%llx expected=0x%llx buildMatch=%d writerOffset=0x%llx writerAddress=0x%llx writer=%d resolved=%d",
               image,
               (unsigned long long)offset,
               (unsigned long long)kExpectedEnabledGetterOffset,
               buildMatch ? 1 : 0,
               (unsigned long long)kRedesignGateWriterOffset,
               (unsigned long long)writerAddress,
-              writer ? 1 : 0);
+              writer ? 1 : 0,
+              resolved.fn ? 1 : 0);
     } else {
         NSLog(@"[XLiquidGlass1238ProbeV28] RUNTIME class=1 getter=1 image=? offset=?");
     }
