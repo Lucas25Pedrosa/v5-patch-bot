@@ -2,7 +2,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static NSString *const kFixVersion = @"1.0";
+static NSString *const kFixVersion = @"1.1";
 static NSString *const kLogName = @"NFBAdBlock1238Fix.log";
 
 static IMP gOrigSetSections = NULL;
@@ -10,6 +10,7 @@ static IMP gOrigUpdateSections = NULL;
 static BOOL gHookInstalled = NO;
 static NSUInteger gSeenItems = 0;
 static NSUInteger gRemovedItems = 0;
+static NSUInteger gWrappedItems = 0;
 
 static NSString *LogPath(void) {
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -69,15 +70,49 @@ static BOOL IsStatusItemClass(id item) {
            [name hasSuffix:@".URTTimelineStatusItemViewModel"];
 }
 
-static BOOL StatusItemIsPromoted(id item) {
-    if (!IsStatusItemClass(item)) return NO;
+static BOOL IsDataViewItemClass(id item) {
+    if (!item) return NO;
+    NSString *name = NSStringFromClass([item class]);
+    return [name isEqualToString:@"TFNDataViewItem"] ||
+           [name hasSuffix:@".TFNDataViewItem"];
+}
 
-    Ivar statusIvar = FindIvarInHierarchy([item class], "status");
+static id StatusItemFromPresentedItem(id item, BOOL *wrappedOut) {
+    if (wrappedOut) *wrappedOut = NO;
+    if (!item) return nil;
+
+    if (IsStatusItemClass(item)) {
+        return item;
+    }
+
+    // X 12.38 conversation/thread timelines wrap URT status items in
+    // TFNDataViewItem. The probe showed the status view model in `_item`.
+    if (!IsDataViewItemClass(item)) {
+        return nil;
+    }
+
+    Ivar itemIvar = FindIvarInHierarchy([item class], "_item");
+    if (!itemIvar) {
+        itemIvar = FindIvarInHierarchy([item class], "item");
+    }
+    if (!itemIvar) return nil;
+
+    id child = object_getIvar(item, itemIvar);
+    if (!IsStatusItemClass(child)) return nil;
+
+    if (wrappedOut) *wrappedOut = YES;
+    return child;
+}
+
+static BOOL StatusItemIsPromoted(id statusItem) {
+    if (!IsStatusItemClass(statusItem)) return NO;
+
+    Ivar statusIvar = FindIvarInHierarchy([statusItem class], "status");
     if (!statusIvar) {
         static NSMutableSet<NSString *> *loggedMissing;
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{ loggedMissing = [NSMutableSet set]; });
-        NSString *name = NSStringFromClass([item class]);
+        NSString *name = NSStringFromClass([statusItem class]);
         @synchronized (loggedMissing) {
             if (![loggedMissing containsObject:name]) {
                 [loggedMissing addObject:name];
@@ -87,14 +122,13 @@ static BOOL StatusItemIsPromoted(id item) {
         return NO;
     }
 
-    id status = object_getIvar(item, statusIvar);
+    id status = object_getIvar(statusItem, statusIvar);
     SEL promotedSEL = NSSelectorFromString(@"isPromoted");
     if (!status || ![status respondsToSelector:promotedSEL]) {
         return NO;
     }
 
-    BOOL promoted = ((BOOL (*)(id, SEL))objc_msgSend)(status, promotedSEL);
-    return promoted;
+    return ((BOOL (*)(id, SEL))objc_msgSend)(status, promotedSEL);
 }
 
 static NSArray *FilteredSections(NSArray *sections, NSString *source) {
@@ -104,6 +138,7 @@ static NSArray *FilteredSections(NSArray *sections, NSString *source) {
     NSMutableArray *outSections = [NSMutableArray arrayWithCapacity:sections.count];
     NSUInteger removedThisPass = 0;
     NSUInteger statusItemsThisPass = 0;
+    NSUInteger wrappedThisPass = 0;
 
     for (id section in sections) {
         if (![section isKindOfClass:[NSArray class]]) {
@@ -112,18 +147,32 @@ static NSArray *FilteredSections(NSArray *sections, NSString *source) {
         }
 
         NSMutableArray *kept = [NSMutableArray arrayWithCapacity:[section count]];
-        for (id item in (NSArray *)section) {
-            if (IsStatusItemClass(item)) {
+        for (id presentedItem in (NSArray *)section) {
+            BOOL wrapped = NO;
+            id statusItem = StatusItemFromPresentedItem(presentedItem, &wrapped);
+
+            if (statusItem) {
                 statusItemsThisPass++;
                 gSeenItems++;
-                if (StatusItemIsPromoted(item)) {
+                if (wrapped) {
+                    wrappedThisPass++;
+                    gWrappedItems++;
+                }
+
+                if (StatusItemIsPromoted(statusItem)) {
                     removedThisPass++;
                     gRemovedItems++;
                     modified = YES;
+                    LogLine(@"REMOVE source=%@ outerClass=%@ statusClass=%@ wrapped=%d",
+                            source,
+                            NSStringFromClass([presentedItem class]),
+                            NSStringFromClass([statusItem class]),
+                            wrapped ? 1 : 0);
                     continue;
                 }
             }
-            [kept addObject:item];
+
+            [kept addObject:presentedItem];
         }
 
         if (kept.count > 0) {
@@ -135,12 +184,14 @@ static NSArray *FilteredSections(NSArray *sections, NSString *source) {
         }
     }
 
-    if (statusItemsThisPass || removedThisPass) {
-        LogLine(@"FILTER source=%@ statusItems=%lu removed=%lu totalSeen=%lu totalRemoved=%lu",
+    if (statusItemsThisPass || removedThisPass || wrappedThisPass) {
+        LogLine(@"FILTER source=%@ statusItems=%lu wrapped=%lu removed=%lu totalSeen=%lu totalWrapped=%lu totalRemoved=%lu",
                 source,
                 (unsigned long)statusItemsThisPass,
+                (unsigned long)wrappedThisPass,
                 (unsigned long)removedThisPass,
                 (unsigned long)gSeenItems,
+                (unsigned long)gWrappedItems,
                 (unsigned long)gRemovedItems);
     }
 
@@ -185,9 +236,10 @@ static void InstallHooks(void) {
 
     Class oldClass = objc_getClass("T1URTTimelineStatusItemViewModel");
     Class newClass = objc_getClass("URTTimelineStatusItemViewModel");
+    Class wrapperClass = objc_getClass("TFNDataViewItem");
     Class swiftClass = NSClassFromString(@"TwitterURT.URTTimelineStatusItemViewModel");
 
-    LogLine(@"HOOK_RESULT version=%@ installed=%d setSections=%d updateSections=%d hide_promoted=%d oldClass=%d newClass=%d swiftClass=%d",
+    LogLine(@"HOOK_RESULT version=%@ installed=%d setSections=%d updateSections=%d hide_promoted=%d oldClass=%d newClass=%d wrapperClass=%d swiftClass=%d",
             kFixVersion,
             gHookInstalled,
             gOrigSetSections != NULL,
@@ -195,11 +247,12 @@ static void InstallHooks(void) {
             FixEnabled(),
             oldClass != Nil,
             newClass != Nil,
+            wrapperClass != Nil,
             swiftClass != Nil);
 }
 
 __attribute__((constructor)) static void NFBAdBlock1238FixInit(void) {
-    LogLine(@"NEW_SESSION version=%@ target=X_12.38 purpose=status-item-adblock-class-rename-fix", kFixVersion);
+    LogLine(@"NEW_SESSION version=%@ target=X_12.38 purpose=timeline-and-conversation-promoted-status-filter", kFixVersion);
 
     NSArray<NSNumber *> *delays = @[@0.0, @0.25, @0.75, @1.5, @3.0];
     for (NSNumber *delay in delays) {
