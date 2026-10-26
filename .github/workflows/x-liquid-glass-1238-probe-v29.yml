@@ -1,0 +1,53 @@
+name: Build XLiquidGlass 12.38 Probe v2.9
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-1238-probe-v29/**"
+      - ".github/workflows/x-liquid-glass-1238-probe-v29.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build probe v2.9 dylib
+        working-directory: x-liquid-glass-1238-probe-v29
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib \
+            -fobjc-arc \
+            -fblocks \
+            -framework Foundation \
+            -framework UIKit \
+            -Wl,-undefined,dynamic_lookup \
+            XLiquidGlass1238ProbeV29.m \
+            -o XLiquidGlass1238ProbeV29.dylib
+          ldid -S XLiquidGlass1238ProbeV29.dylib
+          mkdir -p artifacts
+          cp XLiquidGlass1238ProbeV29.dylib artifacts/
+          file artifacts/XLiquidGlass1238ProbeV29.dylib
+          shasum -a 256 artifacts/XLiquidGlass1238ProbeV29.dylib > artifacts/SHA256SUMS.txt
+
+      - name: Upload probe v2.9
+        uses: actions/upload-artifact@v4
+        with:
+          name: XLiquidGlass1238Probe-2.9-X12.38-arm64
+          path: x-liquid-glass-1238-probe-v29/artifacts/
+          if-no-files-found: error
