@@ -37,6 +37,9 @@ static void InspectAppearance(void) {
         XLGWriterAddress resolved = {0};
         resolved.raw = writerAddress;
         writer = resolved.fn;
+        if (buildMatch && writer) {
+            writer(YES);
+        }
         NSLog(@"[XLiquidGlass1238ProbeV28] RUNTIME class=1 getter=1 image=%@ offset=0x%llx expected=0x%llx buildMatch=%d writerOffset=0x%llx writerAddress=0x%llx writer=%d resolved=%d",
               image,
               (unsigned long long)offset,
