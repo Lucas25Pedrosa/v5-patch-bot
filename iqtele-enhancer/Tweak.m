@@ -6,7 +6,7 @@
 static char IQTMxLongPressKey;
 static BOOL IQTMxLateAttachDone = NO;
 static BOOL IQTASNodeHooksInstalled = NO;
-static BOOL IQTGlassButtonHookInstalled = NO;
+static BOOL IQTGlassButtonHooksInstalled = NO;
 
 #pragma mark - Common helpers
 
@@ -91,17 +91,14 @@ static BOOL IQTPresentSettings(void) {
 
 #pragma mark - iQTele 1.5 glass settings button
 
-static BOOL IQTIsSettingsGlassButton(id object) {
+static BOOL IQTIsExactSettingsGlassButton(id object) {
     if (object == nil) return NO;
-
     Class cls = NSClassFromString(@"IQTSettingsGlassButton");
-    if (cls != Nil && [object isKindOfClass:cls]) return YES;
-
-    return [NSStringFromClass([object class]) containsString:@"IQTSettingsGlassButton"];
+    return cls != Nil && [object isMemberOfClass:cls];
 }
 
-static void IQTHideSettingsGlassButton(id object) {
-    if (!IQTIsSettingsGlassButton(object)) return;
+static void IQTHideExactSettingsGlassButton(id object) {
+    if (!IQTIsExactSettingsGlassButton(object)) return;
 
     SEL setHidden = NSSelectorFromString(@"setHidden:");
     if ([object respondsToSelector:setHidden]) {
@@ -119,13 +116,6 @@ static void IQTHideSettingsGlassButton(id object) {
     if ([object respondsToSelector:setInteraction]) {
         void (*sendBool)(id, SEL, BOOL) = (void *)objc_msgSend;
         sendBool(object, setInteraction, NO);
-    }
-
-    UIView *view = IQTViewForNode(object);
-    if (view != nil) {
-        view.hidden = YES;
-        view.alpha = 0.0;
-        view.userInteractionEnabled = NO;
     }
 }
 
@@ -317,12 +307,31 @@ static void IQTASLayout(id self, SEL _cmd) {
     IQTMxTryAttachGesture();
 }
 
+static id (*IQTOriginalGlassInitWithFrame)(id, SEL, CGRect) = NULL;
+static void (*IQTOriginalGlassSetHidden)(id, SEL, BOOL) = NULL;
 static void (*IQTOriginalGlassLayoutSubviews)(id, SEL) = NULL;
+
+static id IQTGlassInitWithFrame(id self, SEL _cmd, CGRect frame) {
+    id result = self;
+    if (IQTOriginalGlassInitWithFrame != NULL) {
+        result = IQTOriginalGlassInitWithFrame(self, _cmd, frame);
+    }
+    IQTHideExactSettingsGlassButton(result);
+    return result;
+}
+
+static void IQTGlassSetHidden(id self, SEL _cmd, BOOL hidden) {
+    (void)hidden;
+    if (IQTOriginalGlassSetHidden != NULL) {
+        IQTOriginalGlassSetHidden(self, _cmd, YES);
+    }
+}
+
 static void IQTGlassLayoutSubviews(id self, SEL _cmd) {
     if (IQTOriginalGlassLayoutSubviews != NULL) {
         IQTOriginalGlassLayoutSubviews(self, _cmd);
     }
-    IQTHideSettingsGlassButton(self);
+    IQTHideExactSettingsGlassButton(self);
 }
 
 static BOOL IQTHookMethod(Class cls, SEL selector, IMP replacement, IMP *originalOut) {
@@ -387,13 +396,22 @@ static void IQTInstallHooksIfReady(void) {
         }
     }
 
-    if (!IQTGlassButtonHookInstalled) {
+    if (!IQTGlassButtonHooksInstalled) {
         Class glassButton = NSClassFromString(@"IQTSettingsGlassButton");
         if (glassButton != Nil) {
-            IQTGlassButtonHookInstalled = IQTHookMethod(glassButton,
-                                                        @selector(layoutSubviews),
-                                                        (IMP)&IQTGlassLayoutSubviews,
-                                                        (IMP *)&IQTOriginalGlassLayoutSubviews);
+            BOOL initHook = IQTHookMethod(glassButton,
+                                          @selector(initWithFrame:),
+                                          (IMP)&IQTGlassInitWithFrame,
+                                          (IMP *)&IQTOriginalGlassInitWithFrame);
+            BOOL hiddenHook = IQTHookMethod(glassButton,
+                                            @selector(setHidden:),
+                                            (IMP)&IQTGlassSetHidden,
+                                            (IMP *)&IQTOriginalGlassSetHidden);
+            BOOL layoutHook = IQTHookMethod(glassButton,
+                                            @selector(layoutSubviews),
+                                            (IMP)&IQTGlassLayoutSubviews,
+                                            (IMP *)&IQTOriginalGlassLayoutSubviews);
+            IQTGlassButtonHooksInstalled = initHook && hiddenHook && layoutHook;
         }
     }
 }
@@ -403,8 +421,8 @@ static void IQTInstallHooksIfReady(void) {
 static void IQTScanViewTree(UIView *view) {
     if (view == nil) return;
 
-    if (IQTIsSettingsGlassButton(view)) {
-        IQTHideSettingsGlassButton(view);
+    if (IQTIsExactSettingsGlassButton(view)) {
+        IQTHideExactSettingsGlassButton(view);
     }
 
     for (UIView *child in view.subviews.copy) {
