@@ -1,4 +1,4 @@
-name: Build GlassX Post-Activation Probe
+name: Build GlassX Feature Consumption Probe
 
 "on":
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build read-only post-activation probe
+      - name: Build read-only feature consumption probe
         working-directory: x-liquid-glass-post-glassx-probe
         run: |
           set -euo pipefail
@@ -39,25 +39,25 @@ jobs:
             -framework UIKit \
             -Wl,-undefined,dynamic_lookup \
             GlassXPostActivationProbe.m \
-            -o GlassXPostActivationProbe.dylib
+            -o GlassXFeatureConsumptionProbe.dylib
 
-          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassXPostActivationProbe.dylib GlassXPostActivationProbe.dylib
-          ldid -S GlassXPostActivationProbe.dylib
+          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassXFeatureConsumptionProbe.dylib GlassXFeatureConsumptionProbe.dylib
+          ldid -S GlassXFeatureConsumptionProbe.dylib
 
           mkdir -p artifacts
-          cp GlassXPostActivationProbe.dylib artifacts/
-          file artifacts/GlassXPostActivationProbe.dylib
-          otool -D artifacts/GlassXPostActivationProbe.dylib | tee artifacts/LC_ID_DYLIB.txt
-          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassXPostActivationProbe.dylib"
+          cp GlassXFeatureConsumptionProbe.dylib artifacts/
+          file artifacts/GlassXFeatureConsumptionProbe.dylib
+          otool -D artifacts/GlassXFeatureConsumptionProbe.dylib | tee artifacts/LC_ID_DYLIB.txt
+          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassXFeatureConsumptionProbe.dylib"
 
-          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "FEATURE_CONSUMPTION"
-          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "isPushChromeSnapEnabled"
-          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "isAvatarBadgeEnabledWithFeatureSwitches:"
-          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "isQuickComposerEnabledWithFeatureSwitches:"
-          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "declaresGlassComposer"
-          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "CONSUMED selector="
+          strings artifacts/GlassXFeatureConsumptionProbe.dylib | grep -F "FEATURE_CONSUMPTION"
+          strings artifacts/GlassXFeatureConsumptionProbe.dylib | grep -F "isPushChromeSnapEnabled"
+          strings artifacts/GlassXFeatureConsumptionProbe.dylib | grep -F "isAvatarBadgeEnabledWithFeatureSwitches:"
+          strings artifacts/GlassXFeatureConsumptionProbe.dylib | grep -F "isQuickComposerEnabledWithFeatureSwitches:"
+          strings artifacts/GlassXFeatureConsumptionProbe.dylib | grep -F "declaresGlassComposer"
+          strings artifacts/GlassXFeatureConsumptionProbe.dylib | grep -F "CONSUMED selector="
 
-          shasum -a 256 artifacts/GlassXPostActivationProbe.dylib > artifacts/SHA256SUMS.txt
+          shasum -a 256 artifacts/GlassXFeatureConsumptionProbe.dylib > artifacts/SHA256SUMS.txt
           cat > artifacts/BUILD_INFO.txt <<'EOF'
           Name: GlassXFeatureConsumptionProbe
           Version: 2.0
