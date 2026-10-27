@@ -1,0 +1,79 @@
+name: Build GlassX Post-Activation Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - x-liquid-glass-post-glassx-probe-20261027
+    paths:
+      - "x-liquid-glass-post-glassx-probe/**"
+      - ".github/workflows/x-liquid-glass-post-glassx-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build read-only post-activation probe
+        working-directory: x-liquid-glass-post-glassx-probe
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib \
+            -fobjc-arc \
+            -fblocks \
+            -framework Foundation \
+            -framework UIKit \
+            -Wl,-undefined,dynamic_lookup \
+            GlassXPostActivationProbe.m \
+            -o GlassXPostActivationProbe.dylib
+
+          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassXPostActivationProbe.dylib GlassXPostActivationProbe.dylib
+          ldid -S GlassXPostActivationProbe.dylib
+
+          mkdir -p artifacts
+          cp GlassXPostActivationProbe.dylib artifacts/
+          file artifacts/GlassXPostActivationProbe.dylib
+          otool -D artifacts/GlassXPostActivationProbe.dylib | tee artifacts/LC_ID_DYLIB.txt
+          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassXPostActivationProbe.dylib"
+
+          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "POST_GLASSX_NATIVE_SUBGATE_OBSERVER"
+          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "ios_liquid_glass_avatar_badge_enabled"
+          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "ios_liquid_glass_push_chrome_snap_enabled"
+          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "isPushChromeSnapEnabled"
+          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "isRedesignEnabled"
+          strings artifacts/GlassXPostActivationProbe.dylib | grep -F "expected-forced-by-GlassX"
+
+          shasum -a 256 artifacts/GlassXPostActivationProbe.dylib > artifacts/SHA256SUMS.txt
+          cat > artifacts/BUILD_INFO.txt <<'EOF'
+          Name: GlassXPostActivationProbe
+          Version: 1.0
+          Target: X 12.38 + GlassX 3.0
+          Mode: read-only observer after GlassX forces the global Liquid Glass gate
+          Companion expected: GlassX.dylib
+          Writes feature flags: no
+          Forces Liquid Glass gate: no
+          Watches: avatar badge, push chrome snap, redesign, quick composer, XChat header, Grok composer, discovered Liquid Glass defaults
+          Runtime getters: isRedesignEnabled, isPushChromeSnapEnabled
+          Log: Documents/GlassXPostActivationProbe.log
+          EOF
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: GlassXPostActivationProbe-1.0-X12.38-arm64
+          path: x-liquid-glass-post-glassx-probe/artifacts/
+          if-no-files-found: error
