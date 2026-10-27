@@ -1,8 +1,10 @@
-name: Build NFB AdBlock 12.38 Fix
+name: Build NFB AdBlock 12.38 Final No-Probe
 
 "on":
   workflow_dispatch:
   push:
+    branches:
+      - nfb-adblock-1238-final-noprobe-20261027
     paths:
       - "nfb-adblock-1238-fix/**"
       - ".github/workflows/nfb-adblock-1238-fix.yml"
@@ -22,7 +24,7 @@ jobs:
       - name: Install ldid
         run: brew install ldid
 
-      - name: Build NFB AdBlock 12.38 fix
+      - name: Build NFB AdBlock 12.38 final
         working-directory: nfb-adblock-1238-fix
         run: |
           set -euo pipefail
@@ -39,26 +41,64 @@ jobs:
             NFBAdBlock1238Fix.m \
             -o NFBAdBlock1238Fix.dylib
 
+          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/NFBAdBlock1238Fix.dylib NFBAdBlock1238Fix.dylib
           ldid -S NFBAdBlock1238Fix.dylib
+
           mkdir -p artifacts
           cp NFBAdBlock1238Fix.dylib artifacts/
           file artifacts/NFBAdBlock1238Fix.dylib
+          otool -D artifacts/NFBAdBlock1238Fix.dylib | tee artifacts/LC_ID_DYLIB.txt
+          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/NFBAdBlock1238Fix.dylib"
           shasum -a 256 artifacts/NFBAdBlock1238Fix.dylib > artifacts/SHA256SUMS.txt
-          printf 'NFBAdBlock1238Fix\nVersion: 1.1\nTarget: X 12.38\nRequires NeoFreeBird: yes\nSetting respected: hide_promoted\nScope: direct URTTimelineStatusItemViewModel + TFNDataViewItem->_item wrapped status filtering\nPurpose: block promoted posts in home timeline and opened-post conversation/thread timelines\nLog: Documents/NFBAdBlock1238Fix.log\n' > artifacts/BUILD_INFO.txt
 
-      - name: Verify symbols and markers
+          cat > artifacts/BUILD_INFO.txt <<'EOF'
+          NFBAdBlock1238Fix
+          Version: 1.1 FINAL
+          Target: X 12.38
+          Requires NeoFreeBird: yes
+          Setting respected: hide_promoted
+          Scope: direct URTTimelineStatusItemViewModel + TFNDataViewItem->_item wrapped status filtering
+          Purpose: block promoted posts in home timeline and opened-post conversation/thread timelines
+          Probe: removed
+          Runtime logging: removed
+          Log file: none
+          EOF
+
+      - name: Verify production markers
         working-directory: nfb-adblock-1238-fix
         run: |
           set -euo pipefail
-          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "URTTimelineStatusItemViewModel"
-          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "TFNDataViewItem"
-          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "hide_promoted"
-          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "wrapperClass"
-          strings artifacts/NFBAdBlock1238Fix.dylib | grep -F "NFBAdBlock1238Fix.log"
+          dylib="artifacts/NFBAdBlock1238Fix.dylib"
 
-      - name: Upload fix
+          strings "$dylib" | grep -F "URTTimelineStatusItemViewModel"
+          strings "$dylib" | grep -F "TFNDataViewItem"
+          strings "$dylib" | grep -F "hide_promoted"
+          strings "$dylib" | grep -F "isPromoted"
+          strings "$dylib" | grep -F "setSections:restoreScrollPosition:"
+          strings "$dylib" | grep -F "updateSections:reconfigureItemIdentifiers:withRowAnimation:completion:"
+
+          for marker in \
+            "NFBAdBlock1238Fix.log" \
+            "NEW_SESSION" \
+            "HOOK_RESULT" \
+            "HOOK_WAIT" \
+            "REMOVE source=" \
+            "FILTER source=" \
+            "STATUS_IVAR_MISSING"; do
+            if strings "$dylib" | grep -Fq "$marker"; then
+              echo "Unexpected probe/logging marker present: $marker"
+              exit 1
+            fi
+          done
+
+          if nm -u "$dylib" | grep -q "_NSLog"; then
+            echo "Unexpected NSLog dependency present"
+            exit 1
+          fi
+
+      - name: Upload final dylib
         uses: actions/upload-artifact@v4
         with:
-          name: NFBAdBlock1238Fix-1.1-X12.38-arm64
+          name: NFBAdBlock1238Fix-1.1-FINAL-NoProbe-X12.38-arm64
           path: nfb-adblock-1238-fix/artifacts/
           if-no-files-found: error
