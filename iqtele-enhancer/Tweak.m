@@ -3,14 +3,10 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-static UIControl *IQTStoredNavButton = nil;
-static id IQTStoredSettingsTarget = nil;
-static SEL IQTStoredSettingsAction = NULL;
-
 static char IQTMxLongPressKey;
 static BOOL IQTMxLateAttachDone = NO;
 static BOOL IQTASNodeHooksInstalled = NO;
-static BOOL IQTNavHooksInstalled = NO;
+static BOOL IQTGlassButtonHookInstalled = NO;
 
 #pragma mark - Common helpers
 
@@ -66,38 +62,46 @@ static BOOL IQTMxLabelIsSupportRow(NSString *label) {
     return NO;
 }
 
-#pragma mark - iQTele original settings action
+#pragma mark - iQTele 1.5 settings presentation
 
-static BOOL IQTIsSettingsNavButton(id object) {
+static BOOL IQTPresentSettings(void) {
+    Class settingsClass = NSClassFromString(@"IQTSettingsViewController");
+    if (settingsClass == Nil) return NO;
+
+    id settingsObject = [[settingsClass alloc] init];
+    if (![settingsObject isKindOfClass:UIViewController.class]) return NO;
+
+    UIViewController *settingsVC = (UIViewController *)settingsObject;
+    UINavigationController *navigationController =
+        [[UINavigationController alloc] initWithRootViewController:settingsVC];
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    UIWindow *keyWindow = UIApplication.sharedApplication.keyWindow;
+#pragma clang diagnostic pop
+
+    UIViewController *rootViewController = keyWindow.rootViewController;
+    if (rootViewController == nil) return NO;
+
+    [rootViewController presentViewController:navigationController
+                                     animated:YES
+                                   completion:nil];
+    return YES;
+}
+
+#pragma mark - iQTele 1.5 glass settings button
+
+static BOOL IQTIsSettingsGlassButton(id object) {
     if (object == nil) return NO;
-    Class cls = NSClassFromString(@"IQTSettingsNavButton");
+
+    Class cls = NSClassFromString(@"IQTSettingsGlassButton");
     if (cls != Nil && [object isKindOfClass:cls]) return YES;
-    return [NSStringFromClass([object class]) containsString:@"IQTSettingsNavButton"];
+
+    return [NSStringFromClass([object class]) containsString:@"IQTSettingsGlassButton"];
 }
 
-static void IQTCaptureOriginalSettingsAction(UIControl *button) {
-    if (button == nil) return;
-
-    for (id target in button.allTargets) {
-        NSArray<NSString *> *actions = [button actionsForTarget:target
-                                               forControlEvent:UIControlEventTouchUpInside];
-        for (NSString *actionName in actions) {
-            if ([actionName isEqualToString:@"buttonTapped:"]) {
-                IQTStoredSettingsTarget = target;
-                IQTStoredSettingsAction = NSSelectorFromString(actionName);
-                return;
-            }
-        }
-    }
-}
-
-static void IQTRememberAndHideNavButton(id object) {
-    if (!IQTIsSettingsNavButton(object)) return;
-
-    if ([object isKindOfClass:UIControl.class]) {
-        IQTStoredNavButton = (UIControl *)object;
-        IQTCaptureOriginalSettingsAction(IQTStoredNavButton);
-    }
+static void IQTHideSettingsGlassButton(id object) {
+    if (!IQTIsSettingsGlassButton(object)) return;
 
     SEL setHidden = NSSelectorFromString(@"setHidden:");
     if ([object respondsToSelector:setHidden]) {
@@ -125,38 +129,6 @@ static void IQTRememberAndHideNavButton(id object) {
     }
 }
 
-static BOOL IQTOpenSettingsThroughOriginalAction(void) {
-    UIControl *button = IQTStoredNavButton;
-    if (button == nil) return NO;
-
-    IQTCaptureOriginalSettingsAction(button);
-
-    id target = IQTStoredSettingsTarget;
-    SEL action = IQTStoredSettingsAction;
-    if (target != nil && action != NULL && [target respondsToSelector:action]) {
-        return [UIApplication.sharedApplication sendAction:action
-                                                        to:target
-                                                      from:button
-                                                  forEvent:nil];
-    }
-
-    Class targetClass = NSClassFromString(@"IQTSettingsButtonTarget");
-    SEL buttonTapped = NSSelectorFromString(@"buttonTapped:");
-    if (targetClass != Nil && [targetClass instancesRespondToSelector:buttonTapped]) {
-        id fallbackTarget = [[targetClass alloc] init];
-        if (fallbackTarget != nil) {
-            IQTStoredSettingsTarget = fallbackTarget;
-            IQTStoredSettingsAction = buttonTapped;
-            return [UIApplication.sharedApplication sendAction:buttonTapped
-                                                            to:fallbackTarget
-                                                          from:button
-                                                      forEvent:nil];
-        }
-    }
-
-    return NO;
-}
-
 #pragma mark - MxGram ASDisplayNode path
 
 static id IQTASMxGestureGetter(id self, SEL _cmd) {
@@ -176,7 +148,7 @@ static void IQTASHandleMxLongPress(id self, SEL _cmd, UILongPressGestureRecogniz
     (void)self;
     (void)_cmd;
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        IQTOpenSettingsThroughOriginalAction();
+        IQTPresentSettings();
     }
 }
 
@@ -266,7 +238,7 @@ static void IQTMxAttachASDisplayNodeGesture(id accessibilityNode, NSString *labe
 
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        IQTOpenSettingsThroughOriginalAction();
+        IQTPresentSettings();
     }
 }
 @end
@@ -308,7 +280,10 @@ static void IQTMxTryAttachGestureInView(UIView *view) {
 
 static void IQTMxTryAttachGesture(void) {
     if (IQTMxLateAttachDone) return;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     UIWindow *keyWindow = UIApplication.sharedApplication.keyWindow;
+#pragma clang diagnostic pop
     if (keyWindow != nil) {
         IQTMxTryAttachGestureInView(keyWindow);
     }
@@ -318,14 +293,18 @@ static void IQTMxTryAttachGesture(void) {
 
 static void (*IQTOriginalASSetAccessibilityLabel)(id, SEL, NSString *) = NULL;
 static void IQTASSetAccessibilityLabel(id self, SEL _cmd, NSString *label) {
-    IQTOriginalASSetAccessibilityLabel(self, _cmd, label);
+    if (IQTOriginalASSetAccessibilityLabel != NULL) {
+        IQTOriginalASSetAccessibilityLabel(self, _cmd, label);
+    }
     IQTMxAttachASDisplayNodeGesture(self, label);
     IQTMxTryAttachGesture();
 }
 
 static void (*IQTOriginalASLayout)(id, SEL) = NULL;
 static void IQTASLayout(id self, SEL _cmd) {
-    IQTOriginalASLayout(self, _cmd);
+    if (IQTOriginalASLayout != NULL) {
+        IQTOriginalASLayout(self, _cmd);
+    }
 
     NSString *nodeClass = NSStringFromClass([self class]);
     if ([nodeClass containsString:@"AccessibilityAreaNode"]) {
@@ -338,10 +317,12 @@ static void IQTASLayout(id self, SEL _cmd) {
     IQTMxTryAttachGesture();
 }
 
-static void (*IQTOriginalNavLayout)(id, SEL) = NULL;
-static void IQTNavLayout(id self, SEL _cmd) {
-    if (IQTOriginalNavLayout != NULL) IQTOriginalNavLayout(self, _cmd);
-    IQTRememberAndHideNavButton(self);
+static void (*IQTOriginalGlassLayoutSubviews)(id, SEL) = NULL;
+static void IQTGlassLayoutSubviews(id self, SEL _cmd) {
+    if (IQTOriginalGlassLayoutSubviews != NULL) {
+        IQTOriginalGlassLayoutSubviews(self, _cmd);
+    }
+    IQTHideSettingsGlassButton(self);
 }
 
 static BOOL IQTHookMethod(Class cls, SEL selector, IMP replacement, IMP *originalOut) {
@@ -406,31 +387,24 @@ static void IQTInstallHooksIfReady(void) {
         }
     }
 
-    if (!IQTNavHooksInstalled) {
-        Class nav = NSClassFromString(@"IQTSettingsNavButton");
-        if (nav != Nil) {
-            BOOL hooked = IQTHookMethod(nav,
-                                        @selector(layout),
-                                        (IMP)&IQTNavLayout,
-                                        (IMP *)&IQTOriginalNavLayout);
-            if (!hooked) {
-                hooked = IQTHookMethod(nav,
-                                       @selector(layoutSubviews),
-                                       (IMP)&IQTNavLayout,
-                                       (IMP *)&IQTOriginalNavLayout);
-            }
-            IQTNavHooksInstalled = hooked;
+    if (!IQTGlassButtonHookInstalled) {
+        Class glassButton = NSClassFromString(@"IQTSettingsGlassButton");
+        if (glassButton != Nil) {
+            IQTGlassButtonHookInstalled = IQTHookMethod(glassButton,
+                                                        @selector(layoutSubviews),
+                                                        (IMP)&IQTGlassLayoutSubviews,
+                                                        (IMP *)&IQTOriginalGlassLayoutSubviews);
         }
     }
 }
 
-#pragma mark - iQTele icon scan + Mx late attach driver
+#pragma mark - iQTele 1.5 icon scan + Mx late attach driver
 
 static void IQTScanViewTree(UIView *view) {
     if (view == nil) return;
 
-    if (IQTIsSettingsNavButton(view)) {
-        IQTRememberAndHideNavButton(view);
+    if (IQTIsSettingsGlassButton(view)) {
+        IQTHideSettingsGlassButton(view);
     }
 
     for (UIView *child in view.subviews.copy) {
