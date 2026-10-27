@@ -1,7 +1,7 @@
 name: Build GlassX 3.0
 
 # GlassX 3.0 for X 12.38.
-# Final distribution build from the validated cache-test/tint-fix code.
+# Normal edition: validated 12.38 engine + Tab Tint + Lucas25Pedrosa credit.
 "on":
   workflow_dispatch:
   push:
@@ -39,12 +39,92 @@ jobs:
           dylib_path="$(find .theos -type f -name GlassX.dylib ! -path '*/GlassX.dylib.dSYM/*' -print -quit)"
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/GlassX.dylib
+
+          # Keep a deterministic internal identity for Injector/Feather.
+          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassX.dylib artifacts/GlassX.dylib
+          ldid -S artifacts/GlassX.dylib
+
           file artifacts/GlassX.dylib
+          otool -D artifacts/GlassX.dylib | tee artifacts/LC_ID_DYLIB.txt
+          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassX.dylib"
+
+          # Normal GlassX MUST contain Tab Tint.
+          strings artifacts/GlassX.dylib | grep -F "XLiquidGlassTabBarTintMode"
+          strings artifacts/GlassX.dylib | grep -F "XLiquidGlass31TintModeCell"
+
+          # Normal GlassX keeps Lucas credit only.
+          strings artifacts/GlassX.dylib | grep -F "Lucas25Pedrosa"
+          if strings artifacts/GlassX.dylib | grep -Fq "IPA Vault"; then
+            echo "Unexpected IPA Vault credit found in normal GlassX"
+            exit 1
+          fi
+          if strings artifacts/GlassX.dylib | grep -Fq "IPA Source"; then
+            echo "Unexpected IPA Source credit found in normal GlassX"
+            exit 1
+          fi
+          if strings artifacts/GlassX.dylib | grep -Fq "https://t.me/ipavault"; then
+            echo "Unexpected IPA Vault link found in normal GlassX"
+            exit 1
+          fi
+
+          # Multilingual UI: byte-safe verification for all 17 locales.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          data = Path("artifacts/GlassX.dylib").read_bytes()
+          markers = {
+              "en": "Enable Liquid Glass",
+              "pt": "Ativar Liquid Glass",
+              "es": "Activar Liquid Glass",
+              "fr": "Activer Liquid Glass",
+              "de": "Liquid Glass aktivieren",
+              "ar": "تفعيل Liquid Glass",
+              "hr": "Omogući Liquid Glass",
+              "id": "Aktifkan Liquid Glass",
+              "ja": "Liquid Glassを有効にする",
+              "ko": "Liquid Glass 활성화",
+              "pl": "Włącz Liquid Glass",
+              "ru": "Включить Liquid Glass",
+              "sv": "Aktivera Liquid Glass",
+              "tr": "Liquid Glass'ı etkinleştir",
+              "uk": "Увімкнути Liquid Glass",
+              "zh-Hans": "启用 Liquid Glass",
+              "zh-Hant": "啟用 Liquid Glass",
+          }
+
+          missing = []
+          for locale, marker in markers.items():
+              found = (
+                  marker.encode("utf-8") in data
+                  or marker.encode("utf-16le") in data
+                  or marker.encode("utf-16be") in data
+              )
+              print(f"{locale}: {'PASS' if found else 'FAIL'} - {marker}")
+              if not found:
+                  missing.append(locale)
+
+          if missing:
+              raise SystemExit("Missing localization markers: " + ", ".join(missing))
+          PY
+
           shasum -a 256 artifacts/GlassX.dylib > artifacts/SHA256SUMS.txt
+          cat > artifacts/BUILD_INFO.txt <<'EOF'
+          Name: GlassX
+          Version: 3.0
+          File: GlassX.dylib
+          LC_ID_DYLIB: /Library/MobileSubstrate/DynamicLibraries/GlassX.dylib
+          Engine: X 12.38 validated pre-TabBar engine
+          Credits: Lucas25Pedrosa only
+          Tab Tint: included
+          Tab Tint modes: Native / Active tab / All tabs
+          Localization: ar, de, en, es, fr, hr, id, ja, ko, pl, pt, ru, sv, tr, uk, zh-Hans, zh-Hant
+          Localization fallback: en
+          IPA Vault: not included
+          EOF
 
       - name: Upload GlassX dylib
         uses: actions/upload-artifact@v4
         with:
-          name: GlassX-3.0-X12.38-arm64
+          name: GlassX-3.0-Multilingual-Tint-X12.38-arm64
           path: x-liquid-glass-native/artifacts/
           if-no-files-found: error
