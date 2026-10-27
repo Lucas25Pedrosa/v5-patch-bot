@@ -1,8 +1,8 @@
 Package: com.lucas.glassx
 Name: GlassX
-Version: 3.0.0
+Version: 3.1.0~beta1
 Architecture: iphoneos-arm
-Description: GlassX 3.0 for X 12.38. Native Liquid Glass activation using the validated pre-TabBar engine, with NeoFreeBird Appearance integration, Lucas25Pedrosa credit and Tab Bar Tint modes: Native, Active tab and All tabs. The active-tab mode keeps the validated Portal/Carried coloring model. No badge, sidebar, blur, tab-label, pill/platter, legacy-host or navigation fixes.
+Description: GlassX 3.1 Experimental for X 12.38 build 24. Keeps the validated native Liquid Glass pre-TabBar engine, NeoFreeBird Appearance integration, Lucas25Pedrosa credit, multilingual UI and Tab Bar Tint modes, and additionally forces all known Liquid Glass secondary gates for redesign, Quick Composer, Avatar Badge, Push Chrome Snap, XChat conversation header and Grok glass composer decision points.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
