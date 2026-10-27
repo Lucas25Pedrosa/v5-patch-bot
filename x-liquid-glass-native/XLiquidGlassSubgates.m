@@ -2,8 +2,9 @@
 #import <objc/runtime.h>
 #import <dispatch/dispatch.h>
 
-// GlassX 3.1 Experimental
-// X 12.38 build 24 — force all known Liquid Glass secondary gates.
+// GlassX 3.1 Beta 2 — surgical Liquid Glass subgates for X 12.38 build 24.
+// Important: never scan every runtime class by selector name. Generic selectors such as
+// isRedesignEnabled exist in unrelated X features (Super Follows, Rewards, Drafts).
 // The validated global gate remains owned by XLiquidGlass1238Engine.m.
 
 static NSString *const kXLGEnabledKey = @"XLiquidGlassEnabled";
@@ -21,26 +22,6 @@ static NSArray<NSString *> *XLGKnownSubgateKeys(void) {
         @"ios_liquid_glass_push_chrome_snap_enabled",
         @"xchat_liquid_glass_convo_header_enabled",
         @"T1LiquidGlassRedesignPersistedGate"
-    ];
-}
-
-static NSArray<NSString *> *XLGNoArgumentSelectors(void) {
-    return @[
-        @"isRedesignEnabled",
-        @"isPushChromeSnapEnabled",
-        @"liquidGlassConvoHeaderEnabled",
-        @"isLiquidGlassConvoHeaderEnabled",
-        @"liquidGlassRedesignEnabled",
-        @"isLiquidGlassRedesignEnabled",
-        @"declaresGlassComposer"
-    ];
-}
-
-static NSArray<NSString *> *XLGOneArgumentSelectors(void) {
-    return @[
-        @"isAvatarBadgeEnabledWithFeatureSwitches:",
-        @"isQuickComposerEnabledWithFeatureSwitches:",
-        @"isQuickComposerEnabledNoImpressionWithFeatureSwitches:"
     ];
 }
 
@@ -64,100 +45,130 @@ static BOOL XLGMethodReturnsBool(Method method) {
     return returnType[0] == 'B' || returnType[0] == 'c' || returnType[0] == 'C';
 }
 
-static BOOL XLGSelectorIsKnown(SEL sel, NSArray<NSString *> *names) {
-    if (!sel) return NO;
-    return [names containsObject:NSStringFromSelector(sel)];
+static BOOL XLGHookExactSelector(Class cls,
+                                 NSString *logicalClassName,
+                                 NSString *selectorName,
+                                 BOOL classMethod,
+                                 NSUInteger expectedArgumentCount) {
+    if (!cls || !selectorName.length) return NO;
+
+    SEL sel = NSSelectorFromString(selectorName);
+    Class target = classMethod ? object_getClass(cls) : cls;
+    if (!target) return NO;
+
+    Method method = classMethod ? class_getClassMethod(cls, sel) : class_getInstanceMethod(cls, sel);
+    if (!method) return NO;
+    if (!XLGMethodReturnsBool(method)) return NO;
+    if (method_getNumberOfArguments(method) != expectedArgumentCount) return NO;
+
+    IMP replacement = expectedArgumentCount == 2 ? (IMP)XLGForceYES0 : (IMP)XLGForceYES1;
+    IMP current = class_getMethodImplementation(target, sel);
+    if (current == replacement) return YES;
+
+    class_replaceMethod(target, sel, replacement, method_getTypeEncoding(method));
+    BOOL installed = class_getMethodImplementation(target, sel) == replacement;
+    if (installed) {
+        NSLog(@"[GlassX] 3.1-beta2 surgical=YES class=%@ runtime=%@ kind=%@ selector=%@",
+              logicalClassName ?: @"?",
+              NSStringFromClass(cls) ?: @"?",
+              classMethod ? @"class" : @"instance",
+              selectorName);
+    }
+    return installed;
 }
 
-static NSUInteger XLGHookMethodList(Class target,
-                                    NSString *ownerName,
-                                    BOOL classMethods,
-                                    NSArray<NSString *> *noArgument,
-                                    NSArray<NSString *> *oneArgument) {
-    if (!target) return 0;
-
-    unsigned count = 0;
-    Method *methods = class_copyMethodList(target, &count);
-    if (!methods) return 0;
-
-    NSUInteger hooked = 0;
-    for (unsigned i = 0; i < count; i++) {
-        Method method = methods[i];
-        SEL sel = method_getName(method);
-        if (!XLGMethodReturnsBool(method)) continue;
-
-        IMP replacement = NULL;
-        if (XLGSelectorIsKnown(sel, noArgument) && method_getNumberOfArguments(method) == 2) {
-            replacement = (IMP)XLGForceYES0;
-        } else if (XLGSelectorIsKnown(sel, oneArgument) && method_getNumberOfArguments(method) == 3) {
-            replacement = (IMP)XLGForceYES1;
-        } else {
-            continue;
-        }
-
-        IMP current = method_getImplementation(method);
-        if (current == replacement) continue;
-
-        class_replaceMethod(target, sel, replacement, method_getTypeEncoding(method));
-        if (class_getMethodImplementation(target, sel) == replacement) {
-            hooked++;
-            NSLog(@"[GlassX] 3.1 subgate=YES class=%@ kind=%@ selector=%@",
-                  ownerName,
-                  classMethods ? @"class" : @"instance",
-                  NSStringFromSelector(sel));
+static Class XLGFirstExistingClass(NSArray<NSString *> *names, NSString **resolvedName) {
+    for (NSString *name in names) {
+        Class cls = NSClassFromString(name);
+        if (cls) {
+            if (resolvedName) *resolvedName = name;
+            return cls;
         }
     }
+    if (resolvedName) *resolvedName = nil;
+    return Nil;
+}
 
-    free(methods);
+static NSUInteger XLGInstallLiquidGlassFeaturesHooks(void) {
+    NSString *resolved = nil;
+    Class cls = XLGFirstExistingClass(@[
+        @"T1TwitterSwift.LiquidGlassRedesignFeatures",
+        @"_TtC14T1TwitterSwift27LiquidGlassRedesignFeatures"
+    ], &resolved);
+    if (!cls) {
+        NSLog(@"[GlassX] 3.1-beta2 class-missing logical=LiquidGlassRedesignFeatures");
+        return 0;
+    }
+
+    NSUInteger hooked = 0;
+    NSArray<NSString *> *noArg = @[
+        @"isRedesignEnabled",
+        @"isPushChromeSnapEnabled"
+    ];
+    NSArray<NSString *> *oneArg = @[
+        @"isAvatarBadgeEnabledWithFeatureSwitches:",
+        @"isQuickComposerEnabledWithFeatureSwitches:",
+        @"isQuickComposerEnabledNoImpressionWithFeatureSwitches:"
+    ];
+
+    for (NSString *selector in noArg) {
+        if (XLGHookExactSelector(cls, resolved, selector, NO, 2)) hooked++;
+        if (XLGHookExactSelector(cls, resolved, selector, YES, 2)) hooked++;
+    }
+    for (NSString *selector in oneArg) {
+        if (XLGHookExactSelector(cls, resolved, selector, NO, 3)) hooked++;
+        if (XLGHookExactSelector(cls, resolved, selector, YES, 3)) hooked++;
+    }
     return hooked;
 }
 
-static NSUInteger XLGInstallKnownSubgateHooks(void) {
-    if (!XLGSubgatesEnabled()) return 0;
-
-    NSArray<NSString *> *noArgument = XLGNoArgumentSelectors();
-    NSArray<NSString *> *oneArgument = XLGOneArgumentSelectors();
-
-    int classCount = objc_getClassList(NULL, 0);
-    if (classCount <= 0) return 0;
-
-    __unsafe_unretained Class *classes = (__unsafe_unretained Class *)calloc((size_t)classCount, sizeof(Class));
-    if (!classes) return 0;
-
-    classCount = objc_getClassList(classes, classCount);
-    NSUInteger hooked = 0;
-
-    for (int i = 0; i < classCount; i++) {
-        Class cls = classes[i];
-        if (!cls) continue;
-        NSString *name = NSStringFromClass(cls) ?: @"?";
-
-        hooked += XLGHookMethodList(cls, name, NO, noArgument, oneArgument);
-
-        Class meta = object_getClass(cls);
-        if (meta) hooked += XLGHookMethodList(meta, name, YES, noArgument, oneArgument);
+static NSUInteger XLGInstallXChatHooks(void) {
+    NSString *resolved = nil;
+    Class cls = XLGFirstExistingClass(@[
+        @"ChatFeatureSwitches.ChatFeatureSwitchesImpl",
+        @"_TtC19ChatFeatureSwitches23ChatFeatureSwitchesImpl"
+    ], &resolved);
+    if (!cls) {
+        NSLog(@"[GlassX] 3.1-beta2 class-missing logical=ChatFeatureSwitchesImpl");
+        return 0;
     }
 
-    free(classes);
+    NSUInteger hooked = 0;
+    NSArray<NSString *> *selectors = @[
+        @"liquidGlassConvoHeaderEnabled",
+        @"isLiquidGlassConvoHeaderEnabled",
+        @"liquidGlassRedesignEnabled",
+        @"isLiquidGlassRedesignEnabled"
+    ];
+    for (NSString *selector in selectors) {
+        if (XLGHookExactSelector(cls, resolved, selector, NO, 2)) hooked++;
+        if (XLGHookExactSelector(cls, resolved, selector, YES, 2)) hooked++;
+    }
     return hooked;
 }
 
 static void XLGForceKnownSubgateDefaults(void) {
     if (!XLGSubgatesEnabled()) return;
-
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     for (NSString *key in XLGKnownSubgateKeys()) {
         [defaults setBool:YES forKey:key];
     }
 }
 
-static void XLGInstallAllSubgates(NSString *reason) {
+static void XLGInstallSurgicalSubgates(NSString *reason) {
     if (!XLGSubgatesEnabled()) return;
 
     XLGForceKnownSubgateDefaults();
-    NSUInteger hooked = XLGInstallKnownSubgateHooks();
-    NSLog(@"[GlassX] 3.1 all-subgates pass reason=%@ hooked=%lu",
-          reason ?: @"?", (unsigned long)hooked);
+    NSUInteger liquidGlass = XLGInstallLiquidGlassFeaturesHooks();
+    NSUInteger xchat = XLGInstallXChatHooks();
+
+    // Grok: X 12.38 build 24 exposes declaresGlassComposer, but its owning class has not
+    // yet been proven. Beta 2 deliberately does NOT globally hook that generic selector.
+    // This prevents the Beta 1 class-collision bug from returning under another name.
+    NSLog(@"[GlassX] 3.1-beta2 surgical-pass reason=%@ liquidGlass=%lu xchat=%lu grok=owner-unverified",
+          reason ?: @"?",
+          (unsigned long)liquidGlass,
+          (unsigned long)xchat);
 }
 
 @interface XLiquidGlassSubgateBootstrap : NSObject
@@ -169,19 +180,20 @@ static void XLGInstallAllSubgates(NSString *reason) {
     @autoreleasepool {
         if (!XLGSubgatesEnabled()) return;
 
-        XLGInstallAllSubgates(@"objc-load");
+        XLGInstallSurgicalSubgates(@"objc-load");
 
-        // XChat/Grok/T1Twitter Swift classes may materialize slightly later.
+        // Swift classes can materialize after the tweak constructor. Re-check only the
+        // exact allowlisted classes; there is no runtime-wide selector scan in Beta 2.
         NSArray<NSNumber *> *delays = @[
             @0.00, @0.05, @0.15, @0.35, @0.70,
-            @1.20, @2.00, @3.50, @5.00
+            @1.20, @2.00, @3.50, @5.00, @8.00
         ];
         for (NSNumber *delay in delays) {
             dispatch_after(
                 dispatch_time(DISPATCH_TIME_NOW,
                               (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
                 dispatch_get_main_queue(), ^{
-                    XLGInstallAllSubgates(
+                    XLGInstallSurgicalSubgates(
                         [NSString stringWithFormat:@"retry-%.2f", delay.doubleValue]
                     );
                 }
