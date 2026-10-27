@@ -1,8 +1,8 @@
 Package: com.lucas.glassx
 Name: GlassX
-Version: 3.1.0~beta1
+Version: 3.1.0~beta2
 Architecture: iphoneos-arm
-Description: GlassX 3.1 Experimental for X 12.38 build 24. Keeps the validated native Liquid Glass pre-TabBar engine, NeoFreeBird Appearance integration, Lucas25Pedrosa credit, multilingual UI and Tab Bar Tint modes, and additionally forces all known Liquid Glass secondary gates for redesign, Quick Composer, Avatar Badge, Push Chrome Snap, XChat conversation header and Grok glass composer decision points.
+Description: GlassX 3.1 Beta 2 for X 12.38 build 24. Keeps the validated native Liquid Glass pre-TabBar engine, NeoFreeBird Appearance integration, Lucas25Pedrosa credit, multilingual UI and Tab Bar Tint modes. Secondary Liquid Glass switches remain enabled, but runtime hooks are restricted to exact LiquidGlassRedesignFeatures and ChatFeatureSwitchesImpl classes to avoid selector collisions with unrelated X features. Grok hook is withheld until its owning class is verified.
 Maintainer: Lucas
 Author: Lucas
 Section: Tweaks
