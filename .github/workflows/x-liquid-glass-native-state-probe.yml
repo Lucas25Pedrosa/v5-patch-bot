@@ -1,0 +1,76 @@
+name: Build GlassX Native State Probe
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - "x-liquid-glass-native-state-probe/**"
+      - ".github/workflows/x-liquid-glass-native-state-probe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Build passive native-state probe
+        working-directory: x-liquid-glass-native-state-probe
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos clang \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=15.0 \
+            -dynamiclib \
+            -fobjc-arc \
+            -fblocks \
+            -framework Foundation \
+            -framework UIKit \
+            -Wl,-undefined,dynamic_lookup \
+            GlassXNativeStateProbe.m \
+            -o GlassXNativeStateProbe.dylib
+
+          install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassXNativeStateProbe.dylib GlassXNativeStateProbe.dylib
+          ldid -S GlassXNativeStateProbe.dylib
+
+          mkdir -p artifacts
+          cp GlassXNativeStateProbe.dylib artifacts/
+          file artifacts/GlassXNativeStateProbe.dylib
+          otool -D artifacts/GlassXNativeStateProbe.dylib | tee artifacts/LC_ID_DYLIB.txt
+          test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassXNativeStateProbe.dylib"
+
+          strings artifacts/GlassXNativeStateProbe.dylib | grep -F "ios_liquid_glass_avatar_badge_enabled"
+          strings artifacts/GlassXNativeStateProbe.dylib | grep -F "ios_liquid_glass_push_chrome_snap_enabled"
+          strings artifacts/GlassXNativeStateProbe.dylib | grep -F "isLiquidGlassEnabled"
+          strings artifacts/GlassXNativeStateProbe.dylib | grep -F "isLiquidGlassChromeActive"
+          strings artifacts/GlassXNativeStateProbe.dylib | grep -F "installGateForAccount:"
+          strings artifacts/GlassXNativeStateProbe.dylib | grep -F "PASSIVE_NATIVE_STATE"
+
+          shasum -a 256 artifacts/GlassXNativeStateProbe.dylib > artifacts/SHA256SUMS.txt
+          cat > artifacts/BUILD_INFO.txt <<'EOF'
+          Name: GlassXNativeStateProbe
+          Version: 1.0
+          Target: X 12.38
+          Mode: passive/read-only
+          Purpose: detect whether X itself enables Liquid Glass gates/flags
+          Important: test WITHOUT GlassX, GlassXDE or old XLiquidGlass activation dylibs
+          Log: Documents/GlassXNativeStateProbe.log
+          Checks: XAppearance getters, installGateForAccount before/after, known gate byte, Liquid Glass defaults, redesign/push-chrome feature getters
+          EOF
+
+      - name: Upload probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: GlassXNativeStateProbe-1.0-X12.38-arm64
+          path: x-liquid-glass-native-state-probe/artifacts/
+          if-no-files-found: error
