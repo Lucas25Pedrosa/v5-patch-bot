@@ -58,15 +58,45 @@ jobs:
           strings artifacts/GlassXDE.dylib | grep -F "IPA Source"
           strings artifacts/GlassXDE.dylib | grep -F "https://t.me/ipavault"
 
-          # Multilingual UI: verify representative translations are compiled.
-          strings artifacts/GlassXDE.dylib | grep -F "Enable Liquid Glass"
-          strings artifacts/GlassXDE.dylib | grep -F "Ativar Liquid Glass"
-          strings artifacts/GlassXDE.dylib | grep -F "Activar Liquid Glass"
-          strings artifacts/GlassXDE.dylib | grep -F "Activer Liquid Glass"
-          strings artifacts/GlassXDE.dylib | grep -F "Liquid Glass aktivieren"
-          strings artifacts/GlassXDE.dylib | grep -F "Liquid Glassを有効にする"
-          strings artifacts/GlassXDE.dylib | grep -F "启用 Liquid Glass"
-          strings artifacts/GlassXDE.dylib | grep -F "啟用 Liquid Glass"
+          # Multilingual UI: byte-safe verification for ASCII and Unicode strings.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          data = Path("artifacts/GlassXDE.dylib").read_bytes()
+          markers = {
+              "en": "Enable Liquid Glass",
+              "pt": "Ativar Liquid Glass",
+              "es": "Activar Liquid Glass",
+              "fr": "Activer Liquid Glass",
+              "de": "Liquid Glass aktivieren",
+              "ar": "تفعيل Liquid Glass",
+              "hr": "Omogući Liquid Glass",
+              "id": "Aktifkan Liquid Glass",
+              "ja": "Liquid Glassを有効にする",
+              "ko": "Liquid Glass 활성화",
+              "pl": "Włącz Liquid Glass",
+              "ru": "Включить Liquid Glass",
+              "sv": "Aktivera Liquid Glass",
+              "tr": "Liquid Glass'ı etkinleştir",
+              "uk": "Увімкнути Liquid Glass",
+              "zh-Hans": "启用 Liquid Glass",
+              "zh-Hant": "啟用 Liquid Glass",
+          }
+
+          missing = []
+          for locale, marker in markers.items():
+              found = (
+                  marker.encode("utf-8") in data
+                  or marker.encode("utf-16le") in data
+                  or marker.encode("utf-16be") in data
+              )
+              print(f"{locale}: {'PASS' if found else 'FAIL'} - {marker}")
+              if not found:
+                  missing.append(locale)
+
+          if missing:
+              raise SystemExit("Missing localization markers: " + ", ".join(missing))
+          PY
 
           shasum -a 256 artifacts/GlassXDE.dylib > artifacts/SHA256SUMS.txt
           cat > artifacts/BUILD_INFO.txt <<'EOF'
