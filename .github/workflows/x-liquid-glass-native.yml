@@ -1,7 +1,7 @@
-name: Build GlassX 3.0
+name: Build GlassX 3.1 Experimental
 
-# GlassX 3.0 for X 12.38.
-# Normal edition: validated 12.38 engine + Tab Tint + Lucas25Pedrosa credit.
+# GlassX 3.1 Experimental for X 12.38 build 24.
+# Normal edition: validated 12.38 engine + all known Liquid Glass subgates + Tab Tint + Lucas25Pedrosa credit.
 "on":
   workflow_dispatch:
   push:
@@ -40,13 +40,29 @@ jobs:
           test -n "$dylib_path"
           cp "$dylib_path" artifacts/GlassX.dylib
 
-          # Keep a deterministic internal identity for Injector/Feather.
           install_name_tool -id /Library/MobileSubstrate/DynamicLibraries/GlassX.dylib artifacts/GlassX.dylib
           ldid -S artifacts/GlassX.dylib
 
           file artifacts/GlassX.dylib
           otool -D artifacts/GlassX.dylib | tee artifacts/LC_ID_DYLIB.txt
           test "$(tail -n 1 artifacts/LC_ID_DYLIB.txt)" = "/Library/MobileSubstrate/DynamicLibraries/GlassX.dylib"
+
+          # Main X 12.38 engine markers.
+          strings artifacts/GlassX.dylib | grep -F "dyld-image-added"
+          strings artifacts/GlassX.dylib | grep -F "before-T1TabBarViewController-loadView"
+
+          # GlassX 3.1 all-subgates markers.
+          strings artifacts/GlassX.dylib | grep -F "ios_liquid_glass_redesign_enabled"
+          strings artifacts/GlassX.dylib | grep -F "ios_liquid_glass_redesign_quick_composer_enabled"
+          strings artifacts/GlassX.dylib | grep -F "ios_liquid_glass_avatar_badge_enabled"
+          strings artifacts/GlassX.dylib | grep -F "ios_liquid_glass_push_chrome_snap_enabled"
+          strings artifacts/GlassX.dylib | grep -F "xchat_liquid_glass_convo_header_enabled"
+          strings artifacts/GlassX.dylib | grep -F "isAvatarBadgeEnabledWithFeatureSwitches:"
+          strings artifacts/GlassX.dylib | grep -F "isQuickComposerEnabledWithFeatureSwitches:"
+          strings artifacts/GlassX.dylib | grep -F "isQuickComposerEnabledNoImpressionWithFeatureSwitches:"
+          strings artifacts/GlassX.dylib | grep -F "isPushChromeSnapEnabled"
+          strings artifacts/GlassX.dylib | grep -F "liquidGlassConvoHeaderEnabled"
+          strings artifacts/GlassX.dylib | grep -F "declaresGlassComposer"
 
           # Normal GlassX MUST contain Tab Tint.
           strings artifacts/GlassX.dylib | grep -F "XLiquidGlassTabBarTintMode"
@@ -110,10 +126,13 @@ jobs:
           shasum -a 256 artifacts/GlassX.dylib > artifacts/SHA256SUMS.txt
           cat > artifacts/BUILD_INFO.txt <<'EOF'
           Name: GlassX
-          Version: 3.0
+          Version: 3.1.0 beta 1 experimental
+          Target: X 12.38 build 24
           File: GlassX.dylib
           LC_ID_DYLIB: /Library/MobileSubstrate/DynamicLibraries/GlassX.dylib
           Engine: X 12.38 validated pre-TabBar engine
+          Secondary Liquid Glass gates: forced ON
+          Gates: redesign / quick composer / avatar badge / push chrome snap / XChat conversation header / Grok glass composer decision point
           Credits: Lucas25Pedrosa only
           Tab Tint: included
           Tab Tint modes: Native / Active tab / All tabs
@@ -125,6 +144,6 @@ jobs:
       - name: Upload GlassX dylib
         uses: actions/upload-artifact@v4
         with:
-          name: GlassX-3.0-Multilingual-Tint-X12.38-arm64
+          name: GlassX-3.1-Beta1-AllSubgates-X12.38-build24-arm64
           path: x-liquid-glass-native/artifacts/
           if-no-files-found: error
