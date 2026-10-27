@@ -52,6 +52,12 @@ jobs:
             exit 1
           fi
 
+          # Distribution Edition must preserve both credit sections.
+          strings artifacts/GlassXDE.dylib | grep -F "Lucas25Pedrosa"
+          strings artifacts/GlassXDE.dylib | grep -F "IPA Vault"
+          strings artifacts/GlassXDE.dylib | grep -F "IPA Source"
+          strings artifacts/GlassXDE.dylib | grep -F "https://t.me/ipavault"
+
           shasum -a 256 artifacts/GlassXDE.dylib > artifacts/SHA256SUMS.txt
           cat > artifacts/BUILD_INFO.txt <<'EOF'
           Name: GlassXDistributionEdition
@@ -60,7 +66,8 @@ jobs:
           File: GlassXDE.dylib
           LC_ID_DYLIB: /Library/MobileSubstrate/DynamicLibraries/GlassXDE.dylib
           Engine: GlassX 3.0 X 12.38 validated pre-TabBar engine
-          Credits: preserved (Lucas25Pedrosa + IPA Vault)
+          Credits: Lucas25Pedrosa + IPA Vault
+          IPA Vault link: https://t.me/ipavault
           Tab Tint: not included
           EOF
 
