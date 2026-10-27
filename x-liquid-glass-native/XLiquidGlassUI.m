@@ -3,7 +3,7 @@
 #import <objc/runtime.h>
 #import <dispatch/dispatch.h>
 
-// XLiquidGlass 3.0 Beta 1
+// GlassX 3.0
 // UI/preferences only. Liquid Glass activation lives exclusively in
 // XLiquidGlass1238Engine.m.
 
@@ -36,31 +36,160 @@ static BOOL XLGHookMethod(Class cls,
     return class_getMethodImplementation(cls, sel) == replacement;
 }
 
-static BOOL XLGIsPortuguese(void) {
-    NSString *language = NSLocale.preferredLanguages.firstObject.lowercaseString ?: @"";
-    return [language hasPrefix:@"pt"];
+#pragma mark - Localization
+
+static NSString *XLGUILanguageCode(void) {
+    NSString *language = NSLocale.preferredLanguages.firstObject ?: @"en";
+    NSString *lower = language.lowercaseString;
+
+    if ([lower hasPrefix:@"zh-hant"] ||
+        [lower hasPrefix:@"zh-tw"] ||
+        [lower hasPrefix:@"zh-hk"] ||
+        [lower hasPrefix:@"zh-mo"]) {
+        return @"zh-Hant";
+    }
+    if ([lower hasPrefix:@"zh"]) return @"zh-Hans";
+
+    NSArray<NSString *> *supported = @[
+        @"ar", @"de", @"en", @"es", @"fr", @"hr", @"id", @"ja", @"ko",
+        @"pl", @"pt", @"ru", @"sv", @"tr", @"uk"
+    ];
+    for (NSString *code in supported) {
+        if ([lower hasPrefix:code]) return code;
+    }
+    return @"en";
 }
 
-static NSString *XLGEnableTitle(void) {
-    return XLGIsPortuguese() ? @"Ativar Liquid Glass" : @"Enable Liquid Glass";
-}
+static NSString *XLGUIText(NSString *key) {
+    static NSDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *tables;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tables = @{
+            @"en": @{
+                @"enable_title": @"Enable Liquid Glass",
+                @"enable_detail": @"Uses the native redesign built into X.",
+                @"restart_footer": @"Restart X after changing this option to fully apply the interface.",
+                @"restart_alert": @"Restart X to fully apply the change.",
+                @"ok": @"OK"
+            },
+            @"pt": @{
+                @"enable_title": @"Ativar Liquid Glass",
+                @"enable_detail": @"Usa o redesign nativo presente no X.",
+                @"restart_footer": @"Reinicie o X após alterar esta opção para aplicar completamente a interface.",
+                @"restart_alert": @"Reinicie o X para aplicar completamente a alteração.",
+                @"ok": @"OK"
+            },
+            @"es": @{
+                @"enable_title": @"Activar Liquid Glass",
+                @"enable_detail": @"Usa el rediseño nativo integrado en X.",
+                @"restart_footer": @"Reinicia X después de cambiar esta opción para aplicar completamente la interfaz.",
+                @"restart_alert": @"Reinicia X para aplicar completamente el cambio.",
+                @"ok": @"Aceptar"
+            },
+            @"fr": @{
+                @"enable_title": @"Activer Liquid Glass",
+                @"enable_detail": @"Utilise la nouvelle interface native intégrée à X.",
+                @"restart_footer": @"Redémarrez X après avoir modifié cette option pour appliquer complètement l’interface.",
+                @"restart_alert": @"Redémarrez X pour appliquer complètement la modification.",
+                @"ok": @"OK"
+            },
+            @"de": @{
+                @"enable_title": @"Liquid Glass aktivieren",
+                @"enable_detail": @"Verwendet das in X integrierte native Redesign.",
+                @"restart_footer": @"Starte X nach dem Ändern dieser Option neu, damit die Oberfläche vollständig angewendet wird.",
+                @"restart_alert": @"Starte X neu, um die Änderung vollständig anzuwenden.",
+                @"ok": @"OK"
+            },
+            @"ar": @{
+                @"enable_title": @"تفعيل Liquid Glass",
+                @"enable_detail": @"يستخدم التصميم الأصلي الجديد المدمج في X.",
+                @"restart_footer": @"أعد تشغيل X بعد تغيير هذا الخيار لتطبيق الواجهة بالكامل.",
+                @"restart_alert": @"أعد تشغيل X لتطبيق التغيير بالكامل.",
+                @"ok": @"موافق"
+            },
+            @"hr": @{
+                @"enable_title": @"Omogući Liquid Glass",
+                @"enable_detail": @"Koristi izvorni redizajn ugrađen u X.",
+                @"restart_footer": @"Ponovno pokrenite X nakon promjene ove opcije kako bi se sučelje u potpunosti primijenilo.",
+                @"restart_alert": @"Ponovno pokrenite X kako biste u potpunosti primijenili promjenu.",
+                @"ok": @"U redu"
+            },
+            @"id": @{
+                @"enable_title": @"Aktifkan Liquid Glass",
+                @"enable_detail": @"Menggunakan desain ulang native yang tersedia di X.",
+                @"restart_footer": @"Mulai ulang X setelah mengubah opsi ini agar antarmuka diterapkan sepenuhnya.",
+                @"restart_alert": @"Mulai ulang X untuk menerapkan perubahan sepenuhnya.",
+                @"ok": @"OK"
+            },
+            @"ja": @{
+                @"enable_title": @"Liquid Glassを有効にする",
+                @"enable_detail": @"Xに組み込まれているネイティブの新デザインを使用します。",
+                @"restart_footer": @"このオプションを変更した後、インターフェースを完全に適用するにはXを再起動してください。",
+                @"restart_alert": @"変更を完全に適用するにはXを再起動してください。",
+                @"ok": @"OK"
+            },
+            @"ko": @{
+                @"enable_title": @"Liquid Glass 활성화",
+                @"enable_detail": @"X에 내장된 네이티브 리디자인을 사용합니다.",
+                @"restart_footer": @"이 옵션을 변경한 후 인터페이스를 완전히 적용하려면 X를 다시 시작하세요.",
+                @"restart_alert": @"변경 사항을 완전히 적용하려면 X를 다시 시작하세요.",
+                @"ok": @"확인"
+            },
+            @"pl": @{
+                @"enable_title": @"Włącz Liquid Glass",
+                @"enable_detail": @"Używa natywnego przeprojektowanego interfejsu wbudowanego w X.",
+                @"restart_footer": @"Uruchom ponownie X po zmianie tej opcji, aby w pełni zastosować interfejs.",
+                @"restart_alert": @"Uruchom ponownie X, aby w pełni zastosować zmianę.",
+                @"ok": @"OK"
+            },
+            @"ru": @{
+                @"enable_title": @"Включить Liquid Glass",
+                @"enable_detail": @"Использует встроенный в X нативный обновлённый интерфейс.",
+                @"restart_footer": @"Перезапустите X после изменения этой настройки, чтобы интерфейс применился полностью.",
+                @"restart_alert": @"Перезапустите X, чтобы полностью применить изменение.",
+                @"ok": @"OK"
+            },
+            @"sv": @{
+                @"enable_title": @"Aktivera Liquid Glass",
+                @"enable_detail": @"Använder den inbyggda nya designen i X.",
+                @"restart_footer": @"Starta om X efter att du ändrat det här alternativet för att tillämpa gränssnittet fullt ut.",
+                @"restart_alert": @"Starta om X för att tillämpa ändringen fullt ut.",
+                @"ok": @"OK"
+            },
+            @"tr": @{
+                @"enable_title": @"Liquid Glass'ı etkinleştir",
+                @"enable_detail": @"X'e yerleşik olan doğal yeni tasarımı kullanır.",
+                @"restart_footer": @"Arayüzün tamamen uygulanması için bu seçeneği değiştirdikten sonra X'i yeniden başlatın.",
+                @"restart_alert": @"Değişikliği tamamen uygulamak için X'i yeniden başlatın.",
+                @"ok": @"Tamam"
+            },
+            @"uk": @{
+                @"enable_title": @"Увімкнути Liquid Glass",
+                @"enable_detail": @"Використовує вбудований у X нативний оновлений інтерфейс.",
+                @"restart_footer": @"Перезапустіть X після зміни цього параметра, щоб інтерфейс застосувався повністю.",
+                @"restart_alert": @"Перезапустіть X, щоб повністю застосувати зміну.",
+                @"ok": @"Гаразд"
+            },
+            @"zh-Hant": @{
+                @"enable_title": @"啟用 Liquid Glass",
+                @"enable_detail": @"使用 X 內建的原生重新設計介面。",
+                @"restart_footer": @"變更此選項後請重新啟動 X，以完整套用介面。",
+                @"restart_alert": @"請重新啟動 X，以完整套用變更。",
+                @"ok": @"好"
+            },
+            @"zh-Hans": @{
+                @"enable_title": @"启用 Liquid Glass",
+                @"enable_detail": @"使用 X 内置的原生重新设计界面。",
+                @"restart_footer": @"更改此选项后请重新启动 X，以完整应用界面。",
+                @"restart_alert": @"请重新启动 X，以完整应用更改。",
+                @"ok": @"好"
+            }
+        };
+    });
 
-static NSString *XLGEnableDetail(void) {
-    return XLGIsPortuguese()
-        ? @"Usa o redesign nativo presente no X."
-        : @"Uses the native redesign built into X.";
-}
-
-static NSString *XLGRestartFooter(void) {
-    return XLGIsPortuguese()
-        ? @"Reinicie o X após alterar esta opção para aplicar completamente a interface."
-        : @"Restart X after changing this option to fully apply the interface.";
-}
-
-static NSString *XLGRestartMessage(void) {
-    return XLGIsPortuguese()
-        ? @"Reinicie o X para aplicar completamente a alteração."
-        : @"Restart X to fully apply the change.";
+    NSDictionary<NSString *, NSString *> *english = tables[@"en"];
+    NSDictionary<NSString *, NSString *> *table = tables[XLGUILanguageCode()] ?: english;
+    return table[key] ?: english[key] ?: key;
 }
 
 @interface XLiquidGlassSettingsViewController : UITableViewController
@@ -94,7 +223,7 @@ static NSString *XLGRestartMessage(void) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     (void)section;
-    return XLGRestartFooter();
+    return XLGUIText(@"restart_footer");
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -109,8 +238,8 @@ static NSString *XLGRestartMessage(void) {
     }
 
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    cell.textLabel.text = XLGEnableTitle();
-    cell.detailTextLabel.text = XLGEnableDetail();
+    cell.textLabel.text = XLGUIText(@"enable_title");
+    cell.detailTextLabel.text = XLGUIText(@"enable_detail");
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     cell.detailTextLabel.numberOfLines = 2;
 
@@ -136,9 +265,9 @@ static NSString *XLGRestartMessage(void) {
 
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:@"Liquid Glass"
-                                            message:XLGRestartMessage()
+                                            message:XLGUIText(@"restart_alert")
                                      preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+    [alert addAction:[UIAlertAction actionWithTitle:XLGUIText(@"ok")
                                              style:UIAlertActionStyleDefault
                                            handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -275,7 +404,7 @@ static void XLGScheduleUIRetry(NSTimeInterval delay) {
 __attribute__((constructor))
 static void XLiquidGlassUIInit(void) {
     @autoreleasepool {
-        NSLog(@"[XLiquidGlass] 3.0 Beta 1 UI loaded; activation handled by X12.38 engine");
+        NSLog(@"[GlassX] 3.0 UI loaded; locale=%@; activation handled by X12.38 engine", XLGUILanguageCode());
         XLGInstallNFBSettingsIntegration();
         for (NSNumber *delay in @[@0.0, @0.05, @0.20, @0.50, @1.0, @2.0, @4.0]) {
             XLGScheduleUIRetry(delay.doubleValue);
